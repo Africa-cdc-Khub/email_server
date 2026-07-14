@@ -44,6 +44,8 @@ services:
     working_dir: /var/www/backend
     volumes:
       - ../backend:/var/www/backend
+      # Persist logs, uploads, framework cache outside the git tree
+      - ${EMAIL_SERVER_DATA_PATH:-/home/email_serverdata}/storage:/var/www/backend/storage
       - ./entrypoint.sh:/usr/local/bin/entrypoint.sh:ro
     environment:
       <<: *app-env
@@ -65,6 +67,7 @@ services:
     working_dir: /var/www/backend
     volumes:
       - ../backend:/var/www/backend
+      - ${EMAIL_SERVER_DATA_PATH:-/home/email_serverdata}/storage:/var/www/backend/storage
       - ./entrypoint.sh:/usr/local/bin/entrypoint.sh:ro
     environment:
       <<: *app-env
@@ -86,6 +89,7 @@ services:
       - "${API_HOST_PORT:-8089}:80"
     volumes:
       - ../backend:/var/www/backend
+      - ${EMAIL_SERVER_DATA_PATH:-/home/email_serverdata}/storage:/var/www/backend/storage
       - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
     depends_on:
       - app

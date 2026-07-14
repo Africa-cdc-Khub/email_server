@@ -75,7 +75,7 @@ Required (or provide via --env-file / environment):
 
 Optional:
   --env-file=PATH               Load KEY=VALUE secrets from an external file (not committed)
-  --data-path=PATH              Persistent MySQL/Redis path (default: /home/email_serverdata)
+  --data-path=PATH              Persistent MySQL/Redis/storage path (default: /home/email_serverdata)
   --mail-from-address=EMAIL     Default From address (default: notifications@<domain>)
   --mail-from-name=NAME         Default From display name
   --exchange-tenant-id=ID
@@ -85,7 +85,7 @@ Optional:
   --queue-scale=N               docker compose --scale queue=N (default: 1)
   --mysql-host-port=PORT        Host port for MySQL (default: 3309; avoid host :3306 clashes)
   --force-vendor                Wipe backend/vendor and reinstall via composer
-  --reset-mysql                 Wipe MySQL data dir and re-init with current passwords (DESTROYS DB DATA)
+  --reset-mysql                 OPTIONAL wipe of MySQL data dir (DESTROYS DATA). Default: never wipe.
   --run-seeder=true|false       Seed admin/providers on start (default: true)
   --skip-ssl                    Skip Certbot TLS setup
   --skip-frontend-build         Skip frontend build (requires existing frontend/dist)
@@ -269,14 +269,64 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 1. Persistent data dirs
+# 1. Persistent data dirs (MySQL, Redis, Laravel storage)
 # ---------------------------------------------------------------------------
 log "Creating data directories under $DATA_PATH"
-if mkdir -p "$DATA_PATH/mysql" "$DATA_PATH/redis" 2>/dev/null; then
+ensure_data_dirs() {
+  mkdir -p \
+    "$DATA_PATH/mysql" \
+    "$DATA_PATH/redis" \
+    "$DATA_PATH/storage/app/public" \
+    "$DATA_PATH/storage/app/private" \
+    "$DATA_PATH/storage/framework/cache/data" \
+    "$DATA_PATH/storage/framework/sessions" \
+    "$DATA_PATH/storage/framework/testing" \
+    "$DATA_PATH/storage/framework/views" \
+    "$DATA_PATH/storage/logs" \
+    "$DATA_PATH/storage/api-docs"
+}
+
+if ensure_data_dirs 2>/dev/null; then
   :
 else
-  run_root mkdir -p "$DATA_PATH/mysql" "$DATA_PATH/redis"
+  run_root bash -c "mkdir -p \
+    '$DATA_PATH/mysql' \
+    '$DATA_PATH/redis' \
+    '$DATA_PATH/storage/app/public' \
+    '$DATA_PATH/storage/app/private' \
+    '$DATA_PATH/storage/framework/cache/data' \
+    '$DATA_PATH/storage/framework/sessions' \
+    '$DATA_PATH/storage/framework/testing' \
+    '$DATA_PATH/storage/framework/views' \
+    '$DATA_PATH/storage/logs' \
+    '$DATA_PATH/storage/api-docs'"
 fi
+
+# One-time copy of existing repo storage into the persistent path (branding uploads, etc.)
+if [[ ! -f "$DATA_PATH/storage/.initialized" ]]; then
+  log "Initializing persistent storage from backend/storage (one-time)"
+  if [[ -d "$ROOT/backend/storage/app" ]]; then
+    if cp -a "$ROOT/backend/storage/app/." "$DATA_PATH/storage/app/" 2>/dev/null; then
+      :
+    else
+      run_root cp -a "$ROOT/backend/storage/app/." "$DATA_PATH/storage/app/"
+    fi
+  fi
+  if touch "$DATA_PATH/storage/.initialized" 2>/dev/null; then
+    :
+  else
+    run_root touch "$DATA_PATH/storage/.initialized"
+  fi
+fi
+
+# php-fpm in the app image runs as www-data (uid 33)
+if chown -R 33:33 "$DATA_PATH/storage" 2>/dev/null; then
+  :
+else
+  run_root chown -R 33:33 "$DATA_PATH/storage" || true
+fi
+run_root chmod -R ug+rwX "$DATA_PATH/storage" 2>/dev/null || chmod -R ug+rwX "$DATA_PATH/storage" || true
+log "Laravel storage → ${DATA_PATH}/storage (bind-mounted in app/queue/nginx)"
 
 # ---------------------------------------------------------------------------
 # 2. Write docker/.env and backend/.env (gitignored — never commit)
@@ -650,8 +700,8 @@ reset_mysql_data_volume() {
 }
 
 # MySQL only applies MYSQL_PASSWORD on first volume init. If secrets change later,
-# the volume keeps old passwords. Prefer ALTER via root; if root also mismatches,
-# automatically wipe + re-init (failed first-deploy recovery).
+# the volume keeps old passwords. Prefer ALTER via root (keeps data).
+# Never auto-wipe — that destroyed admins on every re-setup. Use --reset-mysql explicitly.
 sync_mysql_volume_password() {
   local db_pass root_pass esc_pass
   db_pass="$(docker_env_get DB_PASSWORD)"
@@ -660,6 +710,7 @@ sync_mysql_volume_password() {
   [[ -n "$root_pass" ]] || die "MYSQL_ROOT_PASSWORD missing from docker/.env"
 
   if [[ "$RESET_MYSQL" == "true" ]]; then
+    warn "--reset-mysql set: wiping MySQL data and re-initializing (DESTROYS DB DATA)"
     reset_mysql_data_volume
     sync_backend_db_password
     log "Running migrations after MySQL reset"
@@ -684,7 +735,7 @@ sync_mysql_volume_password() {
   warn "Laravel cannot connect to MySQL with current DB_PASSWORD"
 
   if mysql_root_auth_ok "$root_pass"; then
-    warn "Resetting email_server via root to match DB_PASSWORD"
+    warn "Resetting email_server password via root (data preserved)"
     esc_pass="$(sql_escape "$db_pass")"
     if reset_mysql_app_user "$root_pass" "$esc_pass"; then
       sync_backend_db_password
@@ -694,7 +745,7 @@ sync_mysql_volume_password() {
       )
       sleep 4
       if mysql_app_auth_ok; then
-        log "MySQL email_server@% password reset to match DB_PASSWORD"
+        log "MySQL email_server@% password reset to match DB_PASSWORD (no data wipe)"
         log "Running migrations after MySQL password sync"
         "${COMPOSE[@]}" exec -T app php artisan migrate --force \
           || warn "migrate still failing — check app logs"
@@ -706,15 +757,21 @@ sync_mysql_volume_password() {
     warn "MYSQL_ROOT_PASSWORD also does not match the volume"
   fi
 
-  # Last resort for broken first deploys: wipe datadir and re-init with current .env
-  warn "Auto-wiping MySQL data volume and re-initializing with docker/.env passwords"
-  warn "(passwords in secrets no longer match the old volume — this DESTROYS DB DATA)"
-  RESET_MYSQL=true
-  reset_mysql_data_volume
-  sync_backend_db_password
-  log "Running migrations after MySQL wipe"
-  "${COMPOSE[@]}" exec -T app php artisan migrate --force \
-    || warn "migrate still failing — check app logs"
+  die "MySQL credentials in secrets.env / docker/.env do not match the existing data volume.
+
+Data was NOT wiped. Fix (pick one):
+
+  A) Put the ORIGINAL DB_PASSWORD + MYSQL_ROOT_PASSWORD back into secrets.env,
+     docker/.env and backend/.env, then re-run setup (preserves data).
+
+  B) Explicitly wipe and re-seed (DESTROYS DATA — only if you accept losing DB):
+       ./setup.sh --env-file=/etc/email-server/secrets.env --reset-mysql
+
+  C) Manual wipe:
+       cd $ROOT/docker && docker compose stop mysql
+       sudo rm -rf ${DATA_PATH}/mysql && sudo mkdir -p ${DATA_PATH}/mysql
+       docker compose up -d
+"
 }
 
 app_is_crash_looping() {
@@ -827,7 +884,7 @@ fi
 
 # Seed / ensure admin after API is alive
 if [[ "$RUN_SEEDER" == "true" ]]; then
-  log "Seeding database / ensuring admin user"
+  log "Seeding database / ensuring admin user (password = ADMIN_PASSWORD from secrets)"
   if ! "${COMPOSE[@]}" exec -T \
     -e ADMIN_EMAIL="$ADMIN_EMAIL" \
     -e ADMIN_PASSWORD="$ADMIN_PASSWORD" \
@@ -854,10 +911,35 @@ echo 'admin='.\$u->email.PHP_EOL;
 "; then
       die "Could not seed/upsert admin — MySQL auth or migrate likely still failing.
 Re-run with matching DB_PASSWORD/MYSQL_ROOT_PASSWORD, or:
-  cd $ROOT && ./setup.sh --env-file=... --force-vendor
+  cd $ROOT && ./setup.sh --env-file=... --reset-mysql
 "
     fi
   fi
+
+  # Prove the seeded password works (same path curl uses)
+  log "Verifying admin login with seeded password"
+  verify_code="$("${COMPOSE[@]}" exec -T \
+    -e ADMIN_EMAIL="$ADMIN_EMAIL" \
+    -e ADMIN_PASSWORD="$ADMIN_PASSWORD" \
+    app php -r '
+      require "vendor/autoload.php";
+      $app = require "bootstrap/app.php";
+      $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
+      $u = App\Models\User::query()->where("email", getenv("ADMIN_EMAIL"))->first();
+      if (!$u) { fwrite(STDERR, "admin user missing\n"); exit(2); }
+      if (!Illuminate\Support\Facades\Hash::check(getenv("ADMIN_PASSWORD"), $u->password)) {
+        fwrite(STDERR, "ADMIN_PASSWORD hash mismatch\n"); exit(3);
+      }
+      echo "admin_password_ok\n";
+    ' 2>&1)" || true
+  if ! printf '%s' "$verify_code" | grep -q 'admin_password_ok'; then
+    die "Admin password verification failed after seed:
+$verify_code
+
+The password that works is ADMIN_PASSWORD from your secrets.env / --admin-password —
+not a placeholder like change-me-in-production."
+  fi
+  log "Admin password verified for ${ADMIN_EMAIL}"
 fi
 
 # Disable reseed for subsequent boots
@@ -948,7 +1030,8 @@ cat <<EOF
     ${ROOT}/backend/.env
 
   Data path:
-    ${DATA_PATH}/{mysql,redis}
+    ${DATA_PATH}/{mysql,redis,storage}
+    (Laravel storage is bind-mounted from ${DATA_PATH}/storage)
 
   Certbot certificate (if SSL enabled):
     /etc/letsencrypt/live/${DOMAIN}/fullchain.pem

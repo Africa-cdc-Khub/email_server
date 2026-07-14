@@ -110,7 +110,9 @@ class DatabaseSeeder extends Seeder
             );
         }
 
-        $admin = User::query()->firstOrCreate(
+        // Always set the password from ADMIN_PASSWORD during seed so re-setup
+        // matches the secrets file (firstOrCreate left old hashes in place).
+        $admin = User::query()->updateOrCreate(
             ['email' => $adminEmail],
             [
                 'name' => env('ADMIN_NAME', 'Super Admin'),
@@ -120,24 +122,13 @@ class DatabaseSeeder extends Seeder
             ],
         );
 
-        if (! $admin->wasRecentlyCreated) {
-            $admin->forceFill([
-                'name' => env('ADMIN_NAME', 'Super Admin'),
-                'is_admin' => true,
-                'is_active' => true,
-            ])->save();
-
-            if (filter_var(env('ADMIN_RESET_PASSWORD', false), FILTER_VALIDATE_BOOL)) {
-                $admin->forceFill(['password' => Hash::make($adminPassword)])->save();
-            }
-        }
-
         User::query()
             ->where('is_admin', true)
             ->where('email', '!=', $adminEmail)
             ->update(['is_active' => false]);
 
         if ($this->command) {
+            $this->command->info('Admin ready: '.$admin->email.' (password set from ADMIN_PASSWORD)');
             $this->command->warn('Integration credentials — client_id: staff-portal | client_secret: '.$clientSecret);
         }
     }

@@ -30,7 +30,7 @@ Host Nginx :443  (notifications.africacdc.org) + Certbot TLS
    └── /api/      → 127.0.0.1:8089  (API container)
                         │
               Docker: app, queue, redis, mysql
-              Data:   /home/email_serverdata/{mysql,redis}
+              Data:   /home/email_serverdata/{mysql,redis,storage}
 ```
 
 ### Prerequisites
@@ -86,7 +86,7 @@ sudo nano /etc/email-server/secrets.env   # fill real passwords / Exchange IDs
 
 What `setup.sh` does:
 
-1. Creates `/home/email_serverdata/{mysql,redis}`
+1. Creates `/home/email_serverdata/{mysql,redis,storage}`
 2. Writes **gitignored** `docker/.env` + `backend/.env` (mode `600`)
 3. Builds the Vue admin UI (**Docker `node` image if host `npm` is missing**)
 4. Starts Docker (`app`, `queue`, `nginx`, `frontend`, `mysql`, `redis`)
@@ -121,7 +121,7 @@ cd /var/www/email_server
 #### 2. Create persistent data directories
 
 ```bash
-sudo mkdir -p /home/email_serverdata/{mysql,redis}
+sudo mkdir -p /home/email_serverdata/{mysql,redis,storage}
 sudo chown -R root:root /home/email_serverdata
 ```
 
@@ -359,7 +359,7 @@ docker compose exec app php artisan route:cache
 docker compose up -d --scale queue=4
 ```
 
-**Do not** run `docker compose down -v` — that can destroy named volumes. With bind mounts under `/home/email_serverdata`, a normal `down` keeps MySQL/Redis data.
+**Do not** run `docker compose down -v` — that can destroy named volumes. With bind mounts under `/home/email_serverdata`, a normal `down` keeps MySQL/Redis/storage data.
 
 ---
 
