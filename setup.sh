@@ -357,7 +357,7 @@ build_frontend_host() {
   log "Building frontend with host npm"
   (
     cd "$ROOT/frontend"
-    npm ci
+    npm ci --legacy-peer-deps
     npm run build
   )
 }
@@ -369,7 +369,7 @@ build_frontend_docker() {
     -v "$ROOT/frontend:/app" \
     -w /app \
     "$node_image" \
-    sh -c "npm ci && npm run build"
+    sh -c "npm ci --legacy-peer-deps && npm run build"
 
   # Ensure dist is readable by the nginx container user
   if [[ -d "$ROOT/frontend/dist" ]]; then
