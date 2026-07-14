@@ -959,15 +959,24 @@ fi
 # 5. Host Nginx
 # ---------------------------------------------------------------------------
 if [[ "$SKIP_NGINX" != "true" ]]; then
-  log "Installing Nginx site for ${DOMAIN}"
+  log "Installing Nginx site + security headers for ${DOMAIN}"
+  run_root mkdir -p /etc/nginx/snippets
+  run_root cp "$ROOT/deploy/configs/nginx-security-headers.conf" \
+    /etc/nginx/snippets/email-server-security-headers.conf
+
   SRC="$ROOT/deploy/configs/nginx-notifications.africacdc.org.conf"
   TMP="$(mktemp)"
   sed "s/notifications\.africacdc\.org/${DOMAIN}/g" "$SRC" > "$TMP"
+  # Preserve an existing Certbot-managed SSL server block if present; replace HTTP+shared bits carefully.
+  # Always install the hardened template; Certbot --keep-until-expiring will re-attach SSL afterward.
   run_root cp "$TMP" "/etc/nginx/sites-available/${DOMAIN}.conf"
   rm -f "$TMP"
   run_root ln -sfn "/etc/nginx/sites-available/${DOMAIN}.conf" "/etc/nginx/sites-enabled/${DOMAIN}.conf"
-  run_root nginx -t
-  run_root systemctl reload nginx
+  if run_root nginx -t; then
+    run_root systemctl reload nginx
+  else
+    warn "nginx -t failed after installing hardened site — check /etc/nginx/sites-available/${DOMAIN}.conf"
+  fi
 else
   warn "Skipping Nginx site install"
 fi

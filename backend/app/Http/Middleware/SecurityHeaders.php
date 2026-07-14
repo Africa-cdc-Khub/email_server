@@ -12,16 +12,38 @@ class SecurityHeaders
     {
         $response = $next($request);
 
-        $response->headers->set('X-Content-Type-Options', 'nosniff');
-        $response->headers->set('X-Frame-Options', 'SAMEORIGIN');
-        $response->headers->set('Referrer-Policy', 'strict-origin-when-cross-origin');
-        $response->headers->set('X-XSS-Protection', '1; mode=block');
-        $response->headers->set('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+        // Defense in depth when Nginx is absent (artisan serve / tests).
+        // Skip headers already set by the reverse proxy to avoid duplicates.
+        $this->setMissing($response, 'X-Content-Type-Options', 'nosniff');
+        $this->setMissing($response, 'X-Frame-Options', 'SAMEORIGIN');
+        $this->setMissing($response, 'Referrer-Policy', 'strict-origin-when-cross-origin');
+        $this->setMissing($response, 'X-XSS-Protection', '0');
+        $this->setMissing(
+            $response,
+            'Permissions-Policy',
+            'accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()',
+        );
+        $this->setMissing($response, 'Cross-Origin-Opener-Policy', 'same-origin');
+        $this->setMissing($response, 'Cross-Origin-Resource-Policy', 'same-site');
+        $response->headers->remove('X-Powered-By');
+
+        $this->setMissing(
+            $response,
+            'Content-Security-Policy',
+            "default-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'; object-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self'",
+        );
 
         if ($request->secure()) {
-            $response->headers->set('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+            $this->setMissing($response, 'Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
         }
 
         return $response;
+    }
+
+    private function setMissing(Response $response, string $name, string $value): void
+    {
+        if (! $response->headers->has($name)) {
+            $response->headers->set($name, $value);
+        }
     }
 }

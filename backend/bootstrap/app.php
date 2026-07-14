@@ -22,7 +22,9 @@ return Application::configure(basePath: dirname(__DIR__))
         ]);
         $middleware->throttleApi('api');
         $middleware->trustProxies(
-            at: '*',
+            // Only trust private/docker peers — never the public internet.
+            // Host Nginx / compose network set X-Forwarded-* ; direct :8089 clients cannot spoof.
+            at: ['127.0.0.1', '::1', '10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16'],
             headers: Request::HEADER_X_FORWARDED_FOR
                 | Request::HEADER_X_FORWARDED_HOST
                 | Request::HEADER_X_FORWARDED_PORT

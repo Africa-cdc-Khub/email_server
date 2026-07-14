@@ -2,7 +2,8 @@
 
 > **Preferred production path:** run **[`./setup.sh`](../setup.sh)** with `--env-file=/etc/email-server/secrets.env` (see **[README.md](../README.md#deploy-with-setupsh-recommended)**).  
 > Secrets template: [`deploy/production.secrets.env.example`](production.secrets.env.example) — copy outside the repo, never commit.  
-> Host Nginx: [`deploy/configs/nginx-notifications.africacdc.org.conf`](configs/nginx-notifications.africacdc.org.conf).  
+> Host Nginx: [`deploy/configs/nginx-notifications.africacdc.org.conf`](configs/nginx-notifications.africacdc.org.conf)  
+> Host security headers snippet: [`deploy/configs/nginx-security-headers.conf`](configs/nginx-security-headers.conf) (anti-spoofing + CSP).  
 > SSL: Certbot is already installed — `setup.sh` runs it, or use `sudo certbot --nginx -d notifications.africacdc.org --redirect`.
 
 Configs in `deploy/configs/` are copied from the [enterprise optimisation guide](https://github.com/agabaandre/PHP_laravel_Codeigniter_wordpress_server_optimisation_enterprise/blob/main/docs/MANUAL-OPTIMIZATION-PHP82-MYSQL8.md) and adapted for **PHP 8.4** and this Laravel app.
