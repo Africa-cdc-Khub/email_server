@@ -411,9 +411,14 @@ else
     set_backend_env "JWT_SECRET" "$JWT_SECRET"
   fi
   _api_docs="$(env_file_get "$ROOT/docker/.env" API_DOCS_ENABLED)"
+  if [[ -z "$_api_docs" ]]; then
+    log "Setting API_DOCS_ENABLED=true in docker/.env (was missing)"
+    printf '\nAPI_DOCS_ENABLED=true\n' >> "$ROOT/docker/.env"
+    _api_docs=true
+  fi
   _be_docs="$(env_file_get "$ROOT/backend/.env" API_DOCS_ENABLED)"
-  if [[ -n "$_api_docs" && "$_be_docs" != "$_api_docs" ]]; then
-    log "Syncing API_DOCS_ENABLED from docker/.env → backend/.env"
+  if [[ "$_be_docs" != "$_api_docs" ]]; then
+    log "Syncing API_DOCS_ENABLED=${_api_docs} → backend/.env"
     set_backend_env "API_DOCS_ENABLED" "$_api_docs"
   fi
   # Ensure APP_KEY exists
@@ -485,7 +490,8 @@ run_root chmod -R ug+rwX "$DATA_PATH/storage" 2>/dev/null || chmod -R ug+rwX "$D
 log "Laravel storage → ${DATA_PATH}/storage (bind-mounted in app/queue/nginx)"
 
 ensure_storage_link() {
-  mkdir -p "$DATA_PATH/storage/app/public"
+  mkdir -p "$DATA_PATH/storage/app/public/branding" 2>/dev/null \
+    || run_root mkdir -p "$DATA_PATH/storage/app/public/branding"
   local link="$ROOT/backend/public/storage"
   rm -f "$link" 2>/dev/null || run_root rm -f "$link" || true
   if ln -sfn "$DATA_PATH/storage/app/public" "$link" 2>/dev/null; then
@@ -497,7 +503,31 @@ ensure_storage_link() {
   log "Storage link: backend/public/storage → ${DATA_PATH}/storage/app/public"
 }
 
+# Seed default logos into persistent public disk if missing (uploads create branding/ later)
+ensure_default_branding_assets() {
+  local dest="$DATA_PATH/storage/app/public/branding"
+  local src="$ROOT/backend/storage/app/public/branding"
+  mkdir -p "$dest" 2>/dev/null || run_root mkdir -p "$dest"
+  if [[ -d "$src" ]]; then
+    for f in logo.png logo-dark.png; do
+      if [[ -f "$src/$f" && ! -f "$dest/$f" ]]; then
+        cp -a "$src/$f" "$dest/$f" 2>/dev/null || run_root cp -a "$src/$f" "$dest/$f" || true
+        log "Seeded default branding asset: $f"
+      fi
+    done
+  fi
+  if [[ -f "$ROOT/backend/storage/app/public/branding-logo.png" && ! -f "$DATA_PATH/storage/app/public/branding-logo.png" ]]; then
+    cp -a "$ROOT/backend/storage/app/public/branding-logo.png" \
+      "$DATA_PATH/storage/app/public/branding-logo.png" 2>/dev/null \
+      || run_root cp -a "$ROOT/backend/storage/app/public/branding-logo.png" \
+        "$DATA_PATH/storage/app/public/branding-logo.png" || true
+  fi
+  chown -R 33:33 "$DATA_PATH/storage/app/public" 2>/dev/null \
+    || run_root chown -R 33:33 "$DATA_PATH/storage/app/public" || true
+}
+
 ensure_storage_link
+ensure_default_branding_assets
 
 # Redis official image runs as uid 999 — wrong ownership causes crash / unhealthy
 if chown -R 999:999 "$DATA_PATH/redis" 2>/dev/null; then

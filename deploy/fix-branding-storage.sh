@@ -8,10 +8,21 @@ DOMAIN="${DOMAIN:-notifications.africacdc.org}"
 DATA_PATH="${EMAIL_SERVER_DATA_PATH:-/home/email_serverdata}"
 
 echo "==> Ensuring storage link + public branding dir"
-mkdir -p "${DATA_PATH}/storage/app/public/branding" 2>/dev/null \
-  || sudo mkdir -p "${DATA_PATH}/storage/app/public/branding"
+sudo mkdir -p "${DATA_PATH}/storage/app/public/branding"
+# Seed defaults from repo if present and missing on volume
+if [[ -d "${ROOT}/backend/storage/app/public/branding" ]]; then
+  for f in logo.png logo-dark.png; do
+    if [[ -f "${ROOT}/backend/storage/app/public/branding/${f}" \
+      && ! -f "${DATA_PATH}/storage/app/public/branding/${f}" ]]; then
+      sudo cp -a "${ROOT}/backend/storage/app/public/branding/${f}" \
+        "${DATA_PATH}/storage/app/public/branding/${f}"
+      echo "    seeded ${f}"
+    fi
+  done
+fi
 sudo chown -R 33:33 "${DATA_PATH}/storage" || true
 sudo ln -sfn "${DATA_PATH}/storage/app/public" "${ROOT}/backend/public/storage"
+ls -la "${DATA_PATH}/storage/app/public/branding/" || true
 
 echo "==> Updating host Nginx (adds /storage/ → API)"
 sudo cp "${ROOT}/deploy/configs/nginx-security-headers.conf" \

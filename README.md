@@ -10,7 +10,7 @@ Laravel email gateway with **Microsoft Exchange (Graph API)** and **SMTP**, DB-m
 | API | https://notifications.africacdc.org/api |
 | Health | https://notifications.africacdc.org/api/v1/health |
 
-Swagger/OpenAPI at `/api/documentation` is **off by default in production**. Set `API_DOCS_ENABLED=true` in `docker/.env` (and recreate app) to enable it.
+Swagger/OpenAPI at `/api/documentation` is enabled when `API_DOCS_ENABLED=true` (default in `docker/.env.example`). Set it in **`docker/.env`** and recreate the app — Compose injects that value into the container (it overrides `backend/.env`).
 
 ---
 
