@@ -30,7 +30,7 @@ docker compose up -d --scale queue=4
 |---------|------|------|
 | nginx | 8089 | API (Swagger only when `APP_ENV` ≠ production) |
 | frontend | 3006 | Admin UI |
-| mysql | 3309 | Host mapping (`MYSQL_HOST_PORT`); containers use `mysql:3306` on the compose network |
+| mysql | 3306 | Host mapping (`MYSQL_HOST_PORT`); containers use `mysql:3306` on the compose network |
 | queue | — | Async email (`SendEmailJob`) |
 | redis | — | Queue, cache, sessions, rate limits |
 

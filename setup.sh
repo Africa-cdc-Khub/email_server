@@ -48,8 +48,9 @@ EXCHANGE_AUTH_METHOD="${EXCHANGE_AUTH_METHOD:-client_credentials}"
 EXCHANGE_SCOPE="${EXCHANGE_SCOPE:-https://graph.microsoft.com/.default}"
 INTEGRATION_CLIENT_SECRET="${INTEGRATION_CLIENT_SECRET:-}"
 QUEUE_SCALE="${QUEUE_SCALE:-1}"
-MYSQL_HOST_PORT="${MYSQL_HOST_PORT:-3309}"
+MYSQL_HOST_PORT="${MYSQL_HOST_PORT:-3306}"
 FORCE_VENDOR_REINSTALL="${FORCE_VENDOR_REINSTALL:-false}"
+RESET_MYSQL="${RESET_MYSQL:-false}"
 RUN_SEEDER="${RUN_SEEDER:-true}"
 SKIP_SSL="${SKIP_SSL:-false}"
 SKIP_FRONTEND_BUILD="${SKIP_FRONTEND_BUILD:-false}"
@@ -82,8 +83,9 @@ Optional:
   --exchange-client-secret=SECRET
   --integration-client-secret=SECRET  Seeded staff-portal integration secret (auto if omitted)
   --queue-scale=N               docker compose --scale queue=N (default: 1)
-  --mysql-host-port=PORT        Host port for MySQL (default: 3309; container stays 3306)
+  --mysql-host-port=PORT        Host port for MySQL (default: 3306)
   --force-vendor                Wipe backend/vendor and reinstall via composer
+  --reset-mysql                 Wipe MySQL data dir and re-init with current passwords (DESTROYS DB DATA)
   --run-seeder=true|false       Seed admin/providers on start (default: true)
   --skip-ssl                    Skip Certbot TLS setup
   --skip-frontend-build         Skip frontend build (requires existing frontend/dist)
@@ -184,8 +186,9 @@ if [[ -n "$ENV_FILE" ]]; then
   EXCHANGE_CLIENT_SECRET="${EXCHANGE_CLIENT_SECRET:-}"
   INTEGRATION_CLIENT_SECRET="${INTEGRATION_CLIENT_SECRET:-}"
   QUEUE_SCALE="${QUEUE_SCALE:-1}"
-  MYSQL_HOST_PORT="${MYSQL_HOST_PORT:-3309}"
+  MYSQL_HOST_PORT="${MYSQL_HOST_PORT:-3306}"
   FORCE_VENDOR_REINSTALL="${FORCE_VENDOR_REINSTALL:-false}"
+  RESET_MYSQL="${RESET_MYSQL:-false}"
   RUN_SEEDER="${RUN_SEEDER:-true}"
   SKIP_SSL="${SKIP_SSL:-false}"
 fi
@@ -212,6 +215,7 @@ while [[ $# -gt 0 ]]; do
     --queue-scale=*) QUEUE_SCALE="${1#*=}" ;;
     --mysql-host-port=*) MYSQL_HOST_PORT="${1#*=}" ;;
     --force-vendor) FORCE_VENDOR_REINSTALL=true ;;
+    --reset-mysql) RESET_MYSQL=true ;;
     --run-seeder=*) RUN_SEEDER="${1#*=}" ;;
     --skip-ssl) SKIP_SSL=true ;;
     --skip-frontend-build) SKIP_FRONTEND_BUILD=true ;;
@@ -583,15 +587,68 @@ FLUSH PRIVILEGES;
     mysql -u root -e "FLUSH PRIVILEGES;" || true
 }
 
+# Wipe bind-mounted MySQL data and recreate the container so MYSQL_* env
+# passwords from docker/.env are applied on first initialization.
+reset_mysql_data_volume() {
+  log "RESET MYSQL: stopping mysql and wiping ${DATA_PATH}/mysql (DESTROYS DB DATA)"
+  (
+    cd "$ROOT/docker"
+    "${COMPOSE[@]}" stop mysql || true
+    "${COMPOSE[@]}" rm -f mysql || true
+  )
+  if [[ -d "$DATA_PATH/mysql" ]]; then
+    run_root rm -rf "${DATA_PATH}/mysql"
+  fi
+  run_root mkdir -p "${DATA_PATH}/mysql"
+  # MySQL image needs write access as mysql uid (typically 999)
+  run_root chown -R 999:999 "${DATA_PATH}/mysql" 2>/dev/null || true
+
+  log "Starting fresh MySQL with passwords from docker/.env"
+  (
+    cd "$ROOT/docker"
+    "${COMPOSE[@]}" up -d mysql
+  )
+  wait_for_mysql_healthy
+
+  local db_pass root_pass
+  db_pass="$(docker_env_get DB_PASSWORD)"
+  root_pass="$(docker_env_get MYSQL_ROOT_PASSWORD)"
+
+  # Give mysqld a moment to finish first-boot user grants
+  sleep 8
+
+  if ! mysql_root_auth_ok "$root_pass"; then
+    die "Fresh MySQL still rejects MYSQL_ROOT_PASSWORD — check docker/.env secrets"
+  fi
+  if ! mysql_app_auth_ok "$db_pass"; then
+    # First boot can race; try resetting via root once
+    warn "Fresh MySQL app user not ready yet — ensuring email_server@%"
+    reset_mysql_app_user "$root_pass" "$(sql_escape "$db_pass")" || true
+    sleep 3
+    mysql_app_auth_ok "$db_pass" || die "Fresh MySQL email_server auth still failing"
+  fi
+  log "Fresh MySQL ready with current DB_PASSWORD / MYSQL_ROOT_PASSWORD"
+}
+
 # MySQL only applies MYSQL_PASSWORD on first volume init. If secrets.env /
 # setup passwords change later, containers keep the OLD volume password.
 # Reset the app user via root so .env and the volume match (no data wipe).
+# If root also fails, wipe + re-init when --reset-mysql is set.
 sync_mysql_volume_password() {
   local db_pass root_pass esc_pass
   db_pass="$(docker_env_get DB_PASSWORD)"
   root_pass="$(docker_env_get MYSQL_ROOT_PASSWORD)"
   [[ -n "$db_pass" ]] || die "DB_PASSWORD missing from docker/.env"
   [[ -n "$root_pass" ]] || die "MYSQL_ROOT_PASSWORD missing from docker/.env"
+
+  if [[ "$RESET_MYSQL" == "true" ]]; then
+    reset_mysql_data_volume
+    sync_backend_db_password
+    log "Running migrations after MySQL reset"
+    "${COMPOSE[@]}" exec -T app php artisan migrate --force \
+      || warn "migrate still failing — check app logs"
+    return 0
+  fi
 
   wait_for_mysql_healthy
 
@@ -609,16 +666,22 @@ sync_mysql_volume_password() {
   warn "DB_PASSWORD rejected from app container (email_server@%) — resetting via root"
 
   if ! mysql_root_auth_ok "$root_pass"; then
-    die "MySQL Access denied: neither DB_PASSWORD nor MYSQL_ROOT_PASSWORD match the existing volume.
+    die "MySQL Access denied: MYSQL_ROOT_PASSWORD does not match the existing data volume either.
+
+Your passwords in secrets.env / docker/.env are not the ones MySQL was first initialized with.
 
 Fix (pick one):
-  1) Put the ORIGINAL passwords into docker/.env, backend/.env, and your secrets.env, then re-run setup
-  2) Wipe the volume (DESTROYS DATA) and re-init with current passwords:
+  A) Re-run setup and wipe the DB (DESTROYS DATA — OK for a failed first deploy):
+       ./setup.sh --env-file=/etc/email-server/secrets.env --reset-mysql
+
+  B) Put the ORIGINAL passwords back into secrets.env + docker/.env + backend/.env, then re-run setup
+
+  C) Manual wipe:
        cd $ROOT/docker
        docker compose stop mysql
-       sudo rm -rf ${DATA_PATH}/mysql/*
-       docker compose up -d mysql
-       # then re-run setup.sh
+       sudo rm -rf ${DATA_PATH}/mysql
+       sudo mkdir -p ${DATA_PATH}/mysql
+       docker compose up -d
 "
   fi
 
@@ -635,7 +698,11 @@ Fix (pick one):
     warn "Listing mysql.user rows for email_server (diagnostic):"
     "${COMPOSE[@]}" exec -T -e MYSQL_PWD="$root_pass" mysql \
       mysql -u root -e "SELECT user,host,plugin FROM mysql.user WHERE user='email_server';" || true
-    die "MySQL password reset ran but app still cannot authenticate as email_server@%"
+    die "MySQL password reset ran but app still cannot authenticate as email_server@%
+
+Re-run with a full wipe:
+  ./setup.sh --env-file=/etc/email-server/secrets.env --reset-mysql
+"
   fi
 
   log "Running migrations after MySQL password sync"
