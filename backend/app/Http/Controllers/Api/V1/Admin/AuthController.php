@@ -20,7 +20,15 @@ class AuthController extends Controller
         LoginRequest $request,
         AdminTwoFactorService $twoFactor,
     ): JsonResponse {
-        $user = User::query()->where('email', $request->validated('email'))->first();
+        try {
+            $user = User::query()->where('email', $request->validated('email'))->first();
+        } catch (\Throwable $e) {
+            report($e);
+
+            return response()->json([
+                'message' => 'Database unavailable. Check MySQL credentials and run migrate/seed.',
+            ], 503);
+        }
 
         if ($user === null || ! Hash::check($request->validated('password'), $user->password)) {
             throw ValidationException::withMessages([

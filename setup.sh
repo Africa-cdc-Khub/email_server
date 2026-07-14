@@ -529,28 +529,23 @@ wait_for_mysql_healthy() {
   return 0
 }
 
-# Must test from the *app* container via host "mysql".
-# Checking inside the mysql container on 127.0.0.1 only exercises
-# email_server@localhost — the app uses email_server@% (e.g. 172.21.0.4).
+# Must test with the SAME credentials Laravel uses (container env + backend/.env).
+# Do NOT inject a different password here — that caused false "auth OK" while login 500'd.
 mysql_app_auth_ok() {
-  local db_pass="$1"
-  "${COMPOSE[@]}" exec -T \
-    -e DB_PASSWORD_CHECK="$db_pass" \
-    app php -r '
-      $pass = getenv("DB_PASSWORD_CHECK");
-      try {
-        new PDO(
-          "mysql:host=mysql;port=3306;dbname=email_server;charset=utf8mb4",
-          "email_server",
-          $pass,
-          [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]
-        );
-        exit(0);
-      } catch (Throwable $e) {
-        fwrite(STDERR, $e->getMessage() . PHP_EOL);
-        exit(1);
-      }
-    ' >/dev/null 2>&1
+  "${COMPOSE[@]}" exec -T app php -r '
+    require "vendor/autoload.php";
+    $app = require "bootstrap/app.php";
+    $kernel = $app->make(Illuminate\Contracts\Console\Kernel::class);
+    $kernel->bootstrap();
+    try {
+      Illuminate\Support\Facades\DB::connection()->getPdo();
+      Illuminate\Support\Facades\DB::select("select 1");
+      exit(0);
+    } catch (Throwable $e) {
+      fwrite(STDERR, $e->getMessage() . PHP_EOL);
+      exit(1);
+    }
+  ' >/dev/null 2>&1
 }
 
 mysql_root_auth_ok() {
@@ -634,12 +629,22 @@ reset_mysql_data_volume() {
   if ! mysql_root_auth_ok "$root_pass"; then
     die "Fresh MySQL still rejects MYSQL_ROOT_PASSWORD — check docker/.env secrets match MYSQL_ROOT_PASSWORD used to create the container"
   fi
-  if ! mysql_app_auth_ok "$db_pass"; then
+  if ! mysql_app_auth_ok; then
     warn "Fresh MySQL app user not ready yet — ensuring email_server@%"
     reset_mysql_app_user "$root_pass" "$(sql_escape "$db_pass")" || true
     sleep 3
-    mysql_app_auth_ok "$db_pass" || die "Fresh MySQL email_server auth still failing"
+    mysql_app_auth_ok || die "Fresh MySQL email_server auth still failing"
   fi
+
+  # Recreate app/queue so container env matches docker/.env after a wipe
+  log "Recreating app + queue after MySQL reset"
+  (
+    cd "$ROOT/docker"
+    "${COMPOSE[@]}" up -d --force-recreate --no-deps app
+    "${COMPOSE[@]}" up -d --force-recreate --no-deps --scale "queue=${QUEUE_SCALE:-1}" queue
+  )
+  sleep 5
+  mysql_app_auth_ok || die "Laravel still cannot connect to MySQL after app recreate"
   log "Fresh MySQL ready with current DB_PASSWORD / MYSQL_ROOT_PASSWORD"
 }
 
@@ -670,19 +675,24 @@ sync_mysql_volume_password() {
     sleep 5
   fi
 
-  if mysql_app_auth_ok "$db_pass"; then
-    log "MySQL app user auth OK (from app → mysql:3306)"
+  if mysql_app_auth_ok; then
+    log "MySQL app user auth OK (Laravel → mysql:3306)"
     return 0
   fi
 
-  warn "DB_PASSWORD rejected from app container (email_server@%)"
+  warn "Laravel cannot connect to MySQL with current DB_PASSWORD"
 
   if mysql_root_auth_ok "$root_pass"; then
     warn "Resetting email_server via root to match DB_PASSWORD"
     esc_pass="$(sql_escape "$db_pass")"
     if reset_mysql_app_user "$root_pass" "$esc_pass"; then
       sync_backend_db_password
-      if mysql_app_auth_ok "$db_pass"; then
+      (
+        cd "$ROOT/docker"
+        "${COMPOSE[@]}" up -d --force-recreate --no-deps app
+      )
+      sleep 4
+      if mysql_app_auth_ok; then
         log "MySQL email_server@% password reset to match DB_PASSWORD"
         log "Running migrations after MySQL password sync"
         "${COMPOSE[@]}" exec -T app php artisan migrate --force \
@@ -744,8 +754,15 @@ wait_for_api() {
     [[ -z "$code" ]] && code="000"
 
     if [[ "$code" == "200" ]]; then
-      log "API is up (attempt ${i}/${max_attempts}) — /up=200"
-      return 0
+      # /up does NOT check MySQL — also require API health DB=ok before continuing
+      health="$(curl -fsS --connect-timeout 2 --max-time 5 "$API_HEALTH_URL" 2>/dev/null || true)"
+      if printf '%s' "$health" | grep -q '"database":{"status":"ok"}'; then
+        log "API is up (attempt ${i}/${max_attempts}) — /up=200 and database ok"
+        return 0
+      fi
+      if [[ "$i" -eq 1 ]] || (( i % 3 == 0 )); then
+        warn "/up=200 but database not ok yet — Laravel may still be rejecting DB_PASSWORD"
+      fi
     fi
 
     # App up but nginx still 000/502 — bounce nginx once
@@ -764,11 +781,13 @@ wait_for_api() {
     sleep 2
   done
 
-  warn "API liveness timed out on ${API_UP_URL}"
+  warn "API liveness timed out on ${API_UP_URL} (or database still unhealthy)"
   "${COMPOSE[@]}" ps || true
   "${COMPOSE[@]}" logs app --tail 100 || true
   "${COMPOSE[@]}" logs nginx --tail 40 || true
   "${COMPOSE[@]}" logs queue --tail 40 || true
+  curl -sS "$API_HEALTH_URL" || true
+  echo
   return 1
 }
 

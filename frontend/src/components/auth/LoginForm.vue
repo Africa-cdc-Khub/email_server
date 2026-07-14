@@ -20,10 +20,16 @@ async function submit() {
     const result = await auth.login(email.value, password.value)
     await router.push({ name: result.requires2fa ? 'verify-2fa' : 'dashboard' })
   } catch (e: unknown) {
-    const axiosErr = e as { response?: { data?: { message?: string; errors?: Record<string, string[]> } } }
+    const axiosErr = e as {
+      response?: { status?: number; data?: { message?: string; errors?: Record<string, string[]> } }
+    }
     const apiMessage = axiosErr.response?.data?.message
     const fieldError = axiosErr.response?.data?.errors?.email?.[0]
-    error.value = fieldError ?? apiMessage ?? 'Invalid credentials or account inactive.'
+    if (axiosErr.response?.status === 503 && apiMessage) {
+      error.value = apiMessage
+    } else {
+      error.value = fieldError ?? apiMessage ?? 'Invalid credentials or account inactive.'
+    }
   } finally {
     loading.value = false
   }
