@@ -278,6 +278,7 @@ write_env_file "$ROOT/docker/.env" \
   "APP_URL=${APP_URL}" \
   "FRONTEND_URL=${FRONTEND_URL}" \
   "API_HOST_PORT=8089" \
+  "REDIS_CLIENT=predis" \
   "ADMIN_EMAIL=${ADMIN_EMAIL}" \
   "ADMIN_PASSWORD=${ADMIN_PASSWORD}" \
   "ADMIN_RESET_PASSWORD=true" \
@@ -332,6 +333,7 @@ set_backend_env "DB_HOST" "mysql"
 set_backend_env "DB_DATABASE" "email_server"
 set_backend_env "DB_USERNAME" "email_server"
 set_backend_env "DB_PASSWORD" "$DB_PASSWORD"
+set_backend_env "REDIS_CLIENT" "predis"
 set_backend_env "MAIL_MAILER" "exchange"
 set_backend_env "MAIL_FROM_ADDRESS" "$MAIL_FROM_ADDRESS"
 set_backend_env "MAIL_FROM_NAME" "$MAIL_FROM_NAME"

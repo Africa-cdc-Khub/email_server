@@ -14,7 +14,7 @@ x-app-env: &app-env
   DB_USERNAME: email_server
   DB_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in docker/.env}
   QUEUE_CONNECTION: redis
-  REDIS_CLIENT: phpredis
+  REDIS_CLIENT: ${REDIS_CLIENT:-predis}
   REDIS_HOST: redis
   REDIS_PORT: 6379
   REDIS_DB: 0

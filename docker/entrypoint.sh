@@ -15,10 +15,12 @@ else
   echo "Vendor present, skipping composer install."
 fi
 
-if ! php -m 2>/dev/null | grep -qi '^redis$'; then
-  echo "ERROR: PHP redis extension is not loaded. Rebuild the app image." >&2
-  php -m >&2 || true
-  exit 1
+# Prefer phpredis when available; otherwise force predis (already in composer.json)
+if php -m 2>/dev/null | grep -qi '^redis$'; then
+  echo "==> PHP redis extension detected"
+else
+  echo "==> PHP redis extension missing — using predis client"
+  export REDIS_CLIENT=predis
 fi
 
 wait_for_tcp() {
@@ -66,6 +68,9 @@ if [ "$CONTAINER_ROLE" != "queue" ]; then
     php artisan key:generate --force
   fi
 
+  # Drop stale config cache that may bake wrong REDIS_CLIENT / empty secrets
+  rm -f bootstrap/cache/config.php bootstrap/cache/routes-v7.php bootstrap/cache/routes.php 2>/dev/null || true
+
   echo "==> Running migrations..."
   php artisan migrate --force
 
@@ -89,7 +94,11 @@ if [ "$CONTAINER_ROLE" != "queue" ]; then
   echo "==> Starting php-fpm..."
 else
   echo "==> Queue worker boot check..."
-  php artisan about >/dev/null
+  if ! php artisan about; then
+    echo "ERROR: php artisan about failed — queue worker cannot boot." >&2
+    ls -la .env vendor/autoload.php 2>&1 || true
+    exit 1
+  fi
   echo "==> Starting queue worker..."
 fi
 
