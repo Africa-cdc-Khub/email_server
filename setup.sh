@@ -366,7 +366,8 @@ set_backend_env "ADMIN_PASSWORD" "$ADMIN_PASSWORD"
 set_backend_env "JWT_SECRET" "$JWT_SECRET"
 set_backend_env "JWT_TTL" "$JWT_TTL"
 set_backend_env "INTEGRATION_CLIENT_SECRET" "$INTEGRATION_CLIENT_SECRET"
-set_backend_env "SANCTUM_STATEFUL_DOMAINS" "${DOMAIN},localhost,localhost:3006,127.0.0.1"
+set_backend_env "SANCTUM_STATEFUL_DOMAINS" "localhost,localhost:3006,127.0.0.1"
+# Intentionally omit public DOMAIN — we use Bearer tokens, not Sanctum cookie SPA auth.
 
 # Preserve or create APP_KEY before containers start (artisan cannot boot without it).
 if [[ -n "$PRESERVED_APP_KEY" ]]; then
@@ -904,6 +905,24 @@ if [[ "$SKIP_SSL" != "true" ]]; then
 
   log "Verifying HTTPS"
   curl -fsSI "https://${DOMAIN}/api/v1/health" | head -n 1 || warn "HTTPS health check failed — DNS/firewall may need attention"
+
+  # Browser login uses Origin: https://DOMAIN — must NOT be CSRF 419 / Server Error
+  login_probe="$(curl -sS -o /tmp/email_server_login_probe.json -w '%{http_code}' \
+    -X POST "https://${DOMAIN}/api/v1/admin/auth/login" \
+    -H 'Content-Type: application/json' \
+    -H 'Accept: application/json' \
+    -H "Origin: https://${DOMAIN}" \
+    -H "Referer: https://${DOMAIN}/login" \
+    -d '{"email":"probe@example.com","password":"invalid-password-probe"}' 2>/dev/null || true)"
+  if [[ "$login_probe" == "422" ]] || [[ "$login_probe" == "401" ]]; then
+    log "HTTPS login endpoint OK (HTTP ${login_probe} with browser Origin)"
+  else
+    warn "HTTPS login probe returned HTTP ${login_probe} (expected 422). Body:"
+    cat /tmp/email_server_login_probe.json 2>/dev/null | head -c 400 || true
+    echo
+    warn "If you see CSRF / Server Error, ensure backend/bootstrap/app.php has no statefulApi() and restart app."
+  fi
+
   run_root certbot renew --dry-run || warn "Certbot renew dry-run reported issues"
 else
   warn "Skipping SSL (--skip-ssl)"

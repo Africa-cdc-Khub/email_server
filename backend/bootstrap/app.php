@@ -13,19 +13,26 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware): void {
-        $middleware->statefulApi();
+        // Admin UI uses Bearer tokens (localStorage), not cookie/CSRF SPA auth.
+        // Never call statefulApi() — it makes SANCTUM_STATEFUL_DOMAINS (e.g.
+        // notifications.africacdc.org) require CSRF and breaks browser login
+        // while curl http://127.0.0.1:8089 still succeeds.
+        $middleware->validateCsrfTokens(except: [
+            'api/*',
+        ]);
         $middleware->throttleApi('api');
         $middleware->trustProxies(
-            at: ['10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16'],
+            at: '*',
             headers: Request::HEADER_X_FORWARDED_FOR
                 | Request::HEADER_X_FORWARDED_HOST
                 | Request::HEADER_X_FORWARDED_PORT
-                | Request::HEADER_X_FORWARDED_PROTO,
+                | Request::HEADER_X_FORWARDED_PROTO
+                | Request::HEADER_X_FORWARDED_AWS_ELB,
         );
         $middleware->append(\App\Http\Middleware\SecurityHeaders::class);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         $exceptions->shouldRenderJsonWhen(
-            fn (Request $request) => $request->is('api/*'),
+            fn (Request $request) => $request->is('api/*') || $request->expectsJson(),
         );
     })->create();
