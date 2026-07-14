@@ -137,12 +137,16 @@ load_env_file() {
   done < "$file"
 }
 
-# Read KEY from a .env file (strips surrounding quotes)
+# Read KEY from a .env file (strips surrounding quotes).
+# Missing key → empty string (must not fail under set -euo pipefail).
 env_file_get() {
   local file="$1"
   local key="$2"
-  [[ -f "$file" ]] || return 0
-  grep -E "^${key}=" "$file" 2>/dev/null | head -1 | cut -d= -f2- | sed -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//"
+  local line=""
+  [[ -f "$file" ]] || { printf ''; return 0; }
+  line="$(grep -E "^${key}=" "$file" 2>/dev/null | head -1 || true)"
+  [[ -n "$line" ]] || { printf ''; return 0; }
+  printf '%s' "${line#*=}" | sed -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//"
 }
 
 write_env_file() {
