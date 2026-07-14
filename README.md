@@ -27,7 +27,7 @@ Internet
 Host Nginx :443  (notifications.africacdc.org) + Certbot TLS
    │
    ├── /          → 127.0.0.1:3006  (Admin UI container)
-   └── /api/      → 127.0.0.1:8082  (API container)
+   └── /api/      → 127.0.0.1:8089  (API container)
                         │
               Docker: app, queue, redis, mysql
               Data:   /home/email_serverdata/{mysql,redis}
@@ -228,7 +228,7 @@ Verify containers:
 
 ```bash
 docker compose ps
-curl -s http://127.0.0.1:8082/api/v1/health
+curl -s http://127.0.0.1:8089/api/v1/health
 ```
 
 #### 6. Host Nginx reverse proxy (HTTP first)
@@ -368,9 +368,9 @@ docker compose up -d --scale queue=4
 | Service | URL |
 |---------|-----|
 | Admin UI | http://localhost:3006 |
-| API | http://localhost:8082 |
-| Health | http://localhost:8082/api/v1/health |
-| Swagger (non-prod only) | http://localhost:8082/api/documentation |
+| API | http://localhost:8089 |
+| Health | http://localhost:8089/api/v1/health |
+| Swagger (non-prod only) | http://localhost:8089/api/documentation |
 
 ```bash
 cp docker/.env.example docker/.env
@@ -459,7 +459,7 @@ Also configure/provider-edit in the admin UI (stored encrypted in DB). Env value
 - [ ] `APP_ENV=production`, `APP_DEBUG=false`
 - [ ] Strong unique `ADMIN_PASSWORD`, `DB_PASSWORD`, `MYSQL_ROOT_PASSWORD`, `JWT_SECRET`
 - [ ] `RUN_SEEDER=false` after first seed
-- [ ] Host Nginx only; Docker ports bound via Compose to host (`8082`/`3006`) — prefer firewall so they are not public
+- [ ] Host Nginx only; Docker ports bound via Compose to host (`8089`/`3006`) — prefer firewall so they are not public
 - [ ] TLS via Certbot on `notifications.africacdc.org` (`fullchain.pem` / `privkey.pem` under `/etc/letsencrypt/live/...`)
 - [ ] Certbot auto-renew verified (`sudo certbot renew --dry-run`)
 - [ ] Enable admin 2FA

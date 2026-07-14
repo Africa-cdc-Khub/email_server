@@ -28,7 +28,7 @@ docker compose up -d --scale queue=4
 
 | Service | Port | Role |
 |---------|------|------|
-| nginx | 8082 | API (Swagger only when `APP_ENV` ≠ production) |
+| nginx | 8089 | API (Swagger only when `APP_ENV` ≠ production) |
 | frontend | 3006 | Admin UI |
 | queue | — | Async email (`SendEmailJob`) |
 | redis | — | Queue, cache, sessions, rate limits |

@@ -277,6 +277,7 @@ write_env_file "$ROOT/docker/.env" \
   "EMAIL_SERVER_DATA_PATH=${DATA_PATH}" \
   "APP_URL=${APP_URL}" \
   "FRONTEND_URL=${FRONTEND_URL}" \
+  "API_HOST_PORT=8089" \
   "ADMIN_EMAIL=${ADMIN_EMAIL}" \
   "ADMIN_PASSWORD=${ADMIN_PASSWORD}" \
   "ADMIN_RESET_PASSWORD=true" \
@@ -414,7 +415,7 @@ log "Starting Docker stack"
 
 log "Waiting for API health"
 for i in $(seq 1 60); do
-  if curl -fsS "http://127.0.0.1:8082/api/v1/health" >/dev/null 2>&1; then
+  if curl -fsS "http://127.0.0.1:8089/api/v1/health" >/dev/null 2>&1; then
     break
   fi
   if [[ "$i" -eq 60 ]]; then
