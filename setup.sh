@@ -410,17 +410,29 @@ else
     log "Syncing JWT_SECRET from docker/.env → backend/.env"
     set_backend_env "JWT_SECRET" "$JWT_SECRET"
   fi
+
+  # Swagger: Compose injects API_DOCS_ENABLED into the app container (overrides backend/.env)
   _api_docs="$(env_file_get "$ROOT/docker/.env" API_DOCS_ENABLED)"
   if [[ -z "$_api_docs" ]]; then
-    log "Setting API_DOCS_ENABLED=true in docker/.env (was missing)"
-    printf '\nAPI_DOCS_ENABLED=true\n' >> "$ROOT/docker/.env"
+    log "API_DOCS_ENABLED missing in docker/.env — adding API_DOCS_ENABLED=true"
+    if printf '\nAPI_DOCS_ENABLED=true\n' >> "$ROOT/docker/.env" 2>/dev/null; then
+      :
+    else
+      run_root bash -c "printf '\\nAPI_DOCS_ENABLED=true\\n' >> '$ROOT/docker/.env'"
+    fi
     _api_docs=true
   fi
+  log "API_DOCS_ENABLED=${_api_docs} (from docker/.env)"
   _be_docs="$(env_file_get "$ROOT/backend/.env" API_DOCS_ENABLED)"
   if [[ "$_be_docs" != "$_api_docs" ]]; then
     log "Syncing API_DOCS_ENABLED=${_api_docs} → backend/.env"
     set_backend_env "API_DOCS_ENABLED" "$_api_docs"
   fi
+  if [[ "$_api_docs" != "true" && "$_api_docs" != "1" ]]; then
+    warn "Swagger is OFF. To enable /api/documentation set API_DOCS_ENABLED=true in docker/.env, then:
+  cd $ROOT/docker && docker compose up -d --force-recreate --no-deps app"
+  fi
+
   # Ensure APP_KEY exists
   _be_key="$(env_file_get "$ROOT/backend/.env" APP_KEY)"
   if [[ "$_be_key" != base64:* ]]; then
