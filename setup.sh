@@ -476,6 +476,21 @@ fi
 run_root chmod -R ug+rwX "$DATA_PATH/storage" 2>/dev/null || chmod -R ug+rwX "$DATA_PATH/storage" || true
 log "Laravel storage → ${DATA_PATH}/storage (bind-mounted in app/queue/nginx)"
 
+ensure_storage_link() {
+  mkdir -p "$DATA_PATH/storage/app/public"
+  local link="$ROOT/backend/public/storage"
+  rm -f "$link" 2>/dev/null || run_root rm -f "$link" || true
+  if ln -sfn "$DATA_PATH/storage/app/public" "$link" 2>/dev/null; then
+    :
+  else
+    run_root ln -sfn "$DATA_PATH/storage/app/public" "$link" \
+      || die "Could not create storage link at backend/public/storage"
+  fi
+  log "Storage link: backend/public/storage → ${DATA_PATH}/storage/app/public"
+}
+
+ensure_storage_link
+
 # Redis official image runs as uid 999 — wrong ownership causes crash / unhealthy
 if chown -R 999:999 "$DATA_PATH/redis" 2>/dev/null; then
   :
@@ -1031,6 +1046,11 @@ backend/.env to the ORIGINAL MySQL volume passwords, or reset the volume
   docker compose up -d
 "
 fi
+
+log "Ensuring Laravel storage:link in app container"
+"${COMPOSE[@]}" exec -T app php artisan storage:link --force \
+  && log "storage:link OK" \
+  || warn "storage:link failed in container — check app logs"
 
 # Seed / ensure admin after API is alive
 if [[ "$RUN_SEEDER" == "true" ]]; then

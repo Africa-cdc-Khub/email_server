@@ -139,7 +139,7 @@ if ! php artisan migrate --force; then
   php artisan migrate --force -v 2>&1 | tail -40 || true
 fi
 
-php artisan storage:link --force 2>/dev/null || true
+php artisan storage:link --force || echo "WARNING: storage:link failed" >&2
 
 echo "==> Starting php-fpm..."
 exec php-fpm
