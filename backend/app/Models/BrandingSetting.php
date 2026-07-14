@@ -3,7 +3,6 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Support\Facades\Storage;
 
 class BrandingSetting extends Model
 {
@@ -77,6 +76,10 @@ class BrandingSetting extends Model
             return $path;
         }
 
-        return Storage::disk('public')->url($path);
+        // Same-origin relative URL so host Nginx can proxy /storage/ → API
+        // (absolute APP_URL alone does not help if /storage hits the SPA).
+        $normalized = ltrim(str_replace('\\', '/', $path), '/');
+
+        return '/storage/'.$normalized;
     }
 }
