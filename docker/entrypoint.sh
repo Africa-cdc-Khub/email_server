@@ -10,21 +10,27 @@ export REDIS_CLIENT="${REDIS_CLIENT:-predis}"
 
 echo "==> Entry role=${CONTAINER_ROLE:-app} env=${APP_ENV:-unknown} redis_client=${REDIS_CLIENT}"
 
-if [ ! -f vendor/autoload.php ]; then
+if [ ! -f vendor/autoload.php ] \
+  || [ ! -f vendor/symfony/deprecation-contracts/function.php ]; then
   if [ "$CONTAINER_ROLE" = "queue" ]; then
-    echo "==> Waiting for vendor/ (installed by setup or app)..."
+    echo "==> Waiting for complete vendor/ (installed by setup or app)..."
     i=1
     while [ "$i" -le 90 ]; do
-      [ -f vendor/autoload.php ] && break
+      if [ -f vendor/autoload.php ] \
+        && [ -f vendor/symfony/deprecation-contracts/function.php ]; then
+        break
+      fi
       i=$((i + 1))
       sleep 2
     done
-    if [ ! -f vendor/autoload.php ]; then
-      echo "ERROR: vendor/autoload.php still missing after wait" >&2
+    if [ ! -f vendor/autoload.php ] \
+      || [ ! -f vendor/symfony/deprecation-contracts/function.php ]; then
+      echo "ERROR: vendor/ still incomplete after wait" >&2
       exit 1
     fi
   else
-    echo "==> Installing Composer dependencies..."
+    echo "==> Installing Composer dependencies (vendor missing or incomplete)..."
+    rm -rf vendor
     composer install --no-dev --optimize-autoloader --no-interaction || {
       echo "ERROR: composer install failed" >&2
       exit 1

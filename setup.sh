@@ -431,19 +431,42 @@ API_HEALTH_URL="http://127.0.0.1:${API_HOST_PORT}/api/v1/health"
 API_UP_URL="http://127.0.0.1:${API_HOST_PORT}/up"
 
 ensure_backend_vendor() {
-  if [[ -f "$ROOT/backend/vendor/autoload.php" ]]; then
-    log "PHP vendor/ already present"
-    return 0
+  local autoload="$ROOT/backend/vendor/autoload.php"
+  local sentinel="$ROOT/backend/vendor/symfony/deprecation-contracts/function.php"
+  local need_install=0
+
+  if [[ ! -f "$autoload" ]]; then
+    need_install=1
+  elif [[ ! -f "$sentinel" ]]; then
+    warn "vendor/ is incomplete (missing symfony/deprecation-contracts) — reinstalling"
+    need_install=1
   fi
 
-  log "Installing PHP dependencies (composer) into backend/vendor — one-time"
+  if [[ "$need_install" -eq 0 ]]; then
+    # Quick autoload smoke test via PHP in composer image
+    if ! docker run --rm -v "$ROOT/backend:/app" -w /app composer:2 \
+      php -r 'require "vendor/autoload.php"; echo "ok";' >/dev/null 2>&1; then
+      warn "vendor/autoload.php fails to load — reinstalling"
+      need_install=1
+    else
+      log "PHP vendor/ present and loadable"
+      return 0
+    fi
+  fi
+
+  log "Installing PHP dependencies (composer) into backend/vendor"
+  rm -rf "$ROOT/backend/vendor"
   docker run --rm \
     -v "$ROOT/backend:/app" \
     -w /app \
     composer:2 \
     composer install --no-dev --optimize-autoloader --no-interaction
 
-  [[ -f "$ROOT/backend/vendor/autoload.php" ]] || die "composer install did not create vendor/autoload.php"
+  [[ -f "$autoload" ]] || die "composer install did not create vendor/autoload.php"
+  [[ -f "$sentinel" ]] || die "composer install incomplete (missing $sentinel)"
+  docker run --rm -v "$ROOT/backend:/app" -w /app composer:2 \
+    php -r 'require "vendor/autoload.php"; echo "ok\n";' \
+    || die "vendor/autoload.php still fails after composer install"
 }
 
 sync_backend_db_password() {
