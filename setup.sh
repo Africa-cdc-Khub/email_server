@@ -413,16 +413,53 @@ log "Starting Docker stack"
   "${COMPOSE[@]}" up -d --build --scale "queue=${QUEUE_SCALE}"
 )
 
-log "Waiting for API health"
-for i in $(seq 1 60); do
-  if curl -fsS "http://127.0.0.1:8089/api/v1/health" >/dev/null 2>&1; then
-    break
-  fi
-  if [[ "$i" -eq 60 ]]; then
-    warn "API health check timed out — check: docker compose -f docker/docker-compose.yml logs app"
-  fi
-  sleep 2
-done
+API_HOST_PORT="${API_HOST_PORT:-8089}"
+API_HEALTH_URL="http://127.0.0.1:${API_HOST_PORT}/api/v1/health"
+API_UP_URL="http://127.0.0.1:${API_HOST_PORT}/up"
+
+wait_for_api() {
+  local max_attempts="${1:-90}"
+  local i code body
+  log "Waiting for API on :${API_HOST_PORT} (up to ~$((max_attempts * 2))s)"
+
+  for i in $(seq 1 "$max_attempts"); do
+    # Prefer /up (Laravel liveness) — does not require DB/Redis yet
+    code="$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 2 --max-time 5 "$API_UP_URL" 2>/dev/null || echo 000)"
+    if [[ "$code" == "200" ]]; then
+      # Then confirm JSON health when dependencies are up (200 or accept any HTTP response with body)
+      body="$(curl -s --connect-timeout 2 --max-time 8 "$API_HEALTH_URL" 2>/dev/null || true)"
+      if echo "$body" | grep -q '"status"'; then
+        log "API is up (attempt ${i}/${max_attempts})"
+        return 0
+      fi
+      # PHP responds; keep waiting briefly for DB/Redis to become healthy
+      if (( i % 5 == 0 )); then
+        printf '    … PHP up, waiting for DB/Redis health (%s/%s) http=%s\n' "$i" "$max_attempts" "$code"
+      fi
+    else
+      if (( i % 5 == 0 )); then
+        printf '    … still starting (%s/%s) /up=%s\n' "$i" "$max_attempts" "$code"
+        "${COMPOSE[@]}" ps 2>/dev/null | sed 's/^/       /' || true
+      fi
+    fi
+    sleep 2
+  done
+
+  warn "API health check timed out on ${API_HEALTH_URL}"
+  warn "Container status:"
+  "${COMPOSE[@]}" ps || true
+  warn "Recent app logs:"
+  "${COMPOSE[@]}" logs app --tail 40 || true
+  warn "Recent nginx logs:"
+  "${COMPOSE[@]}" logs nginx --tail 20 || true
+  curl -sv "$API_UP_URL" 2>&1 | tail -20 || true
+  curl -sv "$API_HEALTH_URL" 2>&1 | tail -30 || true
+  return 1
+}
+
+if ! wait_for_api 90; then
+  die "API did not become healthy. Fix the errors above, then re-run setup or: cd docker && docker compose up -d"
+fi
 
 # Force admin password reset on first deploy if seeder skipped recreating password
 if [[ "$RUN_SEEDER" == "true" ]]; then
