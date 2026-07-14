@@ -43,6 +43,7 @@ QUEUE_SCALE="${QUEUE_SCALE:-1}"
 MYSQL_HOST_PORT="${MYSQL_HOST_PORT:-3309}"
 FORCE_VENDOR_REINSTALL="${FORCE_VENDOR_REINSTALL:-false}"
 RESET_MYSQL="${RESET_MYSQL:-false}"
+RESET_REDIS="${RESET_REDIS:-false}"
 RUN_SEEDER="${RUN_SEEDER:-true}"
 SKIP_SSL="${SKIP_SSL:-false}"
 SKIP_FRONTEND_BUILD="${SKIP_FRONTEND_BUILD:-false}"
@@ -77,6 +78,7 @@ Optional flags:
   --mysql-host-port=PORT        Host MySQL port (default: 3309)
   --force-vendor                Wipe backend/vendor and reinstall via composer
   --reset-mysql                 OPTIONAL wipe of MySQL data (DESTROYS DATA)
+  --reset-redis                 Wipe Redis data dir (queues/cache only — safe vs MySQL)
   --run-seeder=true|false       Seed admin/providers (default: true)
   --write-env                   Rewrite docker/.env + backend/.env from flags/--env-file
   --skip-ssl                    Skip Certbot TLS setup
@@ -226,6 +228,7 @@ while [[ $# -gt 0 ]]; do
     --mysql-host-port=*) MYSQL_HOST_PORT="${1#*=}" ;;
     --force-vendor) FORCE_VENDOR_REINSTALL=true ;;
     --reset-mysql) RESET_MYSQL=true ;;
+    --reset-redis) RESET_REDIS=true ;;
     --run-seeder=*) RUN_SEEDER="${1#*=}" ;;
     --write-env) WRITE_ENV=true ;;
     --skip-ssl) SKIP_SSL=true ;;
@@ -473,6 +476,13 @@ fi
 run_root chmod -R ug+rwX "$DATA_PATH/storage" 2>/dev/null || chmod -R ug+rwX "$DATA_PATH/storage" || true
 log "Laravel storage → ${DATA_PATH}/storage (bind-mounted in app/queue/nginx)"
 
+# Redis official image runs as uid 999 — wrong ownership causes crash / unhealthy
+if chown -R 999:999 "$DATA_PATH/redis" 2>/dev/null; then
+  :
+else
+  run_root chown -R 999:999 "$DATA_PATH/redis" || true
+fi
+
 # ---------------------------------------------------------------------------
 # 3. Frontend build (host npm OR Docker node — npm is NOT required on the server)
 # ---------------------------------------------------------------------------
@@ -620,6 +630,102 @@ wait_for_mysql_healthy() {
   done
   warn "MySQL did not report healthy — continuing anyway"
   return 0
+}
+
+redis_is_healthy() {
+  "${COMPOSE[@]}" ps redis 2>/dev/null | grep -qi 'healthy'
+}
+
+reset_redis_data_volume() {
+  local data_path="${EMAIL_SERVER_DATA_PATH:-$DATA_PATH}"
+  local env_path
+  env_path="$(docker_env_get EMAIL_SERVER_DATA_PATH || true)"
+  [[ -n "$env_path" ]] && data_path="$env_path"
+
+  log "RESET REDIS: stopping redis and wiping ${data_path}/redis (queues/cache only)"
+  (
+    cd "$ROOT/docker"
+    "${COMPOSE[@]}" stop redis || true
+    "${COMPOSE[@]}" rm -f redis || true
+  )
+  if [[ -d "${data_path}/redis" ]]; then
+    if rm -rf "${data_path}/redis"/* 2>/dev/null; then
+      :
+    else
+      run_root rm -rf "${data_path}/redis"/*
+    fi
+  else
+    mkdir -p "${data_path}/redis" 2>/dev/null || run_root mkdir -p "${data_path}/redis"
+  fi
+  chown -R 999:999 "${data_path}/redis" 2>/dev/null || run_root chown -R 999:999 "${data_path}/redis"
+  (
+    cd "$ROOT/docker"
+    "${COMPOSE[@]}" up -d --force-recreate redis
+  )
+}
+
+wait_for_redis_healthy() {
+  local i
+  log "Waiting for Redis container to be healthy"
+  for i in $(seq 1 24); do
+    if redis_is_healthy; then
+      return 0
+    fi
+    sleep 2
+  done
+  return 1
+}
+
+ensure_redis_ready() {
+  if [[ "$RESET_REDIS" == "true" ]]; then
+    reset_redis_data_volume
+    wait_for_redis_healthy && return 0
+    die "Redis still unhealthy after --reset-redis. Check: cd $ROOT/docker && docker compose logs redis --tail 80"
+  fi
+
+  (
+    cd "$ROOT/docker"
+    "${COMPOSE[@]}" up -d redis
+  )
+
+  if wait_for_redis_healthy; then
+    log "Redis OK"
+    return 0
+  fi
+
+  warn "Redis unhealthy — trying ownership fix (uid 999) and recreate"
+  chown -R 999:999 "$DATA_PATH/redis" 2>/dev/null || run_root chown -R 999:999 "$DATA_PATH/redis" || true
+  (
+    cd "$ROOT/docker"
+    "${COMPOSE[@]}" up -d --force-recreate redis
+  )
+  if wait_for_redis_healthy; then
+    log "Redis OK after permission fix"
+    return 0
+  fi
+
+  warn "Redis still unhealthy — logs:"
+  (
+    cd "$ROOT/docker"
+    "${COMPOSE[@]}" logs redis --tail 40
+  ) >&2 || true
+
+  die "Redis container is unhealthy (blocks app + queue).
+
+Fix on the server:
+  cd $ROOT/docker
+  docker compose logs redis --tail 80
+
+Usually caused by bad permissions or corrupt AOF in ${DATA_PATH}/redis.
+Safe recovery (queues/cache only — does NOT touch MySQL):
+  cd $ROOT && ./setup.sh --reset-redis
+
+Or manually:
+  cd $ROOT/docker && docker compose stop redis
+  sudo rm -rf ${DATA_PATH}/redis/*
+  sudo chown -R 999:999 ${DATA_PATH}/redis
+  docker compose up -d --remove-orphans redis
+"
 }
 
 # Must test with the SAME credentials Laravel uses (container env + backend/.env).
@@ -899,6 +1005,7 @@ rm -f "$ROOT/backend/bootstrap/cache/config.php" \
   "$ROOT/backend/bootstrap/cache/routes.php" 2>/dev/null || true
 
 log "Starting Docker stack"
+ensure_redis_ready
 (
   cd "$ROOT/docker"
   # --remove-orphans drops leftover containers from old compose project names / scale changes
