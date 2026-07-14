@@ -1,45 +1,36 @@
 #!/bin/sh
-set -e
+# Keep this minimal: always reach php-fpm / queue:work.
+# Heavy setup (seed) is handled by setup.sh after /up is healthy.
 
-cd /var/www/backend
+cd /var/www/backend || exit 1
 
 export COMPOSER_ALLOW_SUPERUSER=1
 export COMPOSER_AUDIT=false
+export REDIS_CLIENT="${REDIS_CLIENT:-predis}"
 
-echo "==> Entry role=${CONTAINER_ROLE:-app} env=${APP_ENV:-unknown}"
+echo "==> Entry role=${CONTAINER_ROLE:-app} env=${APP_ENV:-unknown} redis_client=${REDIS_CLIENT}"
 
 if [ ! -f vendor/autoload.php ]; then
   echo "==> Installing Composer dependencies..."
-  composer install --no-dev --optimize-autoloader --no-interaction --no-audit
+  composer install --no-dev --optimize-autoloader --no-interaction --no-audit || {
+    echo "ERROR: composer install failed" >&2
+    exit 1
+  }
 else
   echo "Vendor present, skipping composer install."
-fi
-
-# Prefer phpredis when available; otherwise force predis (already in composer.json)
-if php -m 2>/dev/null | grep -qi '^redis$'; then
-  echo "==> PHP redis extension detected"
-else
-  echo "==> PHP redis extension missing — using predis client"
-  export REDIS_CLIENT=predis
 fi
 
 wait_for_tcp() {
   name="$1"
   host="$2"
   port="$3"
-  tries="${4:-60}"
-
-  if [ -z "$host" ]; then
-    return 0
-  fi
+  tries="${4:-45}"
 
   echo "Waiting for ${name} at ${host}:${port}..."
   i=1
   while [ "$i" -le "$tries" ]; do
     if WAIT_HOST="$host" WAIT_PORT="$port" php -r '
-      $host = getenv("WAIT_HOST") ?: "";
-      $port = (int) (getenv("WAIT_PORT") ?: 0);
-      $fp = @fsockopen($host, $port, $errno, $errstr, 1);
+      $fp = @fsockopen(getenv("WAIT_HOST"), (int) getenv("WAIT_PORT"), $e, $s, 1);
       if ($fp) { fclose($fp); exit(0); }
       exit(1);
     ' 2>/dev/null; then
@@ -49,57 +40,44 @@ wait_for_tcp() {
     i=$((i + 1))
     sleep 1
   done
-
-  echo "ERROR: ${name} not reachable at ${host}:${port} after ${tries}s" >&2
-  exit 1
+  echo "WARNING: ${name} not reachable yet — continuing anyway" >&2
+  return 0
 }
 
-wait_for_tcp Redis "${REDIS_HOST:-redis}" "${REDIS_PORT:-6379}" 60
-wait_for_tcp MySQL "${DB_HOST:-mysql}" "${DB_PORT:-3306}" 90
+wait_for_tcp Redis "${REDIS_HOST:-redis}" "${REDIS_PORT:-6379}" 45
+wait_for_tcp MySQL "${DB_HOST:-mysql}" "${DB_PORT:-3306}" 60
 
-if [ "$CONTAINER_ROLE" != "queue" ]; then
-  if [ ! -f .env ]; then
-    echo "ERROR: backend/.env is missing (bind-mounted). Run setup.sh first." >&2
-    exit 1
-  fi
+# Clear cached config that may force phpredis / wrong DB password
+rm -f bootstrap/cache/config.php \
+  bootstrap/cache/routes-v7.php \
+  bootstrap/cache/routes.php \
+  bootstrap/cache/services.php 2>/dev/null || true
 
-  if ! grep -q '^APP_KEY=base64:' .env 2>/dev/null; then
-    echo "==> Generating APP_KEY..."
-    php artisan key:generate --force
-  fi
-
-  # Drop stale config cache that may bake wrong REDIS_CLIENT / empty secrets
-  rm -f bootstrap/cache/config.php bootstrap/cache/routes-v7.php bootstrap/cache/routes.php 2>/dev/null || true
-
-  echo "==> Running migrations..."
-  php artisan migrate --force
-
-  php artisan storage:link --force 2>/dev/null || true
-
-  if [ "${RUN_SEEDER:-false}" = "true" ]; then
-    echo "==> Seeding database..."
-    if [ -z "${ADMIN_PASSWORD:-}" ]; then
-      echo "ERROR: RUN_SEEDER=true but ADMIN_PASSWORD is empty." >&2
-      exit 1
-    fi
-    php artisan db:seed --force
-  fi
-
-  if [ "${APP_ENV:-}" = "production" ]; then
-    echo "==> Caching config..."
-    php artisan config:cache || echo "WARNING: config:cache failed (continuing)"
-    php artisan route:cache 2>/dev/null || echo "WARNING: route:cache skipped/failed (continuing)"
-  fi
-
-  echo "==> Starting php-fpm..."
-else
-  echo "==> Queue worker boot check..."
-  if ! php artisan about; then
-    echo "ERROR: php artisan about failed — queue worker cannot boot." >&2
-    ls -la .env vendor/autoload.php 2>&1 || true
-    exit 1
-  fi
+if [ "$CONTAINER_ROLE" = "queue" ]; then
   echo "==> Starting queue worker..."
+  exec "$@"
 fi
 
+if [ ! -f .env ]; then
+  echo "ERROR: backend/.env missing" >&2
+  exit 1
+fi
+
+if ! grep -q '^APP_KEY=base64:' .env 2>/dev/null; then
+  echo "==> Generating APP_KEY..."
+  php artisan key:generate --force || true
+fi
+
+echo "==> Running migrations (non-fatal)..."
+if ! php artisan migrate --force; then
+  echo "WARNING: migrate failed — check DB_PASSWORD matches the MySQL volume" >&2
+  php artisan migrate --force -v 2>&1 | tail -40 || true
+fi
+
+php artisan storage:link --force 2>/dev/null || true
+
+# Do NOT seed or config:cache here — those caused crash loops on production.
+# setup.sh seeds after /up succeeds.
+
+echo "==> Starting php-fpm..."
 exec "$@"

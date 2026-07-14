@@ -409,63 +409,78 @@ fi
 # ---------------------------------------------------------------------------
 # 4. Docker stack
 # ---------------------------------------------------------------------------
-log "Starting Docker stack"
-(
-  cd "$ROOT/docker"
-  "${COMPOSE[@]}" up -d --build --scale "queue=${QUEUE_SCALE}"
-)
-
 API_HOST_PORT="${API_HOST_PORT:-8089}"
 API_HEALTH_URL="http://127.0.0.1:${API_HOST_PORT}/api/v1/health"
 API_UP_URL="http://127.0.0.1:${API_HOST_PORT}/up"
 
+containers_crash_looping() {
+  "${COMPOSE[@]}" ps 2>/dev/null | grep -E 'email-server-app|docker-queue' | grep -qi 'Restarting'
+}
+
 wait_for_api() {
-  local max_attempts="${1:-90}"
-  local i code body
+  local max_attempts="${1:-45}"
+  local i code
   log "Waiting for API on :${API_HOST_PORT} (up to ~$((max_attempts * 2))s)"
+  log "Liveness check: GET ${API_UP_URL}"
 
   for i in $(seq 1 "$max_attempts"); do
-    # Prefer /up (Laravel liveness) — does not require DB/Redis yet
-    code="$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 2 --max-time 5 "$API_UP_URL" 2>/dev/null || echo 000)"
+    if containers_crash_looping; then
+      warn "App/queue containers are crash-looping — dumping logs"
+      "${COMPOSE[@]}" ps || true
+      "${COMPOSE[@]}" logs app --tail 80 || true
+      "${COMPOSE[@]}" logs queue --tail 40 || true
+      return 1
+    fi
+
+    code="$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 2 --max-time 5 "$API_UP_URL" 2>/dev/null || true)"
+    code="${code:-000}"
+    # curl sometimes prints 000000 when both status write and failure happen
+    code="$(printf '%s' "$code" | tr -cd '0-9' | tail -c 3)"
+    [[ -z "$code" ]] && code="000"
+
     if [[ "$code" == "200" ]]; then
-      # Then confirm JSON health when dependencies are up (200 or accept any HTTP response with body)
-      body="$(curl -s --connect-timeout 2 --max-time 8 "$API_HEALTH_URL" 2>/dev/null || true)"
-      if echo "$body" | grep -q '"status"'; then
-        log "API is up (attempt ${i}/${max_attempts})"
-        return 0
-      fi
-      # PHP responds; keep waiting briefly for DB/Redis to become healthy
-      if (( i % 5 == 0 )); then
-        printf '    … PHP up, waiting for DB/Redis health (%s/%s) http=%s\n' "$i" "$max_attempts" "$code"
-      fi
-    else
-      if (( i % 5 == 0 )); then
-        printf '    … still starting (%s/%s) /up=%s\n' "$i" "$max_attempts" "$code"
-        "${COMPOSE[@]}" ps 2>/dev/null | sed 's/^/       /' || true
-      fi
+      log "API is up (attempt ${i}/${max_attempts}) — /up=200"
+      return 0
+    fi
+
+    if (( i % 3 == 0 )); then
+      printf '    … still starting (%s/%s) /up=%s\n' "$i" "$max_attempts" "$code"
+      "${COMPOSE[@]}" ps --format 'table {{.Name}}\t{{.Status}}' 2>/dev/null | sed 's/^/       /' || true
     fi
     sleep 2
   done
 
-  warn "API health check timed out on ${API_HEALTH_URL}"
-  warn "Container status:"
+  warn "API liveness timed out on ${API_UP_URL}"
   "${COMPOSE[@]}" ps || true
-  warn "Recent app logs:"
-  "${COMPOSE[@]}" logs app --tail 40 || true
-  warn "Recent nginx logs:"
-  "${COMPOSE[@]}" logs nginx --tail 20 || true
-  curl -sv "$API_UP_URL" 2>&1 | tail -20 || true
-  curl -sv "$API_HEALTH_URL" 2>&1 | tail -30 || true
+  "${COMPOSE[@]}" logs app --tail 80 || true
+  "${COMPOSE[@]}" logs nginx --tail 30 || true
   return 1
 }
 
-if ! wait_for_api 90; then
-  die "API did not become healthy. Fix the errors above, then re-run setup or: cd docker && docker compose up -d"
+# Always start with RUN_SEEDER=false in the running containers so entrypoint can't die on seed.
+# Seeding is done below via artisan after /up is healthy.
+log "Ensuring stack is up (migrations in entrypoint are non-fatal)"
+(
+  cd "$ROOT/docker"
+  # Temporarily force no seeder in compose env for this up
+  RUN_SEEDER=false "${COMPOSE[@]}" up -d --build --scale "queue=${QUEUE_SCALE}"
+)
+
+if ! wait_for_api 45; then
+  die "API did not become healthy. Common fix: DB_PASSWORD in docker/.env must match the existing MySQL data volume. Then: docker compose logs app --tail 100"
 fi
 
-# Force admin password reset on first deploy if seeder skipped recreating password
+# Seed / ensure admin after API is alive
 if [[ "$RUN_SEEDER" == "true" ]]; then
-  log "Ensuring admin user password is set"
+  log "Seeding database / ensuring admin user"
+  "${COMPOSE[@]}" exec -T \
+    -e ADMIN_EMAIL="$ADMIN_EMAIL" \
+    -e ADMIN_PASSWORD="$ADMIN_PASSWORD" \
+    -e ADMIN_RESET_PASSWORD=true \
+    -e RUN_SEEDER=true \
+    app php artisan db:seed --force \
+    || warn "db:seed failed — trying direct admin upsert"
+
   "${COMPOSE[@]}" exec -T \
     -e ADMIN_EMAIL="$ADMIN_EMAIL" \
     -e ADMIN_PASSWORD="$ADMIN_PASSWORD" \
@@ -482,7 +497,7 @@ if [[ "$RUN_SEEDER" == "true" ]]; then
   ]
 );
 echo 'admin='.\$u->email.PHP_EOL;
-" || warn "Could not reset admin via tinker (containers may still be starting)"
+" || warn "Could not upsert admin user"
 fi
 
 # Disable reseed for subsequent boots
