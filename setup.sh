@@ -498,6 +498,100 @@ sync_backend_db_password() {
   fi
 }
 
+# Read a KEY from docker/.env (strips surrounding quotes)
+docker_env_get() {
+  local key="$1"
+  grep -E "^${key}=" "$ROOT/docker/.env" 2>/dev/null | head -1 | cut -d= -f2- | sed -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//"
+}
+
+sql_escape() {
+  # Escape \ and ' for MySQL string literals
+  local s="$1"
+  s="${s//\\/\\\\}"
+  s="${s//\'/\\\'}"
+  printf '%s' "$s"
+}
+
+wait_for_mysql_healthy() {
+  local i
+  log "Waiting for MySQL container to be healthy"
+  for i in $(seq 1 36); do
+    if "${COMPOSE[@]}" ps mysql 2>/dev/null | grep -qi 'healthy'; then
+      return 0
+    fi
+    sleep 5
+  done
+  warn "MySQL did not report healthy — continuing anyway"
+  return 0
+}
+
+mysql_app_auth_ok() {
+  local db_pass="$1"
+  "${COMPOSE[@]}" exec -T -e MYSQL_PWD="$db_pass" mysql \
+    mysqladmin ping -h 127.0.0.1 -u email_server --silent >/dev/null 2>&1
+}
+
+mysql_root_auth_ok() {
+  local root_pass="$1"
+  "${COMPOSE[@]}" exec -T -e MYSQL_PWD="$root_pass" mysql \
+    mysqladmin ping -h 127.0.0.1 -u root --silent >/dev/null 2>&1
+}
+
+# MySQL only applies MYSQL_PASSWORD on first volume init. If secrets.env /
+# setup passwords change later, containers keep the OLD volume password.
+# Reset the app user via root so .env and the volume match (no data wipe).
+sync_mysql_volume_password() {
+  local db_pass root_pass esc_pass
+  db_pass="$(docker_env_get DB_PASSWORD)"
+  root_pass="$(docker_env_get MYSQL_ROOT_PASSWORD)"
+  [[ -n "$db_pass" ]] || die "DB_PASSWORD missing from docker/.env"
+  [[ -n "$root_pass" ]] || die "MYSQL_ROOT_PASSWORD missing from docker/.env"
+
+  wait_for_mysql_healthy
+
+  if mysql_app_auth_ok "$db_pass"; then
+    log "MySQL app user (email_server) auth OK"
+    return 0
+  fi
+
+  warn "DB_PASSWORD does not match the MySQL data volume — resetting email_server via root"
+
+  if ! mysql_root_auth_ok "$root_pass"; then
+    die "MySQL Access denied: neither DB_PASSWORD nor MYSQL_ROOT_PASSWORD match the existing volume.
+
+Fix (pick one):
+  1) Put the ORIGINAL passwords into docker/.env, backend/.env, and your secrets.env, then re-run setup
+  2) Wipe the volume (DESTROYS DATA) and re-init with current passwords:
+       cd $ROOT/docker
+       docker compose stop mysql
+       sudo rm -rf ${DATA_PATH}/mysql/*
+       docker compose up -d mysql
+       # then re-run setup.sh
+"
+  fi
+
+  esc_pass="$(sql_escape "$db_pass")"
+  "${COMPOSE[@]}" exec -T -e MYSQL_PWD="$root_pass" mysql \
+    mysql -u root -e "
+CREATE DATABASE IF NOT EXISTS email_server CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE USER IF NOT EXISTS 'email_server'@'%' IDENTIFIED BY '${esc_pass}';
+ALTER USER 'email_server'@'%' IDENTIFIED BY '${esc_pass}';
+GRANT ALL PRIVILEGES ON email_server.* TO 'email_server'@'%';
+FLUSH PRIVILEGES;
+" || die "Failed to reset MySQL email_server password via root"
+
+  if mysql_app_auth_ok "$db_pass"; then
+    log "MySQL email_server password reset to match DB_PASSWORD"
+  else
+    die "MySQL password reset ran but email_server still cannot authenticate"
+  fi
+
+  # Re-run migrations now that auth works (entrypoint may have skipped them)
+  log "Running migrations after MySQL password sync"
+  "${COMPOSE[@]}" exec -T app php artisan migrate --force \
+    || warn "migrate still failing — check app logs"
+}
+
 app_is_crash_looping() {
   "${COMPOSE[@]}" ps 2>/dev/null | grep -E 'email-server-app' | grep -qi 'Restarting'
 }
@@ -577,6 +671,9 @@ log "Starting Docker stack"
   RUN_SEEDER=false "${COMPOSE[@]}" up -d --build --scale "queue=${QUEUE_SCALE}"
 )
 
+# Align MySQL volume passwords with docker/.env BEFORE health/seed
+sync_mysql_volume_password
+
 if ! wait_for_api 45; then
   die "API did not become healthy.
 
@@ -585,8 +682,9 @@ Try these on the server:
   docker compose logs app --tail 100
   docker compose ps
 
-If DB auth fails, either set DB_PASSWORD in docker/.env + backend/.env to the
-ORIGINAL MySQL volume password, or reset the volume (DESTROYS DATA):
+If DB auth fails, either set DB_PASSWORD / MYSQL_ROOT_PASSWORD in docker/.env +
+backend/.env to the ORIGINAL MySQL volume passwords, or reset the volume
+(DESTROYS DATA):
   docker compose down
   sudo rm -rf ${DATA_PATH}/mysql/*
   docker compose up -d
@@ -596,18 +694,17 @@ fi
 # Seed / ensure admin after API is alive
 if [[ "$RUN_SEEDER" == "true" ]]; then
   log "Seeding database / ensuring admin user"
-  "${COMPOSE[@]}" exec -T \
+  if ! "${COMPOSE[@]}" exec -T \
     -e ADMIN_EMAIL="$ADMIN_EMAIL" \
     -e ADMIN_PASSWORD="$ADMIN_PASSWORD" \
     -e ADMIN_RESET_PASSWORD=true \
     -e RUN_SEEDER=true \
-    app php artisan db:seed --force \
-    || warn "db:seed failed — trying direct admin upsert"
-
-  "${COMPOSE[@]}" exec -T \
-    -e ADMIN_EMAIL="$ADMIN_EMAIL" \
-    -e ADMIN_PASSWORD="$ADMIN_PASSWORD" \
-    app php artisan tinker --execute="
+    app php artisan db:seed --force; then
+    warn "db:seed failed — trying direct admin upsert"
+    if ! "${COMPOSE[@]}" exec -T \
+      -e ADMIN_EMAIL="$ADMIN_EMAIL" \
+      -e ADMIN_PASSWORD="$ADMIN_PASSWORD" \
+      app php artisan tinker --execute="
 \$email = getenv('ADMIN_EMAIL');
 \$pass = getenv('ADMIN_PASSWORD');
 \$u = App\Models\User::query()->updateOrCreate(
@@ -620,7 +717,13 @@ if [[ "$RUN_SEEDER" == "true" ]]; then
   ]
 );
 echo 'admin='.\$u->email.PHP_EOL;
-" || warn "Could not upsert admin user"
+"; then
+      die "Could not seed/upsert admin — MySQL auth or migrate likely still failing.
+Re-run with matching DB_PASSWORD/MYSQL_ROOT_PASSWORD, or:
+  cd $ROOT && ./setup.sh --env-file=... --force-vendor
+"
+    fi
+  fi
 fi
 
 # Disable reseed for subsequent boots
