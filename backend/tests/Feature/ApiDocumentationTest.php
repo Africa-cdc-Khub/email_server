@@ -18,7 +18,9 @@ class ApiDocumentationTest extends TestCase
     {
         config(['app.env' => 'production', 'app.api_docs_enabled' => true]);
 
-        $this->get('/api/documentation')->assertOk();
+        $this->get('/api/documentation')
+            ->assertOk()
+            ->assertHeader('Content-Type', 'text/html; charset=UTF-8');
         $this->get('/api/docs.json')->assertOk();
     }
 }

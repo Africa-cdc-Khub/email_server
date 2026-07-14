@@ -1106,6 +1106,25 @@ log "Ensuring Laravel storage:link in app container"
   && log "storage:link OK" \
   || warn "storage:link failed in container — check app logs"
 
+# Pre-generate OpenAPI JSON for Swagger UI (non-fatal)
+log "Generating OpenAPI spec for /api/docs.json"
+"${COMPOSE[@]}" exec -T app php -r '
+  require "vendor/autoload.php";
+  \$app = require "bootstrap/app.php";
+  \$app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
+  try {
+    \$openapi = OpenApi\Generator::scan([app_path("OpenApi")]);
+    \$dir = storage_path("api-docs");
+    if (!is_dir(\$dir)) { mkdir(\$dir, 0775, true); }
+    file_put_contents(\$dir."/openapi.json", \$openapi->toJson());
+    echo "openapi_ok\n";
+  } catch (Throwable \$e) {
+    fwrite(STDERR, \$e->getMessage().PHP_EOL);
+    exit(1);
+  }
+' && log "OpenAPI cached at storage/api-docs/openapi.json" \
+  || warn "OpenAPI generation failed — /api/docs.json will try live scan"
+
 # Seed / ensure admin after API is alive
 if [[ "$RUN_SEEDER" == "true" ]]; then
   log "Seeding database / ensuring admin user (password = ADMIN_PASSWORD from secrets)"
