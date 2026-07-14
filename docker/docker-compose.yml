@@ -38,6 +38,7 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile
+    image: email-server-app:local
     container_name: email-server-app
     restart: unless-stopped
     working_dir: /var/www/backend
@@ -55,6 +56,7 @@ services:
       - email-server
 
   queue:
+    image: email-server-app:local
     build:
       context: ..
       dockerfile: docker/Dockerfile
