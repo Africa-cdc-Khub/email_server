@@ -525,16 +525,62 @@ wait_for_mysql_healthy() {
   return 0
 }
 
+# Must test from the *app* container via host "mysql".
+# Checking inside the mysql container on 127.0.0.1 only exercises
+# email_server@localhost — the app uses email_server@% (e.g. 172.21.0.4).
 mysql_app_auth_ok() {
   local db_pass="$1"
-  "${COMPOSE[@]}" exec -T -e MYSQL_PWD="$db_pass" mysql \
-    mysqladmin ping -h 127.0.0.1 -u email_server --silent >/dev/null 2>&1
+  "${COMPOSE[@]}" exec -T \
+    -e DB_PASSWORD_CHECK="$db_pass" \
+    app php -r '
+      $pass = getenv("DB_PASSWORD_CHECK");
+      try {
+        new PDO(
+          "mysql:host=mysql;port=3306;dbname=email_server;charset=utf8mb4",
+          "email_server",
+          $pass,
+          [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]
+        );
+        exit(0);
+      } catch (Throwable $e) {
+        fwrite(STDERR, $e->getMessage() . PHP_EOL);
+        exit(1);
+      }
+    ' >/dev/null 2>&1
 }
 
 mysql_root_auth_ok() {
   local root_pass="$1"
   "${COMPOSE[@]}" exec -T -e MYSQL_PWD="$root_pass" mysql \
     mysqladmin ping -h 127.0.0.1 -u root --silent >/dev/null 2>&1
+}
+
+reset_mysql_app_user() {
+  local root_pass="$1"
+  local esc_pass="$2"
+  local hosts host
+
+  "${COMPOSE[@]}" exec -T -e MYSQL_PWD="$root_pass" mysql \
+    mysql -u root -e "
+CREATE DATABASE IF NOT EXISTS email_server CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE USER IF NOT EXISTS 'email_server'@'%' IDENTIFIED BY '${esc_pass}';
+ALTER USER 'email_server'@'%' IDENTIFIED BY '${esc_pass}';
+GRANT ALL PRIVILEGES ON email_server.* TO 'email_server'@'%';
+FLUSH PRIVILEGES;
+" || return 1
+
+  # Sync password for every host the user already exists on (localhost, %, etc.)
+  hosts="$("${COMPOSE[@]}" exec -T -e MYSQL_PWD="$root_pass" mysql \
+    mysql -u root -N -e "SELECT Host FROM mysql.user WHERE User='email_server';" 2>/dev/null | tr -d '\r')"
+  while IFS= read -r host; do
+    [[ -z "$host" ]] && continue
+    "${COMPOSE[@]}" exec -T -e MYSQL_PWD="$root_pass" mysql \
+      mysql -u root -e "ALTER USER 'email_server'@'${host}' IDENTIFIED BY '${esc_pass}'; GRANT ALL PRIVILEGES ON email_server.* TO 'email_server'@'${host}';" \
+      || warn "Could not ALTER email_server@${host}"
+  done <<< "$hosts"
+
+  "${COMPOSE[@]}" exec -T -e MYSQL_PWD="$root_pass" mysql \
+    mysql -u root -e "FLUSH PRIVILEGES;" || true
 }
 
 # MySQL only applies MYSQL_PASSWORD on first volume init. If secrets.env /
@@ -549,12 +595,18 @@ sync_mysql_volume_password() {
 
   wait_for_mysql_healthy
 
+  # Ensure app container is up enough for the PDO network check
+  if ! "${COMPOSE[@]}" ps app 2>/dev/null | grep -qi 'Up'; then
+    warn "App container not Up yet — waiting briefly for network auth check"
+    sleep 5
+  fi
+
   if mysql_app_auth_ok "$db_pass"; then
-    log "MySQL app user (email_server) auth OK"
+    log "MySQL app user auth OK (from app → mysql:3306)"
     return 0
   fi
 
-  warn "DB_PASSWORD does not match the MySQL data volume — resetting email_server via root"
+  warn "DB_PASSWORD rejected from app container (email_server@%) — resetting via root"
 
   if ! mysql_root_auth_ok "$root_pass"; then
     die "MySQL Access denied: neither DB_PASSWORD nor MYSQL_ROOT_PASSWORD match the existing volume.
@@ -571,22 +623,21 @@ Fix (pick one):
   fi
 
   esc_pass="$(sql_escape "$db_pass")"
-  "${COMPOSE[@]}" exec -T -e MYSQL_PWD="$root_pass" mysql \
-    mysql -u root -e "
-CREATE DATABASE IF NOT EXISTS email_server CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-CREATE USER IF NOT EXISTS 'email_server'@'%' IDENTIFIED BY '${esc_pass}';
-ALTER USER 'email_server'@'%' IDENTIFIED BY '${esc_pass}';
-GRANT ALL PRIVILEGES ON email_server.* TO 'email_server'@'%';
-FLUSH PRIVILEGES;
-" || die "Failed to reset MySQL email_server password via root"
+  reset_mysql_app_user "$root_pass" "$esc_pass" \
+    || die "Failed to reset MySQL email_server password via root"
+
+  # Keep Laravel env in sync with the password we just applied
+  sync_backend_db_password
 
   if mysql_app_auth_ok "$db_pass"; then
-    log "MySQL email_server password reset to match DB_PASSWORD"
+    log "MySQL email_server@% password reset to match DB_PASSWORD"
   else
-    die "MySQL password reset ran but email_server still cannot authenticate"
+    warn "Listing mysql.user rows for email_server (diagnostic):"
+    "${COMPOSE[@]}" exec -T -e MYSQL_PWD="$root_pass" mysql \
+      mysql -u root -e "SELECT user,host,plugin FROM mysql.user WHERE user='email_server';" || true
+    die "MySQL password reset ran but app still cannot authenticate as email_server@%"
   fi
 
-  # Re-run migrations now that auth works (entrypoint may have skipped them)
   log "Running migrations after MySQL password sync"
   "${COMPOSE[@]}" exec -T app php artisan migrate --force \
     || warn "migrate still failing — check app logs"
