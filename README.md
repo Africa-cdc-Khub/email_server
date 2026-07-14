@@ -10,7 +10,7 @@ Laravel email gateway with **Microsoft Exchange (Graph API)** and **SMTP**, DB-m
 | API | https://notifications.africacdc.org/api |
 | Health | https://notifications.africacdc.org/api/v1/health |
 
-Swagger/OpenAPI is **disabled in production** (`APP_ENV=production`).
+Swagger/OpenAPI at `/api/documentation` is **off by default in production**. Set `API_DOCS_ENABLED=true` in `docker/.env` (and recreate app) to enable it.
 
 ---
 

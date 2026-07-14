@@ -27,17 +27,32 @@ class SecurityHeaders
         $this->setMissing($response, 'Cross-Origin-Resource-Policy', 'same-site');
         $response->headers->remove('X-Powered-By');
 
-        $this->setMissing(
-            $response,
-            'Content-Security-Policy',
-            "default-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'; object-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self'",
-        );
+        $csp = $this->contentSecurityPolicy($request);
+        $this->setMissing($response, 'Content-Security-Policy', $csp);
 
         if ($request->secure()) {
             $this->setMissing($response, 'Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
         }
 
         return $response;
+    }
+
+    private function contentSecurityPolicy(Request $request): string
+    {
+        $base = "default-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'; object-src 'none';";
+        $fonts = "font-src 'self' data: https://fonts.gstatic.com;";
+        $images = "img-src 'self' data: blob:;";
+
+        if ($this->isApiDocsRequest($request)) {
+            return "{$base} script-src 'self' https://unpkg.com; style-src 'self' 'unsafe-inline' https://unpkg.com https://fonts.googleapis.com; {$fonts} {$images} connect-src 'self';";
+        }
+
+        return "{$base} script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; {$fonts} {$images} connect-src 'self';";
+    }
+
+    private function isApiDocsRequest(Request $request): bool
+    {
+        return in_array($request->path(), ['api/documentation', 'api/docs.json', 'docs'], true);
     }
 
     private function setMissing(Response $response, string $name, string $value): void

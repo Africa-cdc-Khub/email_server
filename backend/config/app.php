@@ -125,4 +125,19 @@ return [
         'store' => env('APP_MAINTENANCE_STORE', 'database'),
     ],
 
+    /*
+    |--------------------------------------------------------------------------
+    | Swagger / OpenAPI UI
+    |--------------------------------------------------------------------------
+    |
+    | Disabled by default in production. Set API_DOCS_ENABLED=true in .env to
+    | expose /api/documentation and /api/docs.json on production servers.
+    |
+    */
+
+    'api_docs_enabled' => filter_var(
+        env('API_DOCS_ENABLED', env('APP_ENV', 'production') === 'production' ? 'false' : 'true'),
+        FILTER_VALIDATE_BOOL
+    ),
+
 ];

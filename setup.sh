@@ -360,6 +360,7 @@ if [[ "$WRITE_ENV" == "true" ]]; then
     "MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD}" \
     "JWT_SECRET=${JWT_SECRET}" \
     "JWT_TTL=${JWT_TTL}" \
+    "API_DOCS_ENABLED=${API_DOCS_ENABLED:-true}" \
     "INTEGRATION_CLIENT_SECRET=${INTEGRATION_CLIENT_SECRET}"
 
   PRESERVED_APP_KEY="$(env_file_get "$ROOT/backend/.env" APP_KEY)"
@@ -388,6 +389,7 @@ if [[ "$WRITE_ENV" == "true" ]]; then
   set_backend_env "ADMIN_PASSWORD" "$ADMIN_PASSWORD"
   set_backend_env "JWT_SECRET" "$JWT_SECRET"
   set_backend_env "JWT_TTL" "$JWT_TTL"
+  set_backend_env "API_DOCS_ENABLED" "${API_DOCS_ENABLED:-true}"
   set_backend_env "INTEGRATION_CLIENT_SECRET" "$INTEGRATION_CLIENT_SECRET"
   set_backend_env "SANCTUM_STATEFUL_DOMAINS" "localhost,localhost:3006,127.0.0.1"
   if [[ "$PRESERVED_APP_KEY" == base64:* ]]; then
@@ -407,6 +409,12 @@ else
   if [[ -z "$_be_jwt" || "$_be_jwt" != "$JWT_SECRET" ]]; then
     log "Syncing JWT_SECRET from docker/.env → backend/.env"
     set_backend_env "JWT_SECRET" "$JWT_SECRET"
+  fi
+  _api_docs="$(env_file_get "$ROOT/docker/.env" API_DOCS_ENABLED)"
+  _be_docs="$(env_file_get "$ROOT/backend/.env" API_DOCS_ENABLED)"
+  if [[ -n "$_api_docs" && "$_be_docs" != "$_api_docs" ]]; then
+    log "Syncing API_DOCS_ENABLED from docker/.env → backend/.env"
+    set_backend_env "API_DOCS_ENABLED" "$_api_docs"
   fi
   # Ensure APP_KEY exists
   _be_key="$(env_file_get "$ROOT/backend/.env" APP_KEY)"
