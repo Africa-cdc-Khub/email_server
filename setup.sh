@@ -901,7 +901,8 @@ rm -f "$ROOT/backend/bootstrap/cache/config.php" \
 log "Starting Docker stack"
 (
   cd "$ROOT/docker"
-  RUN_SEEDER=false "${COMPOSE[@]}" up -d --build --scale "queue=${QUEUE_SCALE}"
+  # --remove-orphans drops leftover containers from old compose project names / scale changes
+  RUN_SEEDER=false "${COMPOSE[@]}" up -d --build --remove-orphans --scale "queue=${QUEUE_SCALE}"
 )
 
 # Align MySQL volume passwords with docker/.env BEFORE health/seed
