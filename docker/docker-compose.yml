@@ -30,7 +30,7 @@ x-app-env: &app-env
   INTEGRATION_CLIENT_SECRET: ${INTEGRATION_CLIENT_SECRET:-}
   JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in docker/.env (>=32 chars)}
   JWT_TTL: ${JWT_TTL:-60}
-  QUEUE_FAILED_DRIVER: ${QUEUE_FAILED_DRIVER:-null}
+  QUEUE_FAILED_DRIVER: "null"
   RUN_SEEDER: "false"
 
 services:
@@ -69,14 +69,7 @@ services:
     environment:
       <<: *app-env
       CONTAINER_ROLE: queue
-    command: >
-      php artisan queue:work redis
-      --queue=emails,default
-      --sleep=1
-      --tries=5
-      --timeout=120
-      --max-jobs=500
-      --max-time=3600
+    # Worker command is started by entrypoint.sh (avoids CMD string parsing issues)
     depends_on:
       app:
         condition: service_started

@@ -67,11 +67,6 @@ rm -f bootstrap/cache/config.php \
   bootstrap/cache/routes.php \
   bootstrap/cache/services.php 2>/dev/null || true
 
-if [ "$CONTAINER_ROLE" = "queue" ]; then
-  echo "==> Starting queue worker..."
-  exec "$@"
-fi
-
 if [ ! -f .env ]; then
   echo "ERROR: backend/.env missing" >&2
   exit 1
@@ -82,6 +77,22 @@ if ! grep -q '^APP_KEY=base64:' .env 2>/dev/null; then
   php artisan key:generate --force || true
 fi
 
+if [ "$CONTAINER_ROLE" = "queue" ]; then
+  echo "==> Queue boot check..."
+  if ! php artisan --version; then
+    echo "ERROR: php artisan failed to boot" >&2
+    exit 1
+  fi
+  # Run worker here (exec-form) — avoid compose shell-string CMD bugs
+  echo "==> Starting queue worker (emails,default)..."
+  exec php artisan queue:work \
+    --queue=emails,default \
+    --sleep=1 \
+    --tries=5 \
+    --timeout=120 \
+    --verbose
+fi
+
 echo "==> Running migrations (non-fatal)..."
 if ! php artisan migrate --force; then
   echo "WARNING: migrate failed — check DB_PASSWORD matches the MySQL volume" >&2
@@ -90,8 +101,5 @@ fi
 
 php artisan storage:link --force 2>/dev/null || true
 
-# Do NOT seed or config:cache here — those caused crash loops on production.
-# setup.sh seeds after /up succeeds.
-
 echo "==> Starting php-fpm..."
-exec "$@"
+exec php-fpm
