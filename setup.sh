@@ -49,6 +49,7 @@ EXCHANGE_SCOPE="${EXCHANGE_SCOPE:-https://graph.microsoft.com/.default}"
 INTEGRATION_CLIENT_SECRET="${INTEGRATION_CLIENT_SECRET:-}"
 QUEUE_SCALE="${QUEUE_SCALE:-1}"
 MYSQL_HOST_PORT="${MYSQL_HOST_PORT:-3309}"
+FORCE_VENDOR_REINSTALL="${FORCE_VENDOR_REINSTALL:-false}"
 RUN_SEEDER="${RUN_SEEDER:-true}"
 SKIP_SSL="${SKIP_SSL:-false}"
 SKIP_FRONTEND_BUILD="${SKIP_FRONTEND_BUILD:-false}"
@@ -82,6 +83,7 @@ Optional:
   --integration-client-secret=SECRET  Seeded staff-portal integration secret (auto if omitted)
   --queue-scale=N               docker compose --scale queue=N (default: 1)
   --mysql-host-port=PORT        Host port for MySQL (default: 3309; container stays 3306)
+  --force-vendor                Wipe backend/vendor and reinstall via composer
   --run-seeder=true|false       Seed admin/providers on start (default: true)
   --skip-ssl                    Skip Certbot TLS setup
   --skip-frontend-build         Skip frontend build (requires existing frontend/dist)
@@ -183,6 +185,7 @@ if [[ -n "$ENV_FILE" ]]; then
   INTEGRATION_CLIENT_SECRET="${INTEGRATION_CLIENT_SECRET:-}"
   QUEUE_SCALE="${QUEUE_SCALE:-1}"
   MYSQL_HOST_PORT="${MYSQL_HOST_PORT:-3309}"
+  FORCE_VENDOR_REINSTALL="${FORCE_VENDOR_REINSTALL:-false}"
   RUN_SEEDER="${RUN_SEEDER:-true}"
   SKIP_SSL="${SKIP_SSL:-false}"
 fi
@@ -208,6 +211,7 @@ while [[ $# -gt 0 ]]; do
     --integration-client-secret=*) INTEGRATION_CLIENT_SECRET="${1#*=}" ;;
     --queue-scale=*) QUEUE_SCALE="${1#*=}" ;;
     --mysql-host-port=*) MYSQL_HOST_PORT="${1#*=}" ;;
+    --force-vendor) FORCE_VENDOR_REINSTALL=true ;;
     --run-seeder=*) RUN_SEEDER="${1#*=}" ;;
     --skip-ssl) SKIP_SSL=true ;;
     --skip-frontend-build) SKIP_FRONTEND_BUILD=true ;;
@@ -431,42 +435,49 @@ API_HEALTH_URL="http://127.0.0.1:${API_HOST_PORT}/api/v1/health"
 API_UP_URL="http://127.0.0.1:${API_HOST_PORT}/up"
 
 ensure_backend_vendor() {
-  local autoload="$ROOT/backend/vendor/autoload.php"
-  local sentinel="$ROOT/backend/vendor/symfony/deprecation-contracts/function.php"
-  local need_install=0
+  # Always run before compose up. Incomplete vendor/ (autoload present but packages
+  # missing) has caused production 500s — never trust a partial tree.
+  local vendor_dir="$ROOT/backend/vendor"
+  local autoload="$vendor_dir/autoload.php"
+  local sentinel="$vendor_dir/symfony/deprecation-contracts/function.php"
+  local force="${FORCE_VENDOR_REINSTALL:-false}"
 
-  if [[ ! -f "$autoload" ]]; then
-    need_install=1
-  elif [[ ! -f "$sentinel" ]]; then
-    warn "vendor/ is incomplete (missing symfony/deprecation-contracts) — reinstalling"
-    need_install=1
-  fi
+  vendor_is_healthy() {
+    [[ -f "$autoload" ]] || return 1
+    [[ -f "$sentinel" ]] || return 1
+    [[ -f "$vendor_dir/predis/predis/composer.json" ]] || return 1
+    [[ -d "$vendor_dir/laravel/framework" ]] || return 1
+    docker run --rm -v "$ROOT/backend:/app" -w /app composer:2 \
+      php -r 'require "vendor/autoload.php"; echo "ok";' >/dev/null 2>&1
+  }
 
-  if [[ "$need_install" -eq 0 ]]; then
-    # Quick autoload smoke test via PHP in composer image
-    if ! docker run --rm -v "$ROOT/backend:/app" -w /app composer:2 \
-      php -r 'require "vendor/autoload.php"; echo "ok";' >/dev/null 2>&1; then
-      warn "vendor/autoload.php fails to load — reinstalling"
-      need_install=1
+  run_composer_install() {
+    log "Running: composer install --no-dev --optimize-autoloader"
+    docker run --rm \
+      -v "$ROOT/backend:/app" \
+      -w /app \
+      composer:2 \
+      composer install --no-dev --optimize-autoloader --no-interaction --prefer-dist
+  }
+
+  if [[ "$force" == "true" ]] || ! vendor_is_healthy; then
+    if [[ -d "$vendor_dir" ]]; then
+      warn "Removing incomplete/stale backend/vendor before reinstall"
+      rm -rf "$vendor_dir"
     else
-      log "PHP vendor/ present and loadable"
-      return 0
+      log "backend/vendor missing — installing PHP dependencies"
     fi
+    run_composer_install
+  else
+    log "PHP vendor/ healthy — refreshing with composer install"
+    run_composer_install
   fi
-
-  log "Installing PHP dependencies (composer) into backend/vendor"
-  rm -rf "$ROOT/backend/vendor"
-  docker run --rm \
-    -v "$ROOT/backend:/app" \
-    -w /app \
-    composer:2 \
-    composer install --no-dev --optimize-autoloader --no-interaction
 
   [[ -f "$autoload" ]] || die "composer install did not create vendor/autoload.php"
-  [[ -f "$sentinel" ]] || die "composer install incomplete (missing $sentinel)"
-  docker run --rm -v "$ROOT/backend:/app" -w /app composer:2 \
-    php -r 'require "vendor/autoload.php"; echo "ok\n";' \
-    || die "vendor/autoload.php still fails after composer install"
+  [[ -f "$sentinel" ]] || die "composer install incomplete (missing symfony/deprecation-contracts)"
+  [[ -f "$vendor_dir/predis/predis/composer.json" ]] || die "composer install incomplete (missing predis/predis)"
+  vendor_is_healthy || die "vendor/autoload.php still fails to load after composer install"
+  log "PHP vendor/ OK"
 }
 
 sync_backend_db_password() {
