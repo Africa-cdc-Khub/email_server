@@ -12,7 +12,7 @@ echo "==> Entry role=${CONTAINER_ROLE:-app} env=${APP_ENV:-unknown} redis_client
 
 if [ ! -f vendor/autoload.php ]; then
   echo "==> Installing Composer dependencies..."
-  composer install --no-dev --optimize-autoloader --no-interaction --no-audit || {
+  composer install --no-dev --optimize-autoloader --no-interaction || {
     echo "ERROR: composer install failed" >&2
     exit 1
   }
