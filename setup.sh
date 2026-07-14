@@ -48,6 +48,7 @@ EXCHANGE_AUTH_METHOD="${EXCHANGE_AUTH_METHOD:-client_credentials}"
 EXCHANGE_SCOPE="${EXCHANGE_SCOPE:-https://graph.microsoft.com/.default}"
 INTEGRATION_CLIENT_SECRET="${INTEGRATION_CLIENT_SECRET:-}"
 QUEUE_SCALE="${QUEUE_SCALE:-1}"
+MYSQL_HOST_PORT="${MYSQL_HOST_PORT:-3309}"
 RUN_SEEDER="${RUN_SEEDER:-true}"
 SKIP_SSL="${SKIP_SSL:-false}"
 SKIP_FRONTEND_BUILD="${SKIP_FRONTEND_BUILD:-false}"
@@ -80,6 +81,7 @@ Optional:
   --exchange-client-secret=SECRET
   --integration-client-secret=SECRET  Seeded staff-portal integration secret (auto if omitted)
   --queue-scale=N               docker compose --scale queue=N (default: 1)
+  --mysql-host-port=PORT        Host port for MySQL (default: 3309; container stays 3306)
   --run-seeder=true|false       Seed admin/providers on start (default: true)
   --skip-ssl                    Skip Certbot TLS setup
   --skip-frontend-build         Skip frontend build (requires existing frontend/dist)
@@ -180,6 +182,7 @@ if [[ -n "$ENV_FILE" ]]; then
   EXCHANGE_CLIENT_SECRET="${EXCHANGE_CLIENT_SECRET:-}"
   INTEGRATION_CLIENT_SECRET="${INTEGRATION_CLIENT_SECRET:-}"
   QUEUE_SCALE="${QUEUE_SCALE:-1}"
+  MYSQL_HOST_PORT="${MYSQL_HOST_PORT:-3309}"
   RUN_SEEDER="${RUN_SEEDER:-true}"
   SKIP_SSL="${SKIP_SSL:-false}"
 fi
@@ -204,6 +207,7 @@ while [[ $# -gt 0 ]]; do
     --exchange-client-secret=*) EXCHANGE_CLIENT_SECRET="${1#*=}" ;;
     --integration-client-secret=*) INTEGRATION_CLIENT_SECRET="${1#*=}" ;;
     --queue-scale=*) QUEUE_SCALE="${1#*=}" ;;
+    --mysql-host-port=*) MYSQL_HOST_PORT="${1#*=}" ;;
     --run-seeder=*) RUN_SEEDER="${1#*=}" ;;
     --skip-ssl) SKIP_SSL=true ;;
     --skip-frontend-build) SKIP_FRONTEND_BUILD=true ;;
@@ -278,6 +282,7 @@ write_env_file "$ROOT/docker/.env" \
   "APP_URL=${APP_URL}" \
   "FRONTEND_URL=${FRONTEND_URL}" \
   "API_HOST_PORT=8089" \
+  "MYSQL_HOST_PORT=${MYSQL_HOST_PORT}" \
   "REDIS_CLIENT=predis" \
   "ADMIN_EMAIL=${ADMIN_EMAIL}" \
   "ADMIN_PASSWORD=${ADMIN_PASSWORD}" \
@@ -291,6 +296,12 @@ write_env_file "$ROOT/docker/.env" \
 log "Writing backend/.env (mode 600)"
 if [[ ! -f "$ROOT/backend/.env.example" ]]; then
   die "backend/.env.example missing"
+fi
+
+# Capture APP_KEY before we overwrite .env from the example template.
+PRESERVED_APP_KEY=""
+if [[ -f "$ROOT/backend/.env" ]]; then
+  PRESERVED_APP_KEY="$(grep -E '^APP_KEY=base64:' "$ROOT/backend/.env" 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"' || true)"
 fi
 
 # Start from example, then overlay production values.
@@ -349,8 +360,14 @@ set_backend_env "JWT_TTL" "$JWT_TTL"
 set_backend_env "INTEGRATION_CLIENT_SECRET" "$INTEGRATION_CLIENT_SECRET"
 set_backend_env "SANCTUM_STATEFUL_DOMAINS" "${DOMAIN},localhost,localhost:3006,127.0.0.1"
 
-# Ensure APP_KEY line exists (entrypoint generates if empty)
-grep -q '^APP_KEY=' "$ROOT/backend/.env" || printf 'APP_KEY=\n' >> "$ROOT/backend/.env"
+# Preserve or create APP_KEY before containers start (artisan cannot boot without it).
+if [[ -n "$PRESERVED_APP_KEY" ]]; then
+  log "Preserving existing APP_KEY"
+  set_backend_env "APP_KEY" "$PRESERVED_APP_KEY"
+else
+  log "Generating new APP_KEY for backend/.env"
+  set_backend_env "APP_KEY" "base64:$(openssl rand -base64 32 | tr -d '\n')"
+fi
 
 # ---------------------------------------------------------------------------
 # 3. Frontend build (host npm OR Docker node — npm is NOT required on the server)
@@ -447,8 +464,8 @@ sync_backend_db_password() {
   fi
 }
 
-containers_crash_looping() {
-  "${COMPOSE[@]}" ps 2>/dev/null | grep -E 'email-server-app|docker-queue' | grep -qi 'Restarting'
+app_is_crash_looping() {
+  "${COMPOSE[@]}" ps 2>/dev/null | grep -E 'email-server-app' | grep -qi 'Restarting'
 }
 
 app_is_up() {
@@ -458,17 +475,23 @@ app_is_up() {
 
 wait_for_api() {
   local max_attempts="${1:-45}"
-  local i code nginx_recreated=0
+  local i code nginx_recreated=0 queue_warned=0
   log "Waiting for API on :${API_HOST_PORT} (up to ~$((max_attempts * 2))s)"
   log "Liveness check: GET ${API_UP_URL}"
 
   for i in $(seq 1 "$max_attempts"); do
-    if containers_crash_looping; then
-      warn "App/queue containers are crash-looping — dumping logs"
+    # Only fail-fast on the API container — a bad queue must not abort /up checks
+    if app_is_crash_looping; then
+      warn "App container is crash-looping — dumping logs"
       "${COMPOSE[@]}" ps || true
       "${COMPOSE[@]}" logs app --tail 100 || true
-      "${COMPOSE[@]}" logs queue --tail 50 || true
       return 1
+    fi
+
+    if [[ "$queue_warned" -eq 0 ]] \
+      && "${COMPOSE[@]}" ps 2>/dev/null | grep -E 'docker-queue|queue-' | grep -qi 'Restarting'; then
+      warn "Queue is Restarting (does not block API health) — see: docker compose logs queue --tail 50"
+      queue_warned=1
     fi
 
     code="$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 2 --max-time 5 "$API_UP_URL" 2>/dev/null || true)"
@@ -503,6 +526,7 @@ wait_for_api() {
   "${COMPOSE[@]}" ps || true
   "${COMPOSE[@]}" logs app --tail 100 || true
   "${COMPOSE[@]}" logs nginx --tail 40 || true
+  "${COMPOSE[@]}" logs queue --tail 40 || true
   return 1
 }
 

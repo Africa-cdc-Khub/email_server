@@ -1,5 +1,5 @@
 # Email Server — production-oriented stack (queue + Redis + tuned MySQL)
-# API :8089 | Admin UI :3006 | scale workers: docker compose --scale queue=4
+# API :8089 | MySQL host :3309 | Admin UI :3006 | scale workers: docker compose --scale queue=4
 
 x-app-env: &app-env
   APP_NAME: "Email Server"
@@ -129,6 +129,10 @@ services:
     image: mysql:8.4
     container_name: email-server-mysql
     restart: unless-stopped
+    # Host port (default 3309) avoids clashes with other MySQL instances on :3306.
+    # App/queue still connect to mysql:3306 on the Docker network (DB_PORT unchanged).
+    ports:
+      - "${MYSQL_HOST_PORT:-3309}:3306"
     environment:
       MYSQL_DATABASE: email_server
       MYSQL_USER: email_server

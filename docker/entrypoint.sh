@@ -72,18 +72,52 @@ if [ ! -f .env ]; then
   exit 1
 fi
 
-if ! grep -q '^APP_KEY=base64:' .env 2>/dev/null; then
-  echo "==> Generating APP_KEY..."
-  php artisan key:generate --force || true
+# Ensure APP_KEY without artisan (artisan --version itself needs the key).
+# flock avoids races when app + multiple queue workers start together.
+ensure_app_key() {
+  if grep -q '^APP_KEY=base64:' .env 2>/dev/null; then
+    return 0
+  fi
+
+  echo "==> Generating APP_KEY (no artisan)..."
+  KEY="$(php -r 'echo "base64:".base64_encode(random_bytes(32));' 2>/dev/null || true)"
+  if [ -z "$KEY" ]; then
+    KEY="base64:$(openssl rand -base64 32 | tr -d '\n')"
+  fi
+
+  grep -v '^APP_KEY=' .env > .env.appkey.tmp 2>/dev/null || cp .env .env.appkey.tmp
+  printf 'APP_KEY=%s\n' "$KEY" >> .env.appkey.tmp
+  mv .env.appkey.tmp .env
+  chmod 600 .env 2>/dev/null || true
+}
+
+if command -v flock >/dev/null 2>&1; then
+  (
+    flock -w 30 9 || true
+    ensure_app_key
+  ) 9>.env.lock
+else
+  ensure_app_key
 fi
+
+if ! grep -q '^APP_KEY=base64:' .env 2>/dev/null; then
+  echo "ERROR: APP_KEY still missing after generation" >&2
+  exit 1
+fi
+
+dump_artisan_error() {
+  echo "ERROR: php artisan failed to boot — last output:" >&2
+  php artisan --version -vvv 2>&1 | tail -80 >&2 || true
+  echo "--- .env key presence ---" >&2
+  grep -E '^(APP_KEY|APP_ENV|DB_HOST|REDIS_CLIENT)=' .env 2>/dev/null | sed 's/^\(APP_KEY=\).*/\1[set]/' >&2 || true
+}
 
 if [ "$CONTAINER_ROLE" = "queue" ]; then
   echo "==> Queue boot check..."
   if ! php artisan --version; then
-    echo "ERROR: php artisan failed to boot" >&2
+    dump_artisan_error
     exit 1
   fi
-  # Run worker here (exec-form) — avoid compose shell-string CMD bugs
   echo "==> Starting queue worker (emails,default)..."
   exec php artisan queue:work \
     --queue=emails,default \
