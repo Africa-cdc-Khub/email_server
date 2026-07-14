@@ -43,55 +43,35 @@ Host Nginx :443  (notifications.africacdc.org) + Certbot TLS
 ### Deploy with `setup.sh` (recommended)
 
 ```bash
-sudo mkdir -p /var/www
-sudo git clone <YOUR_REPO_URL> /var/www/email_server
-cd /var/www/email_server
+sudo mkdir -p /var/lib/SYSTEMS
+sudo git clone <YOUR_REPO_URL> /var/lib/SYSTEMS/email_server
+cd /var/lib/SYSTEMS/email_server
 ```
 
-**Option A — external secrets file (best for production):**
+**Edit `.env` files manually, then run setup** (setup does **not** overwrite them):
 
 ```bash
-sudo mkdir -p /etc/email-server
-sudo cp deploy/production.secrets.env.example /etc/email-server/secrets.env
-sudo chmod 600 /etc/email-server/secrets.env
-sudo nano /etc/email-server/secrets.env   # fill real passwords / Exchange IDs
+# First time only
+cp -n docker/.env.example docker/.env
+cp -n backend/.env.example backend/.env
+chmod 600 docker/.env backend/.env
 
-./setup.sh --env-file=/etc/email-server/secrets.env
+# Put real secrets here (ADMIN_PASSWORD, DB_PASSWORD, MYSQL_ROOT_PASSWORD, JWT_SECRET, …)
+nano docker/.env
+# Exchange / mail / APP_URL etc.
+nano backend/.env
+
+./setup.sh
 ```
-
-**Option B — CLI parameters (use placeholders or your private values; do not commit secrets):**
-
-```bash
-./setup.sh \
-  --domain=notifications.africacdc.org \
-  --admin-email=andrewa@africacdc.org \
-  --admin-password='CHANGE_ME_ADMIN_PASSWORD' \
-  --db-password="$(openssl rand -base64 24)" \
-  --mysql-root-password="$(openssl rand -base64 24)" \
-  --jwt-secret="$(openssl rand -base64 48)" \
-  --jwt-ttl=60 \
-  --data-path=/home/email_serverdata \
-  --mail-from-address=notifications@africacdc.org \
-  --mail-from-name='Africa CDC Notifications' \
-  --certbot-email=andrewa@africacdc.org \
-  --exchange-tenant-id='CHANGE_ME_TENANT_ID' \
-  --exchange-client-id='CHANGE_ME_CLIENT_ID' \
-  --exchange-client-secret='CHANGE_ME_CLIENT_SECRET' \
-  --integration-client-secret="$(openssl rand -base64 32)" \
-  --queue-scale=2 \
-  --run-seeder=true
-```
-
-> Prefer Option A: keep real secrets only in `/etc/email-server/secrets.env` (outside git). Generated DB/JWT values are written to gitignored `docker/.env` and `backend/.env`.
 
 What `setup.sh` does:
 
-1. Creates `/home/email_serverdata/{mysql,redis,storage}`
-2. Writes **gitignored** `docker/.env` + `backend/.env` (mode `600`)
+1. Reads existing `docker/.env` + `backend/.env` (never overwrites unless `--write-env`)
+2. Creates `/home/email_serverdata/{mysql,redis,storage}`
 3. Builds the Vue admin UI (**Docker `node` image if host `npm` is missing**)
 4. Starts Docker (`app`, `queue`, `nginx`, `frontend`, `mysql`, `redis`)
-5. Seeds admin user, then sets `RUN_SEEDER=false`
-6. Installs host Nginx site for the domain
+5. Seeds admin user from `ADMIN_PASSWORD` in `docker/.env`, then sets `RUN_SEEDER=false`
+6. Installs host Nginx site + security headers for the domain
 7. Issues/installs Let’s Encrypt TLS with Certbot (`--nginx --redirect`)
 8. Prints the admin URL (never prints passwords)
 
@@ -99,14 +79,14 @@ What `setup.sh` does:
 ./setup.sh --help
 ```
 
-Useful flags: `--skip-ssl`, `--skip-nginx`, `--skip-frontend-build`, `--frontend-build=docker`, `--run-seeder=false`.
+Useful flags: `--skip-ssl`, `--skip-nginx`, `--skip-frontend-build`, `--frontend-build=docker`, `--run-seeder=false`, `--force-vendor`, `--reset-mysql` (destroys DB data).
 
 After deploy:
 
-1. Open https://notifications.africacdc.org and sign in
+1. Open https://notifications.africacdc.org and sign in with `ADMIN_EMAIL` / `ADMIN_PASSWORD` from `docker/.env`
 2. Enable **2FA**
 3. Create/rotate integration secrets in the admin UI
-4. Keep `/etc/email-server/secrets.env`, `docker/.env`, and `backend/.env` **out of git**
+4. Keep `docker/.env` and `backend/.env` **out of git**
 
 ### Manual steps (if you prefer not to use `setup.sh`)
 

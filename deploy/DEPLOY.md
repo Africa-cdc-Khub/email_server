@@ -1,7 +1,7 @@
 # Production deployment (Apache + PHP-FPM + MySQL 8)
 
-> **Preferred production path:** run **[`./setup.sh`](../setup.sh)** with `--env-file=/etc/email-server/secrets.env` (see **[README.md](../README.md#deploy-with-setupsh-recommended)**).  
-> Secrets template: [`deploy/production.secrets.env.example`](production.secrets.env.example) — copy outside the repo, never commit.  
+> **Preferred production path:** edit `docker/.env` + `backend/.env` on the server, then run **[`./setup.sh`](../setup.sh)** (see **[README.md](../README.md#deploy-with-setupsh-recommended)**).  
+> Template: [`docker/.env.example`](../docker/.env.example) and [`backend/.env.example`](../backend/.env.example).  
 > Host Nginx: [`deploy/configs/nginx-notifications.africacdc.org.conf`](configs/nginx-notifications.africacdc.org.conf)  
 > Host security headers snippet: [`deploy/configs/nginx-security-headers.conf`](configs/nginx-security-headers.conf) (anti-spoofing + CSP).  
 > SSL: Certbot is already installed — `setup.sh` runs it, or use `sudo certbot --nginx -d notifications.africacdc.org --redirect`.
@@ -17,14 +17,11 @@ Target capacity: **400+ Apache workers**, **56 PHP-FPM children**, **300 MySQL c
 ```bash
 cp docker/.env.example docker/.env
 cp backend/.env.example backend/.env
-# Set ADMIN_PASSWORD, JWT_SECRET, DB passwords, Exchange creds
+chmod 600 docker/.env backend/.env
+# Edit ADMIN_PASSWORD, JWT_SECRET, DB passwords, Exchange creds in both files
 
-cd frontend && npm ci && npm run build && cd ..
-
-cd docker && docker compose up -d --build
-
-# Scale queue workers for higher email throughput
-docker compose up -d --scale queue=4
+./setup.sh
+# or: cd docker && docker compose up -d --build
 ```
 
 | Service | Port | Role |

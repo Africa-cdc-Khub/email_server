@@ -1,26 +1,18 @@
 #!/usr/bin/env bash
-# Email Server — single production deploy script
+# Email Server — production deploy script
 #
-# Secrets are NEVER committed. Pass them as CLI flags, environment variables,
-# or an external --env-file that stays outside the repo (or is gitignored).
+# Primary workflow (recommended on the server):
+#   1) Edit secrets in docker/.env and backend/.env yourself (never commit them)
+#   2) Run:  ./setup.sh
 #
-# Example:
-#   ./setup.sh \
-#     --domain=notifications.africacdc.org \
-#     --admin-email=andrewa@africacdc.org \
-#     --admin-password='...' \
-#     --db-password='...' \
-#     --mysql-root-password='...' \
-#     --jwt-secret="$(openssl rand -base64 48)" \
-#     --certbot-email=andrewa@africacdc.org \
-#     --exchange-tenant-id=... \
-#     --exchange-client-id=... \
-#     --exchange-client-secret=...
+# First time only (creates empty templates if missing):
+#   cp docker/.env.example docker/.env
+#   cp backend/.env.example backend/.env
+#   # edit both files, then:
+#   ./setup.sh
 #
-# Or:
-#   cp deploy/production.secrets.env.example /etc/email-server/secrets.env
-#   # edit secrets (chmod 600)
-#   ./setup.sh --env-file=/etc/email-server/secrets.env
+# Optional: still accepts --env-file / CLI flags to *seed* missing docker/.env
+# values, but existing .env files are never overwritten.
 
 set -euo pipefail
 
@@ -28,7 +20,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
 
 # ---------------------------------------------------------------------------
-# Defaults (non-secret)
+# Defaults (non-secret) — overridden by docker/.env once loaded
 # ---------------------------------------------------------------------------
 DOMAIN="${DOMAIN:-notifications.africacdc.org}"
 ADMIN_EMAIL="${ADMIN_EMAIL:-andrewa@africacdc.org}"
@@ -59,42 +51,42 @@ SKIP_NGINX="${SKIP_NGINX:-false}"
 APP_ENV="${APP_ENV:-production}"
 APP_DEBUG="${APP_DEBUG:-false}"
 ENV_FILE=""
+WRITE_ENV="${WRITE_ENV:-false}"
 
 usage() {
   cat <<'EOF'
 Usage: ./setup.sh [options]
 
-Required (or provide via --env-file / environment):
-  --domain=HOST                 Public hostname (default: notifications.africacdc.org)
-  --admin-email=EMAIL           First admin login email
-  --admin-password=SECRET       First admin password
-  --db-password=SECRET          MySQL app user password
-  --mysql-root-password=SECRET  MySQL root password
-  --jwt-secret=SECRET           JWT signing secret (>=32 chars). Auto-generated if omitted.
-  --certbot-email=EMAIL         Let's Encrypt registration email (required unless --skip-ssl)
+Recommended (production):
+  1. Fill in docker/.env and backend/.env manually (gitignored)
+  2. ./setup.sh
 
-Optional:
-  --env-file=PATH               Load KEY=VALUE secrets from an external file (not committed)
-  --data-path=PATH              Persistent MySQL/Redis/storage path (default: /home/email_serverdata)
-  --mail-from-address=EMAIL     Default From address (default: notifications@<domain>)
-  --mail-from-name=NAME         Default From display name
-  --exchange-tenant-id=ID
-  --exchange-client-id=ID
-  --exchange-client-secret=SECRET
-  --integration-client-secret=SECRET  Seeded staff-portal integration secret (auto if omitted)
+First-time templates:
+  cp docker/.env.example docker/.env
+  cp backend/.env.example backend/.env
+  # edit passwords/secrets, then run ./setup.sh
+
+setup.sh NEVER overwrites existing docker/.env / backend/.env unless you pass
+  --write-env   (rebuilds them from CLI / --env-file — only for fresh boxes)
+
+Optional flags:
+  --env-file=PATH               Load KEY=VALUE into this shell (does not overwrite .env unless --write-env)
+  --domain=HOST                 Used with --write-env / nginx site name
+  --data-path=PATH              Persistent MySQL/Redis/storage path
   --queue-scale=N               docker compose --scale queue=N (default: 1)
-  --mysql-host-port=PORT        Host port for MySQL (default: 3309; avoid host :3306 clashes)
+  --mysql-host-port=PORT        Host MySQL port (default: 3309)
   --force-vendor                Wipe backend/vendor and reinstall via composer
-  --reset-mysql                 OPTIONAL wipe of MySQL data dir (DESTROYS DATA). Default: never wipe.
-  --run-seeder=true|false       Seed admin/providers on start (default: true)
+  --reset-mysql                 OPTIONAL wipe of MySQL data (DESTROYS DATA)
+  --run-seeder=true|false       Seed admin/providers (default: true)
+  --write-env                   Rewrite docker/.env + backend/.env from flags/--env-file
   --skip-ssl                    Skip Certbot TLS setup
-  --skip-frontend-build         Skip frontend build (requires existing frontend/dist)
+  --skip-frontend-build         Skip frontend build
   --frontend-build=auto|docker|host
-                                How to build UI (default: auto = host npm if present, else Docker node image)
   --skip-nginx                  Skip installing host Nginx site
-  -h, --help                    Show this help
+  -h, --help
 
-Environment variables with the same names (DOMAIN, ADMIN_PASSWORD, …) are also accepted.
+Required keys in docker/.env (edit manually):
+  ADMIN_PASSWORD, DB_PASSWORD, MYSQL_ROOT_PASSWORD, JWT_SECRET (>=32 chars)
 EOF
 }
 
@@ -126,7 +118,6 @@ gen_secret() {
 }
 
 # Load an external KEY=VALUE file without executing it.
-# Always applies values from the file (caller loads this before CLI overrides).
 load_env_file() {
   local file="$1"
   [[ -f "$file" ]] || die "Env file not found: $file"
@@ -144,6 +135,14 @@ load_env_file() {
   done < "$file"
 }
 
+# Read KEY from a .env file (strips surrounding quotes)
+env_file_get() {
+  local file="$1"
+  local key="$2"
+  [[ -f "$file" ]] || return 0
+  grep -E "^${key}=" "$file" 2>/dev/null | head -1 | cut -d= -f2- | sed -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//"
+}
+
 write_env_file() {
   local target="$1"
   shift
@@ -157,8 +156,33 @@ write_env_file() {
   chmod 600 "$target"
 }
 
+set_backend_env() {
+  local key="$1"
+  local value="$2"
+  local escaped="${value//\\/\\\\}"
+  escaped="${escaped//\"/\\\"}"
+  local line="${key}=\"${escaped}\""
+
+  if grep -q "^${key}=" "$ROOT/backend/.env"; then
+    awk -v k="$key" -v line="$line" '
+      BEGIN { done=0 }
+      index($0, k "=") == 1 {
+        print line
+        done=1
+        next
+      }
+      { print }
+      END { if (!done) print line }
+    ' "$ROOT/backend/.env" > "$ROOT/backend/.env.tmp"
+    mv "$ROOT/backend/.env.tmp" "$ROOT/backend/.env"
+    chmod 600 "$ROOT/backend/.env"
+  else
+    printf '%s\n' "$line" >> "$ROOT/backend/.env"
+  fi
+}
+
 # ---------------------------------------------------------------------------
-# Parse args (env-file first, then CLI overrides)
+# Parse args
 # ---------------------------------------------------------------------------
 for arg in "$@"; do
   case "$arg" in
@@ -167,28 +191,14 @@ for arg in "$@"; do
 done
 
 if [[ -n "$ENV_FILE" ]]; then
-  log "Loading secrets from $ENV_FILE"
+  log "Loading values from $ENV_FILE (into this process only)"
   load_env_file "$ENV_FILE"
-  # Map common aliases from the secrets file
   DOMAIN="${DOMAIN:-notifications.africacdc.org}"
   ADMIN_EMAIL="${ADMIN_EMAIL:-andrewa@africacdc.org}"
-  ADMIN_PASSWORD="${ADMIN_PASSWORD:-}"
-  DB_PASSWORD="${DB_PASSWORD:-}"
-  MYSQL_ROOT_PASSWORD="${MYSQL_ROOT_PASSWORD:-}"
-  JWT_SECRET="${JWT_SECRET:-}"
-  JWT_TTL="${JWT_TTL:-60}"
   DATA_PATH="${EMAIL_SERVER_DATA_PATH:-${DATA_PATH:-/home/email_serverdata}}"
-  MAIL_FROM_ADDRESS="${MAIL_FROM_ADDRESS:-}"
-  MAIL_FROM_NAME="${MAIL_FROM_NAME:-Africa CDC Notifications}"
-  CERTBOT_EMAIL="${CERTBOT_EMAIL:-}"
-  EXCHANGE_TENANT_ID="${EXCHANGE_TENANT_ID:-}"
-  EXCHANGE_CLIENT_ID="${EXCHANGE_CLIENT_ID:-}"
-  EXCHANGE_CLIENT_SECRET="${EXCHANGE_CLIENT_SECRET:-}"
-  INTEGRATION_CLIENT_SECRET="${INTEGRATION_CLIENT_SECRET:-}"
+  JWT_TTL="${JWT_TTL:-60}"
   QUEUE_SCALE="${QUEUE_SCALE:-1}"
   MYSQL_HOST_PORT="${MYSQL_HOST_PORT:-3309}"
-  FORCE_VENDOR_REINSTALL="${FORCE_VENDOR_REINSTALL:-false}"
-  RESET_MYSQL="${RESET_MYSQL:-false}"
   RUN_SEEDER="${RUN_SEEDER:-true}"
   SKIP_SSL="${SKIP_SSL:-false}"
 fi
@@ -217,6 +227,7 @@ while [[ $# -gt 0 ]]; do
     --force-vendor) FORCE_VENDOR_REINSTALL=true ;;
     --reset-mysql) RESET_MYSQL=true ;;
     --run-seeder=*) RUN_SEEDER="${1#*=}" ;;
+    --write-env) WRITE_ENV=true ;;
     --skip-ssl) SKIP_SSL=true ;;
     --skip-frontend-build) SKIP_FRONTEND_BUILD=true ;;
     --frontend-build=*) FRONTEND_BUILD="${1#*=}" ;;
@@ -226,30 +237,87 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
-# load_env_file always assigns exported vars; refresh locals from exports when file was used
-if [[ -n "$ENV_FILE" ]]; then
-  : # locals already set in the CLI loop for overrides; fill remaining from environment
-  DOMAIN="${DOMAIN}"
-  ADMIN_EMAIL="${ADMIN_EMAIL}"
-  ADMIN_PASSWORD="${ADMIN_PASSWORD}"
-  DB_PASSWORD="${DB_PASSWORD}"
-  MYSQL_ROOT_PASSWORD="${MYSQL_ROOT_PASSWORD}"
-  JWT_SECRET="${JWT_SECRET}"
+# ---------------------------------------------------------------------------
+# Ensure .env templates exist (never overwrite existing files)
+# ---------------------------------------------------------------------------
+if [[ ! -f "$ROOT/docker/.env" ]]; then
+  [[ -f "$ROOT/docker/.env.example" ]] || die "docker/.env.example missing"
+  cp "$ROOT/docker/.env.example" "$ROOT/docker/.env"
+  chmod 600 "$ROOT/docker/.env"
+  warn "Created docker/.env from example — edit secrets, then re-run ./setup.sh"
+  die "Stopped: fill ADMIN_PASSWORD, DB_PASSWORD, MYSQL_ROOT_PASSWORD, JWT_SECRET in docker/.env"
 fi
 
+if [[ ! -f "$ROOT/backend/.env" ]]; then
+  [[ -f "$ROOT/backend/.env.example" ]] || die "backend/.env.example missing"
+  umask 077
+  cp "$ROOT/backend/.env.example" "$ROOT/backend/.env"
+  chmod 600 "$ROOT/backend/.env"
+  warn "Created backend/.env from example — edit DB/JWT/Exchange values to match docker/.env"
+  die "Stopped: fill backend/.env (at least DB_PASSWORD, JWT_SECRET, APP_KEY after first boot), then re-run ./setup.sh"
+fi
+
+# Load operator-edited docker/.env as source of truth
+log "Using existing docker/.env (not overwritten)"
+load_env_file "$ROOT/docker/.env"
+
+# Refresh locals from docker/.env / environment
+DOMAIN="${DOMAIN:-notifications.africacdc.org}"
+# Prefer DOMAIN; else strip host from APP_URL
+if [[ -z "${DOMAIN}" || "$DOMAIN" == "notifications.africacdc.org" ]]; then
+  _app_url="$(env_file_get "$ROOT/docker/.env" APP_URL)"
+  if [[ -n "$_app_url" ]]; then
+    DOMAIN="$(printf '%s' "$_app_url" | sed -e 's|^https\?://||' -e 's|/.*||')"
+  fi
+fi
+ADMIN_EMAIL="$(env_file_get "$ROOT/docker/.env" ADMIN_EMAIL)"; ADMIN_EMAIL="${ADMIN_EMAIL:-andrewa@africacdc.org}"
+ADMIN_PASSWORD="$(env_file_get "$ROOT/docker/.env" ADMIN_PASSWORD)"
+DB_PASSWORD="$(env_file_get "$ROOT/docker/.env" DB_PASSWORD)"
+MYSQL_ROOT_PASSWORD="$(env_file_get "$ROOT/docker/.env" MYSQL_ROOT_PASSWORD)"
+JWT_SECRET="$(env_file_get "$ROOT/docker/.env" JWT_SECRET)"
+JWT_TTL="$(env_file_get "$ROOT/docker/.env" JWT_TTL)"; JWT_TTL="${JWT_TTL:-60}"
+DATA_PATH="$(env_file_get "$ROOT/docker/.env" EMAIL_SERVER_DATA_PATH)"; DATA_PATH="${DATA_PATH:-/home/email_serverdata}"
+MYSQL_HOST_PORT="$(env_file_get "$ROOT/docker/.env" MYSQL_HOST_PORT)"; MYSQL_HOST_PORT="${MYSQL_HOST_PORT:-3309}"
+API_HOST_PORT="$(env_file_get "$ROOT/docker/.env" API_HOST_PORT)"; API_HOST_PORT="${API_HOST_PORT:-8089}"
+RUN_SEEDER="$(env_file_get "$ROOT/docker/.env" RUN_SEEDER)"; RUN_SEEDER="${RUN_SEEDER:-true}"
+APP_ENV="$(env_file_get "$ROOT/docker/.env" APP_ENV)"; APP_ENV="${APP_ENV:-production}"
+APP_DEBUG="$(env_file_get "$ROOT/docker/.env" APP_DEBUG)"; APP_DEBUG="${APP_DEBUG:-false}"
+INTEGRATION_CLIENT_SECRET="$(env_file_get "$ROOT/docker/.env" INTEGRATION_CLIENT_SECRET)"
+QUEUE_SCALE="${QUEUE_SCALE:-1}"
+
+# Backend-held values (operator may edit backend/.env for Exchange, etc.)
+MAIL_FROM_ADDRESS="$(env_file_get "$ROOT/backend/.env" MAIL_FROM_ADDRESS)"
+MAIL_FROM_NAME="$(env_file_get "$ROOT/backend/.env" MAIL_FROM_NAME)"
+MAIL_FROM_NAME="${MAIL_FROM_NAME:-Africa CDC Notifications}"
+EXCHANGE_TENANT_ID="$(env_file_get "$ROOT/backend/.env" EXCHANGE_TENANT_ID)"
+EXCHANGE_CLIENT_ID="$(env_file_get "$ROOT/backend/.env" EXCHANGE_CLIENT_ID)"
+EXCHANGE_CLIENT_SECRET="$(env_file_get "$ROOT/backend/.env" EXCHANGE_CLIENT_SECRET)"
+EXCHANGE_AUTH_METHOD="$(env_file_get "$ROOT/backend/.env" EXCHANGE_AUTH_METHOD)"
+EXCHANGE_AUTH_METHOD="${EXCHANGE_AUTH_METHOD:-client_credentials}"
+EXCHANGE_SCOPE="$(env_file_get "$ROOT/backend/.env" EXCHANGE_SCOPE)"
+EXCHANGE_SCOPE="${EXCHANGE_SCOPE:-https://graph.microsoft.com/.default}"
+CERTBOT_EMAIL="${CERTBOT_EMAIL:-$ADMIN_EMAIL}"
+
 [[ -n "$MAIL_FROM_ADDRESS" ]] || MAIL_FROM_ADDRESS="notifications@${DOMAIN}"
-[[ -n "$CERTBOT_EMAIL" ]] || CERTBOT_EMAIL="$ADMIN_EMAIL"
-[[ -n "$JWT_SECRET" ]] || JWT_SECRET="$(gen_secret 48)"
-[[ -n "$INTEGRATION_CLIENT_SECRET" ]] || INTEGRATION_CLIENT_SECRET="$(gen_secret 32)"
 
-[[ -n "$ADMIN_PASSWORD" ]] || die "Missing --admin-password (or ADMIN_PASSWORD / --env-file)"
-[[ -n "$DB_PASSWORD" ]] || die "Missing --db-password (or DB_PASSWORD / --env-file)"
-[[ -n "$MYSQL_ROOT_PASSWORD" ]] || die "Missing --mysql-root-password (or MYSQL_ROOT_PASSWORD / --env-file)"
-[[ "${#JWT_SECRET}" -ge 32 ]] || die "JWT_SECRET must be at least 32 characters"
-[[ "$SKIP_SSL" == "true" ]] || [[ -n "$CERTBOT_EMAIL" ]] || die "Missing --certbot-email (or use --skip-ssl)"
+is_placeholder() {
+  case "$1" in
+    ""|change-me*|CHANGE_ME*|changeme*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
 
-APP_URL="https://${DOMAIN}"
-FRONTEND_URL="https://${DOMAIN}"
+is_placeholder "$ADMIN_PASSWORD" && die "Set a real ADMIN_PASSWORD in docker/.env (not a placeholder), then re-run ./setup.sh"
+is_placeholder "$DB_PASSWORD" && die "Set a real DB_PASSWORD in docker/.env, then re-run ./setup.sh"
+is_placeholder "$MYSQL_ROOT_PASSWORD" && die "Set a real MYSQL_ROOT_PASSWORD in docker/.env, then re-run ./setup.sh"
+[[ -n "$JWT_SECRET" ]] || die "Set JWT_SECRET in docker/.env (>=32 chars)"
+[[ "${#JWT_SECRET}" -ge 32 ]] || die "JWT_SECRET in docker/.env must be at least 32 characters"
+[[ "$SKIP_SSL" == "true" ]] || [[ -n "$CERTBOT_EMAIL" ]] || die "Set CERTBOT_EMAIL in the environment or use --skip-ssl (default: ADMIN_EMAIL)"
+
+APP_URL="$(env_file_get "$ROOT/docker/.env" APP_URL)"
+FRONTEND_URL="$(env_file_get "$ROOT/docker/.env" FRONTEND_URL)"
+[[ -n "$APP_URL" ]] || APP_URL="https://${DOMAIN}"
+[[ -n "$FRONTEND_URL" ]] || FRONTEND_URL="https://${DOMAIN}"
 
 need_cmd docker
 need_cmd openssl
@@ -266,6 +334,83 @@ elif command -v docker-compose >/dev/null 2>&1; then
   COMPOSE=(docker-compose -f "$ROOT/docker/docker-compose.yml" --env-file "$ROOT/docker/.env")
 else
   die "Docker Compose is required"
+fi
+
+# Optional: only rewrite .env files when explicitly requested
+if [[ "$WRITE_ENV" == "true" ]]; then
+  warn "--write-env: rewriting docker/.env and backend/.env from current variables"
+  [[ -n "$INTEGRATION_CLIENT_SECRET" ]] || INTEGRATION_CLIENT_SECRET="$(gen_secret 32)"
+  write_env_file "$ROOT/docker/.env" \
+    "APP_ENV=${APP_ENV}" \
+    "APP_DEBUG=${APP_DEBUG}" \
+    "RUN_SEEDER=${RUN_SEEDER}" \
+    "EMAIL_SERVER_DATA_PATH=${DATA_PATH}" \
+    "APP_URL=${APP_URL}" \
+    "FRONTEND_URL=${FRONTEND_URL}" \
+    "API_HOST_PORT=${API_HOST_PORT}" \
+    "MYSQL_HOST_PORT=${MYSQL_HOST_PORT}" \
+    "REDIS_CLIENT=predis" \
+    "ADMIN_EMAIL=${ADMIN_EMAIL}" \
+    "ADMIN_PASSWORD=${ADMIN_PASSWORD}" \
+    "ADMIN_RESET_PASSWORD=true" \
+    "DB_PASSWORD=${DB_PASSWORD}" \
+    "MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD}" \
+    "JWT_SECRET=${JWT_SECRET}" \
+    "JWT_TTL=${JWT_TTL}" \
+    "INTEGRATION_CLIENT_SECRET=${INTEGRATION_CLIENT_SECRET}"
+
+  PRESERVED_APP_KEY="$(env_file_get "$ROOT/backend/.env" APP_KEY)"
+  umask 077
+  cp "$ROOT/backend/.env.example" "$ROOT/backend/.env"
+  chmod 600 "$ROOT/backend/.env"
+  set_backend_env "APP_NAME" "Email Server"
+  set_backend_env "APP_ENV" "$APP_ENV"
+  set_backend_env "APP_DEBUG" "$APP_DEBUG"
+  set_backend_env "APP_URL" "$APP_URL"
+  set_backend_env "FRONTEND_URL" "$FRONTEND_URL"
+  set_backend_env "DB_HOST" "mysql"
+  set_backend_env "DB_DATABASE" "email_server"
+  set_backend_env "DB_USERNAME" "email_server"
+  set_backend_env "DB_PASSWORD" "$DB_PASSWORD"
+  set_backend_env "REDIS_CLIENT" "predis"
+  set_backend_env "MAIL_MAILER" "exchange"
+  set_backend_env "MAIL_FROM_ADDRESS" "$MAIL_FROM_ADDRESS"
+  set_backend_env "MAIL_FROM_NAME" "$MAIL_FROM_NAME"
+  set_backend_env "EXCHANGE_TENANT_ID" "$EXCHANGE_TENANT_ID"
+  set_backend_env "EXCHANGE_CLIENT_ID" "$EXCHANGE_CLIENT_ID"
+  set_backend_env "EXCHANGE_CLIENT_SECRET" "$EXCHANGE_CLIENT_SECRET"
+  set_backend_env "EXCHANGE_AUTH_METHOD" "$EXCHANGE_AUTH_METHOD"
+  set_backend_env "EXCHANGE_SCOPE" "$EXCHANGE_SCOPE"
+  set_backend_env "ADMIN_EMAIL" "$ADMIN_EMAIL"
+  set_backend_env "ADMIN_PASSWORD" "$ADMIN_PASSWORD"
+  set_backend_env "JWT_SECRET" "$JWT_SECRET"
+  set_backend_env "JWT_TTL" "$JWT_TTL"
+  set_backend_env "INTEGRATION_CLIENT_SECRET" "$INTEGRATION_CLIENT_SECRET"
+  set_backend_env "SANCTUM_STATEFUL_DOMAINS" "localhost,localhost:3006,127.0.0.1"
+  if [[ "$PRESERVED_APP_KEY" == base64:* ]]; then
+    set_backend_env "APP_KEY" "$PRESERVED_APP_KEY"
+  else
+    set_backend_env "APP_KEY" "base64:$(openssl rand -base64 32 | tr -d '\n')"
+  fi
+else
+  log "Leaving docker/.env and backend/.env unchanged (manual edit mode)"
+  # Keep Laravel DB password in sync with docker/.env only (safe one-key patch)
+  _be_db="$(env_file_get "$ROOT/backend/.env" DB_PASSWORD)"
+  if [[ "$_be_db" != "$DB_PASSWORD" ]]; then
+    log "Syncing DB_PASSWORD from docker/.env → backend/.env"
+    set_backend_env "DB_PASSWORD" "$DB_PASSWORD"
+  fi
+  _be_jwt="$(env_file_get "$ROOT/backend/.env" JWT_SECRET)"
+  if [[ -z "$_be_jwt" || "$_be_jwt" != "$JWT_SECRET" ]]; then
+    log "Syncing JWT_SECRET from docker/.env → backend/.env"
+    set_backend_env "JWT_SECRET" "$JWT_SECRET"
+  fi
+  # Ensure APP_KEY exists
+  _be_key="$(env_file_get "$ROOT/backend/.env" APP_KEY)"
+  if [[ "$_be_key" != base64:* ]]; then
+    log "Generating APP_KEY in backend/.env"
+    set_backend_env "APP_KEY" "base64:$(openssl rand -base64 32 | tr -d '\n')"
+  fi
 fi
 
 # ---------------------------------------------------------------------------
@@ -327,106 +472,6 @@ else
 fi
 run_root chmod -R ug+rwX "$DATA_PATH/storage" 2>/dev/null || chmod -R ug+rwX "$DATA_PATH/storage" || true
 log "Laravel storage → ${DATA_PATH}/storage (bind-mounted in app/queue/nginx)"
-
-# ---------------------------------------------------------------------------
-# 2. Write docker/.env and backend/.env (gitignored — never commit)
-# ---------------------------------------------------------------------------
-log "Writing docker/.env (mode 600)"
-write_env_file "$ROOT/docker/.env" \
-  "APP_ENV=${APP_ENV}" \
-  "APP_DEBUG=${APP_DEBUG}" \
-  "RUN_SEEDER=${RUN_SEEDER}" \
-  "EMAIL_SERVER_DATA_PATH=${DATA_PATH}" \
-  "APP_URL=${APP_URL}" \
-  "FRONTEND_URL=${FRONTEND_URL}" \
-  "API_HOST_PORT=8089" \
-  "MYSQL_HOST_PORT=${MYSQL_HOST_PORT}" \
-  "REDIS_CLIENT=predis" \
-  "ADMIN_EMAIL=${ADMIN_EMAIL}" \
-  "ADMIN_PASSWORD=${ADMIN_PASSWORD}" \
-  "ADMIN_RESET_PASSWORD=true" \
-  "DB_PASSWORD=${DB_PASSWORD}" \
-  "MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD}" \
-  "JWT_SECRET=${JWT_SECRET}" \
-  "JWT_TTL=${JWT_TTL}" \
-  "INTEGRATION_CLIENT_SECRET=${INTEGRATION_CLIENT_SECRET}"
-
-log "Writing backend/.env (mode 600)"
-if [[ ! -f "$ROOT/backend/.env.example" ]]; then
-  die "backend/.env.example missing"
-fi
-
-# Capture APP_KEY before we overwrite .env from the example template.
-PRESERVED_APP_KEY=""
-if [[ -f "$ROOT/backend/.env" ]]; then
-  PRESERVED_APP_KEY="$(grep -E '^APP_KEY=base64:' "$ROOT/backend/.env" 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"' || true)"
-fi
-
-# Start from example, then overlay production values.
-umask 077
-cp "$ROOT/backend/.env.example" "$ROOT/backend/.env"
-chmod 600 "$ROOT/backend/.env"
-
-set_backend_env() {
-  local key="$1"
-  local value="$2"
-  # Escape backslashes and double quotes for .env double-quoted values
-  local escaped="${value//\\/\\\\}"
-  escaped="${escaped//\"/\\\"}"
-  local line="${key}=\"${escaped}\""
-
-  if grep -q "^${key}=" "$ROOT/backend/.env"; then
-    awk -v k="$key" -v line="$line" '
-      BEGIN { done=0 }
-      index($0, k "=") == 1 {
-        print line
-        done=1
-        next
-      }
-      { print }
-      END { if (!done) print line }
-    ' "$ROOT/backend/.env" > "$ROOT/backend/.env.tmp"
-    mv "$ROOT/backend/.env.tmp" "$ROOT/backend/.env"
-    chmod 600 "$ROOT/backend/.env"
-  else
-    printf '%s\n' "$line" >> "$ROOT/backend/.env"
-  fi
-}
-
-set_backend_env "APP_NAME" "Email Server"
-set_backend_env "APP_ENV" "$APP_ENV"
-set_backend_env "APP_DEBUG" "$APP_DEBUG"
-set_backend_env "APP_URL" "$APP_URL"
-set_backend_env "FRONTEND_URL" "$FRONTEND_URL"
-set_backend_env "DB_HOST" "mysql"
-set_backend_env "DB_DATABASE" "email_server"
-set_backend_env "DB_USERNAME" "email_server"
-set_backend_env "DB_PASSWORD" "$DB_PASSWORD"
-set_backend_env "REDIS_CLIENT" "predis"
-set_backend_env "MAIL_MAILER" "exchange"
-set_backend_env "MAIL_FROM_ADDRESS" "$MAIL_FROM_ADDRESS"
-set_backend_env "MAIL_FROM_NAME" "$MAIL_FROM_NAME"
-set_backend_env "EXCHANGE_TENANT_ID" "$EXCHANGE_TENANT_ID"
-set_backend_env "EXCHANGE_CLIENT_ID" "$EXCHANGE_CLIENT_ID"
-set_backend_env "EXCHANGE_CLIENT_SECRET" "$EXCHANGE_CLIENT_SECRET"
-set_backend_env "EXCHANGE_AUTH_METHOD" "$EXCHANGE_AUTH_METHOD"
-set_backend_env "EXCHANGE_SCOPE" "$EXCHANGE_SCOPE"
-set_backend_env "ADMIN_EMAIL" "$ADMIN_EMAIL"
-set_backend_env "ADMIN_PASSWORD" "$ADMIN_PASSWORD"
-set_backend_env "JWT_SECRET" "$JWT_SECRET"
-set_backend_env "JWT_TTL" "$JWT_TTL"
-set_backend_env "INTEGRATION_CLIENT_SECRET" "$INTEGRATION_CLIENT_SECRET"
-set_backend_env "SANCTUM_STATEFUL_DOMAINS" "localhost,localhost:3006,127.0.0.1"
-# Intentionally omit public DOMAIN — we use Bearer tokens, not Sanctum cookie SPA auth.
-
-# Preserve or create APP_KEY before containers start (artisan cannot boot without it).
-if [[ -n "$PRESERVED_APP_KEY" ]]; then
-  log "Preserving existing APP_KEY"
-  set_backend_env "APP_KEY" "$PRESERVED_APP_KEY"
-else
-  log "Generating new APP_KEY for backend/.env"
-  set_backend_env "APP_KEY" "base64:$(openssl rand -base64 32 | tr -d '\n')"
-fi
 
 # ---------------------------------------------------------------------------
 # 3. Frontend build (host npm OR Docker node — npm is NOT required on the server)
@@ -536,9 +581,8 @@ ensure_backend_vendor() {
 }
 
 sync_backend_db_password() {
-  # Keep Laravel .env DB_PASSWORD in sync with docker/.env (avoids volume password drift)
   local db_pass
-  db_pass="$(grep -E '^DB_PASSWORD=' "$ROOT/docker/.env" 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"' | tr -d "'")"
+  db_pass="$(env_file_get "$ROOT/docker/.env" DB_PASSWORD)"
   [[ -n "$db_pass" ]] || return 0
   if [[ -f "$ROOT/backend/.env" ]]; then
     if grep -q '^DB_PASSWORD=' "$ROOT/backend/.env"; then
@@ -553,10 +597,8 @@ sync_backend_db_password() {
   fi
 }
 
-# Read a KEY from docker/.env (strips surrounding quotes)
 docker_env_get() {
-  local key="$1"
-  grep -E "^${key}=" "$ROOT/docker/.env" 2>/dev/null | head -1 | cut -d= -f2- | sed -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//"
+  env_file_get "$ROOT/docker/.env" "$1"
 }
 
 sql_escape() {
@@ -757,15 +799,15 @@ sync_mysql_volume_password() {
     warn "MYSQL_ROOT_PASSWORD also does not match the volume"
   fi
 
-  die "MySQL credentials in secrets.env / docker/.env do not match the existing data volume.
+  die "MySQL credentials in docker/.env do not match the existing data volume.
 
 Data was NOT wiped. Fix (pick one):
 
-  A) Put the ORIGINAL DB_PASSWORD + MYSQL_ROOT_PASSWORD back into secrets.env,
-     docker/.env and backend/.env, then re-run setup (preserves data).
+  A) Put the ORIGINAL DB_PASSWORD + MYSQL_ROOT_PASSWORD back into docker/.env
+     and backend/.env, then re-run ./setup.sh (preserves data).
 
   B) Explicitly wipe and re-seed (DESTROYS DATA — only if you accept losing DB):
-       ./setup.sh --env-file=/etc/email-server/secrets.env --reset-mysql
+       ./setup.sh --reset-mysql
 
   C) Manual wipe:
        cd $ROOT/docker && docker compose stop mysql
@@ -936,7 +978,7 @@ Re-run with matching DB_PASSWORD/MYSQL_ROOT_PASSWORD, or:
     die "Admin password verification failed after seed:
 $verify_code
 
-The password that works is ADMIN_PASSWORD from your secrets.env / --admin-password —
+The password that works is ADMIN_PASSWORD from docker/.env —
 not a placeholder like change-me-in-production."
   fi
   log "Admin password verified for ${ADMIN_EMAIL}"
@@ -1032,9 +1074,9 @@ cat <<EOF
   Health   : https://${DOMAIN}/api/v1/health
 
   Admin email : ${ADMIN_EMAIL}
-  Admin pass  : (the value you passed — not printed)
+  Admin pass  : (value from docker/.env ADMIN_PASSWORD — not printed)
 
-  Secrets written locally (gitignored, mode 600):
+  Env files used (gitignored — edit these manually on the server):
     ${ROOT}/docker/.env
     ${ROOT}/backend/.env
 
@@ -1047,8 +1089,8 @@ cat <<EOF
     /etc/letsencrypt/live/${DOMAIN}/privkey.pem
 
 Next steps:
-  1. Sign in and enable 2FA
-  2. Create/rotate integration secrets in the admin UI
-  3. Keep secrets.env / .env files out of git
+  1. Sign in with ADMIN_EMAIL / ADMIN_PASSWORD from docker/.env
+  2. Enable 2FA
+  3. Keep .env files out of git
 ========================================================================
 EOF
