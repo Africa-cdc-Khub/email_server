@@ -555,8 +555,9 @@ mysql_app_auth_ok() {
 
 mysql_root_auth_ok() {
   local root_pass="$1"
+  # Real query — mysqladmin ping can be misleading with auth failures
   "${COMPOSE[@]}" exec -T -e MYSQL_PWD="$root_pass" mysql \
-    mysqladmin ping -h 127.0.0.1 -u root --silent >/dev/null 2>&1
+    mysql -u root -h 127.0.0.1 -e 'SELECT 1;' >/dev/null 2>&1
 }
 
 reset_mysql_app_user() {
@@ -565,7 +566,7 @@ reset_mysql_app_user() {
   local hosts host
 
   "${COMPOSE[@]}" exec -T -e MYSQL_PWD="$root_pass" mysql \
-    mysql -u root -e "
+    mysql -u root -h 127.0.0.1 -e "
 CREATE DATABASE IF NOT EXISTS email_server CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 CREATE USER IF NOT EXISTS 'email_server'@'%' IDENTIFIED BY '${esc_pass}';
 ALTER USER 'email_server'@'%' IDENTIFIED BY '${esc_pass}';
@@ -575,53 +576,65 @@ FLUSH PRIVILEGES;
 
   # Sync password for every host the user already exists on (localhost, %, etc.)
   hosts="$("${COMPOSE[@]}" exec -T -e MYSQL_PWD="$root_pass" mysql \
-    mysql -u root -N -e "SELECT Host FROM mysql.user WHERE User='email_server';" 2>/dev/null | tr -d '\r')"
+    mysql -u root -h 127.0.0.1 -N -e "SELECT Host FROM mysql.user WHERE User='email_server';" 2>/dev/null | tr -d '\r')"
   while IFS= read -r host; do
     [[ -z "$host" ]] && continue
     "${COMPOSE[@]}" exec -T -e MYSQL_PWD="$root_pass" mysql \
-      mysql -u root -e "ALTER USER 'email_server'@'${host}' IDENTIFIED BY '${esc_pass}'; GRANT ALL PRIVILEGES ON email_server.* TO 'email_server'@'${host}';" \
+      mysql -u root -h 127.0.0.1 -e "ALTER USER 'email_server'@'${host}' IDENTIFIED BY '${esc_pass}'; GRANT ALL PRIVILEGES ON email_server.* TO 'email_server'@'${host}';" \
       || warn "Could not ALTER email_server@${host}"
   done <<< "$hosts"
 
   "${COMPOSE[@]}" exec -T -e MYSQL_PWD="$root_pass" mysql \
-    mysql -u root -e "FLUSH PRIVILEGES;" || true
+    mysql -u root -h 127.0.0.1 -e "FLUSH PRIVILEGES;" || true
 }
 
 # Wipe bind-mounted MySQL data and recreate the container so MYSQL_* env
 # passwords from docker/.env are applied on first initialization.
 reset_mysql_data_volume() {
-  log "RESET MYSQL: stopping mysql and wiping ${DATA_PATH}/mysql (DESTROYS DB DATA)"
+  local data_path="${EMAIL_SERVER_DATA_PATH:-$DATA_PATH}"
+  # Prefer path written into docker/.env (what the container actually mounts)
+  local env_path
+  env_path="$(docker_env_get EMAIL_SERVER_DATA_PATH || true)"
+  [[ -n "$env_path" ]] && data_path="$env_path"
+
+  log "RESET MYSQL: stopping mysql and wiping ${data_path}/mysql (DESTROYS DB DATA)"
   (
     cd "$ROOT/docker"
     "${COMPOSE[@]}" stop mysql || true
     "${COMPOSE[@]}" rm -f mysql || true
   )
-  if [[ -d "$DATA_PATH/mysql" ]]; then
-    run_root rm -rf "${DATA_PATH}/mysql"
+  if [[ -d "${data_path}/mysql" ]]; then
+    run_root rm -rf "${data_path}/mysql"
   fi
-  run_root mkdir -p "${DATA_PATH}/mysql"
+  run_root mkdir -p "${data_path}/mysql"
   # MySQL image needs write access as mysql uid (typically 999)
-  run_root chown -R 999:999 "${DATA_PATH}/mysql" 2>/dev/null || true
+  run_root chown -R 999:999 "${data_path}/mysql" 2>/dev/null || true
 
   log "Starting fresh MySQL with passwords from docker/.env"
   (
     cd "$ROOT/docker"
-    "${COMPOSE[@]}" up -d mysql
+    "${COMPOSE[@]}" up -d --force-recreate mysql
   )
   wait_for_mysql_healthy
 
-  local db_pass root_pass
+  local db_pass root_pass tries
   db_pass="$(docker_env_get DB_PASSWORD)"
   root_pass="$(docker_env_get MYSQL_ROOT_PASSWORD)"
 
-  # Give mysqld a moment to finish first-boot user grants
-  sleep 8
+  # First-boot init can take a while on empty datadir
+  tries=1
+  while [[ "$tries" -le 30 ]]; do
+    if mysql_root_auth_ok "$root_pass"; then
+      break
+    fi
+    tries=$((tries + 1))
+    sleep 2
+  done
 
   if ! mysql_root_auth_ok "$root_pass"; then
-    die "Fresh MySQL still rejects MYSQL_ROOT_PASSWORD — check docker/.env secrets"
+    die "Fresh MySQL still rejects MYSQL_ROOT_PASSWORD — check docker/.env secrets match MYSQL_ROOT_PASSWORD used to create the container"
   fi
   if ! mysql_app_auth_ok "$db_pass"; then
-    # First boot can race; try resetting via root once
     warn "Fresh MySQL app user not ready yet — ensuring email_server@%"
     reset_mysql_app_user "$root_pass" "$(sql_escape "$db_pass")" || true
     sleep 3
@@ -630,10 +643,9 @@ reset_mysql_data_volume() {
   log "Fresh MySQL ready with current DB_PASSWORD / MYSQL_ROOT_PASSWORD"
 }
 
-# MySQL only applies MYSQL_PASSWORD on first volume init. If secrets.env /
-# setup passwords change later, containers keep the OLD volume password.
-# Reset the app user via root so .env and the volume match (no data wipe).
-# If root also fails, wipe + re-init when --reset-mysql is set.
+# MySQL only applies MYSQL_PASSWORD on first volume init. If secrets change later,
+# the volume keeps old passwords. Prefer ALTER via root; if root also mismatches,
+# automatically wipe + re-init (failed first-deploy recovery).
 sync_mysql_volume_password() {
   local db_pass root_pass esc_pass
   db_pass="$(docker_env_get DB_PASSWORD)"
@@ -663,49 +675,33 @@ sync_mysql_volume_password() {
     return 0
   fi
 
-  warn "DB_PASSWORD rejected from app container (email_server@%) — resetting via root"
+  warn "DB_PASSWORD rejected from app container (email_server@%)"
 
-  if ! mysql_root_auth_ok "$root_pass"; then
-    die "MySQL Access denied: MYSQL_ROOT_PASSWORD does not match the existing data volume either.
-
-Your passwords in secrets.env / docker/.env are not the ones MySQL was first initialized with.
-
-Fix (pick one):
-  A) Re-run setup and wipe the DB (DESTROYS DATA — OK for a failed first deploy):
-       ./setup.sh --env-file=/etc/email-server/secrets.env --reset-mysql
-
-  B) Put the ORIGINAL passwords back into secrets.env + docker/.env + backend/.env, then re-run setup
-
-  C) Manual wipe:
-       cd $ROOT/docker
-       docker compose stop mysql
-       sudo rm -rf ${DATA_PATH}/mysql
-       sudo mkdir -p ${DATA_PATH}/mysql
-       docker compose up -d
-"
-  fi
-
-  esc_pass="$(sql_escape "$db_pass")"
-  reset_mysql_app_user "$root_pass" "$esc_pass" \
-    || die "Failed to reset MySQL email_server password via root"
-
-  # Keep Laravel env in sync with the password we just applied
-  sync_backend_db_password
-
-  if mysql_app_auth_ok "$db_pass"; then
-    log "MySQL email_server@% password reset to match DB_PASSWORD"
+  if mysql_root_auth_ok "$root_pass"; then
+    warn "Resetting email_server via root to match DB_PASSWORD"
+    esc_pass="$(sql_escape "$db_pass")"
+    if reset_mysql_app_user "$root_pass" "$esc_pass"; then
+      sync_backend_db_password
+      if mysql_app_auth_ok "$db_pass"; then
+        log "MySQL email_server@% password reset to match DB_PASSWORD"
+        log "Running migrations after MySQL password sync"
+        "${COMPOSE[@]}" exec -T app php artisan migrate --force \
+          || warn "migrate still failing — check app logs"
+        return 0
+      fi
+    fi
+    warn "Root ALTER did not fix app auth"
   else
-    warn "Listing mysql.user rows for email_server (diagnostic):"
-    "${COMPOSE[@]}" exec -T -e MYSQL_PWD="$root_pass" mysql \
-      mysql -u root -e "SELECT user,host,plugin FROM mysql.user WHERE user='email_server';" || true
-    die "MySQL password reset ran but app still cannot authenticate as email_server@%
-
-Re-run with a full wipe:
-  ./setup.sh --env-file=/etc/email-server/secrets.env --reset-mysql
-"
+    warn "MYSQL_ROOT_PASSWORD also does not match the volume"
   fi
 
-  log "Running migrations after MySQL password sync"
+  # Last resort for broken first deploys: wipe datadir and re-init with current .env
+  warn "Auto-wiping MySQL data volume and re-initializing with docker/.env passwords"
+  warn "(passwords in secrets no longer match the old volume — this DESTROYS DB DATA)"
+  RESET_MYSQL=true
+  reset_mysql_data_volume
+  sync_backend_db_password
+  log "Running migrations after MySQL wipe"
   "${COMPOSE[@]}" exec -T app php artisan migrate --force \
     || warn "migrate still failing — check app logs"
 }
