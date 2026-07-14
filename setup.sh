@@ -48,7 +48,7 @@ EXCHANGE_AUTH_METHOD="${EXCHANGE_AUTH_METHOD:-client_credentials}"
 EXCHANGE_SCOPE="${EXCHANGE_SCOPE:-https://graph.microsoft.com/.default}"
 INTEGRATION_CLIENT_SECRET="${INTEGRATION_CLIENT_SECRET:-}"
 QUEUE_SCALE="${QUEUE_SCALE:-1}"
-MYSQL_HOST_PORT="${MYSQL_HOST_PORT:-3306}"
+MYSQL_HOST_PORT="${MYSQL_HOST_PORT:-3309}"
 FORCE_VENDOR_REINSTALL="${FORCE_VENDOR_REINSTALL:-false}"
 RESET_MYSQL="${RESET_MYSQL:-false}"
 RUN_SEEDER="${RUN_SEEDER:-true}"
@@ -83,7 +83,7 @@ Optional:
   --exchange-client-secret=SECRET
   --integration-client-secret=SECRET  Seeded staff-portal integration secret (auto if omitted)
   --queue-scale=N               docker compose --scale queue=N (default: 1)
-  --mysql-host-port=PORT        Host port for MySQL (default: 3306)
+  --mysql-host-port=PORT        Host port for MySQL (default: 3309; avoid host :3306 clashes)
   --force-vendor                Wipe backend/vendor and reinstall via composer
   --reset-mysql                 Wipe MySQL data dir and re-init with current passwords (DESTROYS DB DATA)
   --run-seeder=true|false       Seed admin/providers on start (default: true)
@@ -186,7 +186,7 @@ if [[ -n "$ENV_FILE" ]]; then
   EXCHANGE_CLIENT_SECRET="${EXCHANGE_CLIENT_SECRET:-}"
   INTEGRATION_CLIENT_SECRET="${INTEGRATION_CLIENT_SECRET:-}"
   QUEUE_SCALE="${QUEUE_SCALE:-1}"
-  MYSQL_HOST_PORT="${MYSQL_HOST_PORT:-3306}"
+  MYSQL_HOST_PORT="${MYSQL_HOST_PORT:-3309}"
   FORCE_VENDOR_REINSTALL="${FORCE_VENDOR_REINSTALL:-false}"
   RESET_MYSQL="${RESET_MYSQL:-false}"
   RUN_SEEDER="${RUN_SEEDER:-true}"
