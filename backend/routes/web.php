@@ -8,7 +8,7 @@ Route::get('/api/health', HealthController::class);
 
 if (! app()->environment('production')) {
     Route::redirect('/', '/api/documentation');
-    Route::get('/docs', fn () => redirect('/api/documentation'));
+    Route::get('/docs', [ApiDocumentationController::class, 'ui']);
     Route::get('/api/documentation', [ApiDocumentationController::class, 'ui']);
     Route::get('/api/docs.json', [ApiDocumentationController::class, 'spec']);
 } else {

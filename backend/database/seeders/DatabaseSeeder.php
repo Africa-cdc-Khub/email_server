@@ -101,10 +101,14 @@ class DatabaseSeeder extends Seeder
             ],
         );
 
-        $adminEmail = env('ADMIN_EMAIL', 'andrewa@africacdc.org');
-        $adminPassword = env('ADMIN_PASSWORD') ?: throw new \RuntimeException(
-            'ADMIN_PASSWORD must be set in the environment before seeding.',
-        );
+        $adminEmail = (string) env('ADMIN_EMAIL', 'andrewa@africacdc.org');
+        $adminPassword = (string) env('ADMIN_PASSWORD', '');
+
+        if ($adminPassword === '') {
+            throw new \RuntimeException(
+                'ADMIN_PASSWORD must be set (docker/.env / container env) before seeding.',
+            );
+        }
 
         $admin = User::query()->firstOrCreate(
             ['email' => $adminEmail],

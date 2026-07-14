@@ -44,6 +44,7 @@ services:
     working_dir: /var/www/backend
     volumes:
       - ../backend:/var/www/backend
+      - ./entrypoint.sh:/usr/local/bin/entrypoint.sh:ro
     environment:
       <<: *app-env
       CONTAINER_ROLE: app
@@ -64,6 +65,7 @@ services:
     working_dir: /var/www/backend
     volumes:
       - ../backend:/var/www/backend
+      - ./entrypoint.sh:/usr/local/bin/entrypoint.sh:ro
     environment:
       <<: *app-env
       CONTAINER_ROLE: queue
