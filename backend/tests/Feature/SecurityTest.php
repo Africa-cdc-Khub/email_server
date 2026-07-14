@@ -15,8 +15,97 @@ class SecurityTest extends TestCase
 {
     use RefreshDatabase;
 
+    public function test_inactive_admin_cannot_use_existing_token(): void
+    {
+        $user = User::factory()->create([
+            'is_admin' => true,
+            'is_active' => true,
+            'password' => Hash::make('InactivePass123!'),
+        ]);
+
+        $token = $user->createToken('admin-panel')->plainTextToken;
+        $user->update(['is_active' => false]);
+
+        $this->withToken($token)
+            ->getJson('/api/v1/admin/auth/me')
+            ->assertForbidden();
+    }
+
+    public function test_non_admin_cannot_send_mail_or_manage_providers(): void
+    {
+        $user = User::factory()->create([
+            'is_admin' => false,
+            'is_active' => true,
+        ]);
+        $token = $user->createToken('admin-panel')->plainTextToken;
+
+        $this->withToken($token)
+            ->postJson('/api/v1/admin/send-mail', [
+                'to' => 'user@example.com',
+                'subject' => 'x',
+                'body' => 'y',
+            ])
+            ->assertForbidden();
+
+        $this->withToken($token)
+            ->getJson('/api/v1/admin/email-providers')
+            ->assertForbidden();
+    }
+
+    public function test_integration_cannot_override_provider_id(): void
+    {
+        config(['integration.jwt_secret' => 'testing-jwt-secret-key-with-at-least-sixty-four-characters-long!!']);
+
+        $assigned = EmailProvider::query()->create([
+            'name' => 'Assigned',
+            'slug' => 'assigned',
+            'driver' => EmailDriver::Log,
+            'config' => [],
+            'is_default' => true,
+            'is_active' => true,
+        ]);
+
+        $other = EmailProvider::query()->create([
+            'name' => 'Other',
+            'slug' => 'other',
+            'driver' => EmailDriver::Log,
+            'config' => [],
+            'is_default' => false,
+            'is_active' => true,
+        ]);
+
+        $clientSecret = 'IntegrationSecret2026!';
+        $integration = ExternalIntegration::query()->create([
+            'name' => 'Staff Portal',
+            'slug' => 'staff-portal-locked',
+            'api_key_hash' => ExternalIntegration::hashClientSecret($clientSecret),
+            'api_key_prefix' => ExternalIntegration::clientSecretHint($clientSecret),
+            'email_provider_id' => $assigned->id,
+            'is_active' => true,
+        ]);
+
+        $jwt = $this->postJson('/api/v1/integrations/auth/token', [
+            'client_id' => $integration->slug,
+            'client_secret' => $clientSecret,
+        ])->json('token');
+
+        $this->withToken($jwt)
+            ->postJson('/api/v1/integrations/send', [
+                'to' => 'user@example.com',
+                'subject' => 'provider override',
+                'body' => '<p>x</p>',
+                'provider_id' => $other->id,
+            ])
+            ->assertForbidden();
+    }
+
     public function test_admin_login_rejects_sql_injection_in_email_field(): void
     {
+        $this->withoutMiddleware([
+            \Illuminate\Routing\Middleware\ThrottleRequests::class,
+            \Illuminate\Routing\Middleware\ThrottleRequestsWithRedis::class,
+        ]);
+
         $this->postJson('/api/v1/admin/auth/login', [
             'email' => "admin@emailserver.local' OR '1'='1",
             'password' => 'password',
@@ -57,6 +146,11 @@ class SecurityTest extends TestCase
 
     public function test_inactive_admin_cannot_login(): void
     {
+        $this->withoutMiddleware([
+            \Illuminate\Routing\Middleware\ThrottleRequests::class,
+            \Illuminate\Routing\Middleware\ThrottleRequestsWithRedis::class,
+        ]);
+
         User::factory()->create([
             'email' => 'inactive@emailserver.local',
             'is_admin' => true,

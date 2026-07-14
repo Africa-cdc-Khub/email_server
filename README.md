@@ -1,69 +1,408 @@
 # Email Server
 
-Laravel 13 email gateway with **Microsoft Exchange (Graph API)** and **SMTP** support, DB-managed provider configs, and a Vue 3 + Vuetify admin panel (styled like Staff Helpdesk).
+Laravel email gateway with **Microsoft Exchange (Graph API)** and **SMTP**, DB-managed providers, JWT integrations, and a Vue 3 + Vuetify admin panel.
 
-## Ports
+## Production domain
+
+| Role | URL |
+|------|-----|
+| Admin UI | https://notifications.africacdc.org |
+| API | https://notifications.africacdc.org/api |
+| Health | https://notifications.africacdc.org/api/v1/health |
+
+Swagger/OpenAPI is **disabled in production** (`APP_ENV=production`).
+
+---
+
+## Production installation (Docker + host Nginx)
+
+Preferred path: one script. Secrets are passed as parameters or an external env file — **never committed**.
+
+### Architecture
+
+```
+Internet
+   │
+   ▼
+Host Nginx :443  (notifications.africacdc.org) + Certbot TLS
+   │
+   ├── /          → 127.0.0.1:3006  (Admin UI container)
+   └── /api/      → 127.0.0.1:8082  (API container)
+                        │
+              Docker: app, queue, redis, mysql
+              Data:   /home/email_serverdata/{mysql,redis}
+```
+
+### Prerequisites
+
+- Linux server with Docker + Docker Compose plugin
+- Host **Nginx** and **Certbot** already installed
+- DNS **A/AAAA** for `notifications.africacdc.org` pointing at the server
+- Ports **80/443** open on the host firewall
+
+### Deploy with `setup.sh` (recommended)
+
+```bash
+sudo mkdir -p /var/www
+sudo git clone <YOUR_REPO_URL> /var/www/email_server
+cd /var/www/email_server
+```
+
+**Option A — external secrets file (best for production):**
+
+```bash
+sudo mkdir -p /etc/email-server
+sudo cp deploy/production.secrets.env.example /etc/email-server/secrets.env
+sudo chmod 600 /etc/email-server/secrets.env
+sudo nano /etc/email-server/secrets.env   # fill real passwords / Exchange IDs
+
+./setup.sh --env-file=/etc/email-server/secrets.env
+```
+
+**Option B — CLI parameters (use placeholders or your private values; do not commit secrets):**
+
+```bash
+./setup.sh \
+  --domain=notifications.africacdc.org \
+  --admin-email=andrewa@africacdc.org \
+  --admin-password='CHANGE_ME_ADMIN_PASSWORD' \
+  --db-password="$(openssl rand -base64 24)" \
+  --mysql-root-password="$(openssl rand -base64 24)" \
+  --jwt-secret="$(openssl rand -base64 48)" \
+  --jwt-ttl=60 \
+  --data-path=/home/email_serverdata \
+  --mail-from-address=notifications@africacdc.org \
+  --mail-from-name='Africa CDC Notifications' \
+  --certbot-email=andrewa@africacdc.org \
+  --exchange-tenant-id='CHANGE_ME_TENANT_ID' \
+  --exchange-client-id='CHANGE_ME_CLIENT_ID' \
+  --exchange-client-secret='CHANGE_ME_CLIENT_SECRET' \
+  --integration-client-secret="$(openssl rand -base64 32)" \
+  --queue-scale=2 \
+  --run-seeder=true
+```
+
+> Prefer Option A: keep real secrets only in `/etc/email-server/secrets.env` (outside git). Generated DB/JWT values are written to gitignored `docker/.env` and `backend/.env`.
+
+What `setup.sh` does:
+
+1. Creates `/home/email_serverdata/{mysql,redis}`
+2. Writes **gitignored** `docker/.env` + `backend/.env` (mode `600`)
+3. Builds the Vue admin UI
+4. Starts Docker (`app`, `queue`, `nginx`, `frontend`, `mysql`, `redis`)
+5. Seeds admin user, then sets `RUN_SEEDER=false`
+6. Installs host Nginx site for the domain
+7. Issues/installs Let’s Encrypt TLS with Certbot (`--nginx --redirect`)
+8. Prints the admin URL (never prints passwords)
+
+```bash
+./setup.sh --help
+```
+
+Useful flags: `--skip-ssl`, `--skip-nginx`, `--skip-frontend-build`, `--run-seeder=false`.
+
+After deploy:
+
+1. Open https://notifications.africacdc.org and sign in
+2. Enable **2FA**
+3. Create/rotate integration secrets in the admin UI
+4. Keep `/etc/email-server/secrets.env`, `docker/.env`, and `backend/.env` **out of git**
+
+### Manual steps (if you prefer not to use `setup.sh`)
+
+#### 1. Clone the repository
+
+```bash
+sudo mkdir -p /var/www
+sudo git clone <YOUR_REPO_URL> /var/www/email_server
+cd /var/www/email_server
+```
+
+#### 2. Create persistent data directories
+
+```bash
+sudo mkdir -p /home/email_serverdata/{mysql,redis}
+sudo chown -R root:root /home/email_serverdata
+```
+
+MySQL and Redis bind-mount here so `docker compose down` does **not** wipe data.
+
+#### 3. Configure Docker environment
+
+```bash
+cp docker/.env.example docker/.env
+cp backend/.env.example backend/.env
+```
+
+Edit **`docker/.env`** (required for Compose):
+
+```env
+APP_ENV=production
+APP_DEBUG=false
+RUN_SEEDER=true
+
+EMAIL_SERVER_DATA_PATH=/home/email_serverdata
+
+APP_URL=https://notifications.africacdc.org
+FRONTEND_URL=https://notifications.africacdc.org
+
+ADMIN_EMAIL=andrewa@africacdc.org
+ADMIN_PASSWORD=<strong-unique-password>
+
+DB_PASSWORD=<strong-db-password>
+MYSQL_ROOT_PASSWORD=<strong-root-password>
+
+JWT_SECRET=<64+-char-random-string>
+JWT_TTL=60
+```
+
+Generate secrets:
+
+```bash
+openssl rand -base64 48   # JWT_SECRET
+openssl rand -base64 24   # DB / admin passwords
+```
+
+Edit **`backend/.env`** for Exchange/mail (used by the app container via bind mount):
+
+```env
+APP_ENV=production
+APP_DEBUG=false
+APP_URL=https://notifications.africacdc.org
+FRONTEND_URL=https://notifications.africacdc.org
+
+MAIL_MAILER=exchange
+MAIL_FROM_ADDRESS=notifications@africacdc.org
+MAIL_FROM_NAME="Africa CDC Notifications"
+
+EXCHANGE_TENANT_ID=...
+EXCHANGE_CLIENT_ID=...
+EXCHANGE_CLIENT_SECRET=...
+EXCHANGE_AUTH_METHOD=client_credentials
+EXCHANGE_SCOPE=https://graph.microsoft.com/.default
+
+JWT_SECRET=<same-as-docker/.env>
+```
+
+Generate the Laravel app key once containers are up (or after first start):
+
+```bash
+docker compose -f docker/docker-compose.yml exec app php artisan key:generate --force
+```
+
+> Set `RUN_SEEDER=false` in `docker/.env` **after** the first successful boot so reseeds do not overwrite production data.
+
+#### 4. Pass public URLs into Compose
+
+`docker/docker-compose.yml` reads `APP_URL` / `FRONTEND_URL` from the environment (or defaults to localhost). Export them before starting, or add them to `docker/.env` (Compose loads that file automatically when run from `docker/`):
+
+```bash
+# recommended: run Compose from the docker directory so .env is picked up
+cd /var/www/email_server/docker
+```
+
+Ensure `docker/.env` also includes:
+
+```env
+APP_URL=https://notifications.africacdc.org
+FRONTEND_URL=https://notifications.africacdc.org
+```
+
+If those keys are only in `backend/.env`, add matching keys to `docker/.env` as well — Compose substitutes `${APP_URL}` from `docker/.env`.
+
+#### 5. Build the admin UI and start Docker
+
+```bash
+cd /var/www/email_server/frontend
+npm ci
+npm run build
+
+cd /var/www/email_server/docker
+docker compose up -d --build
+
+# optional: more email workers under load
+docker compose up -d --scale queue=4
+```
+
+Verify containers:
+
+```bash
+docker compose ps
+curl -s http://127.0.0.1:8082/api/v1/health
+```
+
+#### 6. Host Nginx reverse proxy (HTTP first)
+
+Install the HTTP site so Certbot can complete the ACME challenge:
+
+```bash
+sudo cp /var/www/email_server/deploy/configs/nginx-notifications.africacdc.org.conf \
+  /etc/nginx/sites-available/notifications.africacdc.org.conf
+
+sudo ln -sf /etc/nginx/sites-available/notifications.africacdc.org.conf \
+  /etc/nginx/sites-enabled/notifications.africacdc.org.conf
+
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+Confirm HTTP reaches the app before requesting a certificate:
+
+```bash
+curl -I http://notifications.africacdc.org/api/v1/health
+```
+
+#### 7. SSL certificate with Certbot (already installed)
+
+Issue a Let’s Encrypt certificate and let Certbot wire HTTPS into the Nginx site automatically:
+
+```bash
+# Confirm Certbot is available (already installed on Africa CDC servers)
+certbot --version
+# expect something like: certbot 2.x.x
+
+# Issue certificate + configure Nginx HTTPS + HTTP→HTTPS redirect
+sudo certbot --nginx \
+  -d notifications.africacdc.org \
+  --agree-tos \
+  --redirect \
+  -m andrewa@africacdc.org \
+  --non-interactive
+```
+
+What Certbot does:
+
+1. Obtains a certificate for `notifications.africacdc.org`
+2. Stores files under:
+   - `/etc/letsencrypt/live/notifications.africacdc.org/fullchain.pem`
+   - `/etc/letsencrypt/live/notifications.africacdc.org/privkey.pem`
+3. Updates the Nginx site to listen on **443** with TLS
+4. Adds an **HTTP → HTTPS** redirect on port 80
+
+Verify HTTPS:
+
+```bash
+sudo nginx -t && sudo systemctl reload nginx
+curl -I https://notifications.africacdc.org/api/v1/health
+openssl s_client -connect notifications.africacdc.org:443 -servername notifications.africacdc.org </dev/null 2>/dev/null | openssl x509 -noout -dates -subject
+```
+
+#### Certificate auto-renewal
+
+Certbot installs a systemd timer/cron job. Confirm renewal works:
+
+```bash
+sudo certbot renew --dry-run
+systemctl list-timers | grep certbot || ls /etc/cron.d/certbot 2>/dev/null
+```
+
+Certificates renew automatically before expiry. After a successful renew, Nginx is reloaded by Certbot’s deploy hook / `nginx` plugin.
+
+#### If the certificate already exists
+
+```bash
+sudo certbot certificates
+sudo certbot install --nginx -d notifications.africacdc.org
+# or force reissue:
+sudo certbot --nginx -d notifications.africacdc.org --force-renewal --redirect
+```
+
+#### Manual HTTPS snippet (reference only)
+
+If you need to inspect/edit TLS by hand after Certbot, paths look like:
+
+```nginx
+listen 443 ssl http2;
+listen [::]:443 ssl http2;
+server_name notifications.africacdc.org;
+
+ssl_certificate     /etc/letsencrypt/live/notifications.africacdc.org/fullchain.pem;
+ssl_certificate_key /etc/letsencrypt/live/notifications.africacdc.org/privkey.pem;
+include /etc/letsencrypt/options-ssl-nginx.conf;
+ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
+```
+
+Keep `APP_URL` and `FRONTEND_URL` as `https://notifications.africacdc.org` so Laravel generates correct absolute links and HSTS-related headers behave correctly.
+
+#### 8. First login
+
+1. Open https://notifications.africacdc.org
+2. Sign in with `ADMIN_EMAIL` / `ADMIN_PASSWORD` from `docker/.env`
+3. Enable **2FA** under Security
+4. Create/rotate **integration** secrets under Integrations
+5. Set `RUN_SEEDER=false` and recreate the app container if needed:
+
+```bash
+cd /var/www/email_server/docker
+# edit docker/.env → RUN_SEEDER=false
+docker compose up -d app queue
+```
+
+#### 9. Day-2 operations
+
+```bash
+cd /var/www/email_server/docker
+
+# logs
+docker compose logs -f app queue nginx
+
+# update code
+cd /var/www/email_server && git pull
+cd frontend && npm ci && npm run build
+cd ../docker && docker compose up -d --build
+
+# migrations
+docker compose exec app php artisan migrate --force
+docker compose exec app php artisan config:cache
+docker compose exec app php artisan route:cache
+
+# scale workers
+docker compose up -d --scale queue=4
+```
+
+**Do not** run `docker compose down -v` — that can destroy named volumes. With bind mounts under `/home/email_serverdata`, a normal `down` keeps MySQL/Redis data.
+
+---
+
+## Local development (Docker)
 
 | Service | URL |
 |---------|-----|
-| **Admin UI (Vue)** | http://localhost:3006 |
-| **API + Swagger** | http://localhost:8082 |
-| **Health (incl. Redis)** | http://localhost:8082/api/v1/health |
-| **Swagger UI** | http://localhost:8082/api/documentation |
-
-## Features
-
-- **Email providers** stored in MySQL (Exchange default, SMTP, SES, log)
-- **Exchange transport** — same Microsoft Graph pattern as `staff/apm` and `staff/helpdesk`
-- **External integrations** — JWT auth (24h) for APM, Helpdesk, and other systems
-- **Admin panel** — Vue 3 + Vuetify on port **3006**
-- **Swagger/OpenAPI** — interactive API docs at `/api/documentation`
-- **Async email queue** — Redis + workers; HTTP returns immediately with `pending` status
-- **Production tuning** — PHP-FPM, MySQL, Apache configs from [enterprise optimisation guide](https://github.com/agabaandre/PHP_laravel_Codeigniter_wordpress_server_optimisation_enterprise/blob/main/docs/MANUAL-OPTIMIZATION-PHP82-MYSQL8.md)
-- **Docker** — PHP 8.4, Nginx, **Redis** (queue/cache/sessions), MySQL, scalable queue workers
-
-## Quick start (Docker)
+| Admin UI | http://localhost:3006 |
+| API | http://localhost:8082 |
+| Health | http://localhost:8082/api/v1/health |
+| Swagger (non-prod only) | http://localhost:8082/api/documentation |
 
 ```bash
-# 1. Copy env and add Exchange credentials (from staff/apm/.env or helpdesk)
+cp docker/.env.example docker/.env
 cp backend/.env.example backend/.env
+# fill ADMIN_PASSWORD, DB_PASSWORD, MYSQL_ROOT_PASSWORD, JWT_SECRET
 
-# 2. Build frontend
 cd frontend && npm ci && npm run build && cd ..
-
-# 3. Start stack
-docker compose -f docker/docker-compose.yml up -d --build
-
-# Optional: scale email workers for higher throughput
-docker compose -f docker/docker-compose.yml up -d --scale queue=4
-
-# 4. Open apps
-open http://localhost:3006          # Admin UI
-open http://localhost:8082/api/documentation  # Swagger
+cd docker && docker compose up -d --build
 ```
 
-**Default admin login:** `admin@emailserver.local` / `password`
-
-After seeding, check container logs for the integration API key:
+Frontend hot-reload:
 
 ```bash
-docker logs email-server-app 2>&1 | grep ems_
+docker compose -f docker/docker-compose.yml up -d
+cd frontend && npm run dev
 ```
 
-## API
+---
 
-Interactive documentation: **http://localhost:8082/api/documentation** (OpenAPI spec at `/api/docs.json`, generated from annotations in `app/OpenApi/`).
+## API overview
 
-### Admin (Bearer token from `/api/v1/admin/auth/login`)
+### Admin (Sanctum Bearer from login)
 
+- `POST /api/v1/admin/auth/login`
 - `GET /api/v1/admin/dashboard`
 - `CRUD /api/v1/admin/email-providers`
-- `POST /api/v1/admin/email-providers/{id}/test`
 - `CRUD /api/v1/admin/external-integrations`
+- `POST /api/v1/admin/send-mail`
 
-### External systems (JWT — 24 hour tokens)
+### Integrations (JWT)
 
-**1. Exchange integration credentials for a JWT**
+**1. Token**
 
 ```http
 POST /api/v1/integrations/auth/token
@@ -71,13 +410,11 @@ Content-Type: application/json
 
 {
   "client_id": "staff-portal",
-  "client_secret": "ems_..."
+  "client_secret": "<secret-from-admin-ui>"
 }
 ```
 
-Response includes `token`, `expires_in` (seconds), and `expires_at`. Tokens expire after **24 hours** (`JWT_TTL=1440` minutes).
-
-**2. Send email with the JWT** (returns immediately with `status: pending`)
+**2. Send** (async — returns `pending`)
 
 ```http
 POST /api/v1/integrations/send
@@ -92,46 +429,41 @@ Content-Type: application/json
 }
 ```
 
-**3. Poll delivery status**
+**3. Status**
 
 ```http
 GET /api/v1/integrations/logs/{log_id}
 Authorization: Bearer <jwt>
 ```
 
-Emails are processed asynchronously by Redis queue workers — Exchange/SMTP calls do not block the API thread.
+`JWT_TTL` defaults to **60 minutes**. Set a dedicated `JWT_SECRET` (≥32 characters); do not reuse `APP_KEY`.
 
-Set `JWT_SECRET` in `.env` (use a long random string; falls back to `APP_KEY` if unset).
-
-## Development
-
-```bash
-# API via Docker (port 8082)
-docker compose -f docker/docker-compose.yml up -d
-
-# Frontend dev server on :3006 (proxies /api to :8082)
-cd frontend && npm run dev
-```
+---
 
 ## Exchange configuration
 
-Provider settings mirror Staff portal apps:
-
-| Field | Env (seed) |
-|-------|------------|
+| Field | Env |
+|-------|-----|
 | Tenant ID | `EXCHANGE_TENANT_ID` |
 | Client ID | `EXCHANGE_CLIENT_ID` |
 | Client secret | `EXCHANGE_CLIENT_SECRET` |
-| Auth method | `client_credentials` (default) |
+| Auth method | `client_credentials` |
 | Scope | `https://graph.microsoft.com/.default` |
 
-Copy values from `/opt/homebrew/var/www/staff/apm/.env` or `staff/helpdesk/backend/.env`, then update via the admin UI (stored encrypted in DB).
+Also configure/provider-edit in the admin UI (stored encrypted in DB). Env values take precedence when set.
 
-## Production & scaling
+---
 
-See **[deploy/DEPLOY.md](deploy/DEPLOY.md)** for:
+## Security checklist (production)
 
-- Apache 2.4 + PHP-FPM + MySQL 8 bare-metal setup (1000+ request capacity)
-- Supervisor queue workers
-- Security hardening checklist
-- Docker worker scaling (`--scale queue=4`)
+- [ ] `APP_ENV=production`, `APP_DEBUG=false`
+- [ ] Strong unique `ADMIN_PASSWORD`, `DB_PASSWORD`, `MYSQL_ROOT_PASSWORD`, `JWT_SECRET`
+- [ ] `RUN_SEEDER=false` after first seed
+- [ ] Host Nginx only; Docker ports bound via Compose to host (`8082`/`3006`) — prefer firewall so they are not public
+- [ ] TLS via Certbot on `notifications.africacdc.org` (`fullchain.pem` / `privkey.pem` under `/etc/letsencrypt/live/...`)
+- [ ] Certbot auto-renew verified (`sudo certbot renew --dry-run`)
+- [ ] Enable admin 2FA
+- [ ] Integration IP allowlists where possible
+- [ ] Rotate integration secrets periodically
+
+Additional Apache/bare-metal notes: **[deploy/DEPLOY.md](deploy/DEPLOY.md)**.

@@ -59,6 +59,12 @@ class AdminTwoFactorService
         $challenge = $this->findOpenChallenge($challengeToken);
         $user = $challenge->user;
 
+        if (! $user->is_active) {
+            throw ValidationException::withMessages([
+                'challenge_token' => ['This account has been deactivated.'],
+            ]);
+        }
+
         if (! in_array($method, $challenge->methods ?? [], true)) {
             throw ValidationException::withMessages([
                 'method' => ['This verification method is not available for your account.'],

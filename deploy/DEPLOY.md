@@ -1,28 +1,34 @@
 # Production deployment (Apache + PHP-FPM + MySQL 8)
 
+> **Preferred production path:** run **[`./setup.sh`](../setup.sh)** with `--env-file=/etc/email-server/secrets.env` (see **[README.md](../README.md#deploy-with-setupsh-recommended)**).  
+> Secrets template: [`deploy/production.secrets.env.example`](production.secrets.env.example) — copy outside the repo, never commit.  
+> Host Nginx: [`deploy/configs/nginx-notifications.africacdc.org.conf`](configs/nginx-notifications.africacdc.org.conf).  
+> SSL: Certbot is already installed — `setup.sh` runs it, or use `sudo certbot --nginx -d notifications.africacdc.org --redirect`.
+
 Configs in `deploy/configs/` are copied from the [enterprise optimisation guide](https://github.com/agabaandre/PHP_laravel_Codeigniter_wordpress_server_optimisation_enterprise/blob/main/docs/MANUAL-OPTIMIZATION-PHP82-MYSQL8.md) and adapted for **PHP 8.4** and this Laravel app.
 
 Target capacity: **400+ Apache workers**, **56 PHP-FPM children**, **300 MySQL connections** — suitable for **1000+ concurrent HTTP requests** when combined with **Redis queues** for email (Graph/SMTP never blocks the request thread).
 
 ---
 
-## Docker (recommended)
+## Docker (local / without host Nginx)
 
 ```bash
+cp docker/.env.example docker/.env
 cp backend/.env.example backend/.env
-# Set APP_KEY, JWT_SECRET, Exchange creds, strong DB_PASSWORD
+# Set ADMIN_PASSWORD, JWT_SECRET, DB passwords, Exchange creds
 
 cd frontend && npm ci && npm run build && cd ..
 
-docker compose -f docker/docker-compose.yml up -d --build
+cd docker && docker compose up -d --build
 
 # Scale queue workers for higher email throughput
-docker compose -f docker/docker-compose.yml up -d --scale queue=4
+docker compose up -d --scale queue=4
 ```
 
 | Service | Port | Role |
 |---------|------|------|
-| nginx | 8082 | API + Swagger |
+| nginx | 8082 | API (Swagger only when `APP_ENV` ≠ production) |
 | frontend | 3006 | Admin UI |
 | queue | — | Async email (`SendEmailJob`) |
 | redis | — | Queue, cache, sessions, rate limits |
@@ -129,19 +135,40 @@ php artisan route:cache
 sudo systemctl reload php8.4-fpm   # OPcache validate_timestamps=0
 ```
 
-### 7. SSL
+### 7. SSL (Certbot — already installed on servers)
 
-Use Certbot per guide Step 13, then reload Apache.
+**Docker + host Nginx (preferred for `notifications.africacdc.org`):**
+
+```bash
+# HTTP site must be live first (see README §6)
+sudo certbot --nginx \
+  -d notifications.africacdc.org \
+  --agree-tos \
+  --redirect \
+  -m andrewa@africacdc.org \
+  --non-interactive
+
+sudo certbot renew --dry-run
+curl -I https://notifications.africacdc.org/api/v1/health
+```
+
+Certificates:
+
+- `/etc/letsencrypt/live/notifications.africacdc.org/fullchain.pem`
+- `/etc/letsencrypt/live/notifications.africacdc.org/privkey.pem`
+
+**Bare-metal Apache:** use Certbot’s Apache plugin (`certbot --apache -d …`) per guide Step 13, then reload Apache.
 
 ---
 
 ## Security checklist
 
 - [ ] `APP_DEBUG=false`, strong `APP_KEY` and `JWT_SECRET`
-- [ ] `.env` not web-accessible (Apache vhost blocks it)
+- [ ] `.env` not web-accessible (Apache/Nginx blocks it)
 - [ ] `RUN_SEEDER=false` in production Docker
+- [ ] TLS via Certbot for `notifications.africacdc.org`; renew timer verified (`certbot renew --dry-run`)
 - [ ] UFW: allow 80/443 only
-- [ ] Fail2ban on Apache (guide Step 4)
+- [ ] Fail2ban on Nginx/Apache where applicable
 - [ ] Integration IP allowlists where possible
 - [ ] Rotate integration API keys periodically
 

@@ -14,6 +14,7 @@ use App\Http\Controllers\Api\V1\BrandingController;
 use App\Http\Controllers\Api\V1\IntegrationMailController;
 use App\Http\Controllers\HealthController;
 use App\Http\Middleware\AuthenticateIntegrationJwt;
+use App\Http\Middleware\EnsureUserIsActive;
 use App\Http\Middleware\EnsureUserIsAdmin;
 use Illuminate\Support\Facades\Route;
 
@@ -33,7 +34,7 @@ Route::prefix('v1')->group(function () {
         Route::post('/auth/reset-password', [AuthController::class, 'resetPassword'])
             ->middleware('throttle:10,1');
 
-        Route::middleware('auth:sanctum')->group(function () {
+        Route::middleware(['auth:sanctum', EnsureUserIsActive::class])->group(function () {
             Route::get('/auth/me', [AuthController::class, 'me']);
             Route::post('/auth/logout', [AuthController::class, 'logout']);
             Route::get('/auth/2fa/status', [TwoFactorController::class, 'status']);
@@ -44,20 +45,23 @@ Route::prefix('v1')->group(function () {
             Route::post('/auth/2fa/totp/disable', [TwoFactorController::class, 'disableTotp']);
             Route::get('/dashboard', DashboardController::class);
             Route::get('/email-logs', [EmailLogController::class, 'index']);
-            Route::post('/send-mail', [MailController::class, 'send']);
 
-            Route::apiResource('users', UserController::class)->middleware(EnsureUserIsAdmin::class);
+            Route::middleware(EnsureUserIsAdmin::class)->group(function () {
+                Route::apiResource('users', UserController::class);
+                Route::post('/send-mail', [MailController::class, 'send'])
+                    ->middleware('throttle:30,1');
 
-            Route::get('/branding', [AdminBrandingController::class, 'show']);
-            Route::post('/branding', [AdminBrandingController::class, 'update']);
-            Route::put('/branding', [AdminBrandingController::class, 'update']);
+                Route::get('/branding', [AdminBrandingController::class, 'show']);
+                Route::post('/branding', [AdminBrandingController::class, 'update']);
+                Route::put('/branding', [AdminBrandingController::class, 'update']);
 
-            Route::get('/email-providers/drivers', [EmailProviderController::class, 'drivers']);
-            Route::post('/email-providers/{email_provider}/test', [EmailProviderController::class, 'test']);
-            Route::post('/email-providers/{email_provider}/set-default', [EmailProviderController::class, 'setDefault']);
-            Route::apiResource('email-providers', EmailProviderController::class);
+                Route::get('/email-providers/drivers', [EmailProviderController::class, 'drivers']);
+                Route::post('/email-providers/{email_provider}/test', [EmailProviderController::class, 'test']);
+                Route::post('/email-providers/{email_provider}/set-default', [EmailProviderController::class, 'setDefault']);
+                Route::apiResource('email-providers', EmailProviderController::class);
 
-            Route::apiResource('external-integrations', ExternalIntegrationController::class);
+                Route::apiResource('external-integrations', ExternalIntegrationController::class);
+            });
         });
     });
 
@@ -67,6 +71,6 @@ Route::prefix('v1')->group(function () {
     Route::middleware(AuthenticateIntegrationJwt::class)->prefix('integrations')->group(function () {
         Route::get('/status', [IntegrationMailController::class, 'status']);
         Route::get('/logs/{logId}', [IntegrationMailController::class, 'showLog'])->whereNumber('logId');
-        Route::post('/send', [IntegrationMailController::class, 'send'])->middleware('throttle:120,1');
+        Route::post('/send', [IntegrationMailController::class, 'send'])->middleware('throttle:60,1');
     });
 });

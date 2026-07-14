@@ -15,8 +15,14 @@ class IntegrationMailController extends Controller
         /** @var \App\Models\ExternalIntegration $integration */
         $integration = $request->attributes->get('integration');
 
-        $providerId = $request->validated('provider_id')
-            ?? $integration->email_provider_id;
+        $requestedProviderId = $request->validated('provider_id');
+        $providerId = $integration->email_provider_id;
+
+        if ($requestedProviderId !== null && (int) $requestedProviderId !== (int) $providerId) {
+            return response()->json([
+                'message' => 'provider_id is not allowed for this integration.',
+            ], 403);
+        }
 
         $log = $dispatch->queue(
             to: $request->validated('to'),

@@ -52,6 +52,10 @@ class UserController extends Controller
 
         $user->update($data);
 
+        if (array_key_exists('is_active', $data) && $data['is_active'] === false) {
+            $user->tokens()->delete();
+        }
+
         return response()->json(['data' => $this->transform($user->fresh())]);
     }
 

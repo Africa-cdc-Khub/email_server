@@ -78,12 +78,12 @@ class AdminPasswordResetTest extends TestCase
         $this->postJson('/api/v1/admin/auth/reset-password', [
             'email' => $user->email,
             'token' => $plainToken,
-            'password' => 'Madmirt@417',
-            'password_confirmation' => 'Madmirt@417',
+            'password' => 'NewSecurePass1!',
+            'password_confirmation' => 'NewSecurePass1!',
         ])->assertOk();
 
         $user->refresh();
-        $this->assertTrue(Hash::check('Madmirt@417', $user->password));
+        $this->assertTrue(Hash::check('NewSecurePass1!', $user->password));
         $this->assertDatabaseMissing('password_reset_tokens', ['email' => $user->email]);
         $this->assertDatabaseCount('personal_access_tokens', 0);
     }

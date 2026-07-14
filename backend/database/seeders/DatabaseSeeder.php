@@ -85,7 +85,7 @@ class DatabaseSeeder extends Seeder
             ],
         );
 
-        $clientSecret = env('INTEGRATION_CLIENT_SECRET', '@#nr7KvdUU7b#T_N#mGCNw!hM#!eZ_su');
+        $clientSecret = env('INTEGRATION_CLIENT_SECRET') ?: bin2hex(random_bytes(24));
 
         ExternalIntegration::query()->updateOrCreate(
             ['slug' => 'staff-portal'],
@@ -102,7 +102,9 @@ class DatabaseSeeder extends Seeder
         );
 
         $adminEmail = env('ADMIN_EMAIL', 'andrewa@africacdc.org');
-        $adminPassword = env('ADMIN_PASSWORD', 'Madmirt2417');
+        $adminPassword = env('ADMIN_PASSWORD') ?: throw new \RuntimeException(
+            'ADMIN_PASSWORD must be set in the environment before seeding.',
+        );
 
         $admin = User::query()->firstOrCreate(
             ['email' => $adminEmail],
