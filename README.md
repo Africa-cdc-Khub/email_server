@@ -88,7 +88,7 @@ What `setup.sh` does:
 
 1. Creates `/home/email_serverdata/{mysql,redis}`
 2. Writes **gitignored** `docker/.env` + `backend/.env` (mode `600`)
-3. Builds the Vue admin UI
+3. Builds the Vue admin UI (**Docker `node` image if host `npm` is missing**)
 4. Starts Docker (`app`, `queue`, `nginx`, `frontend`, `mysql`, `redis`)
 5. Seeds admin user, then sets `RUN_SEEDER=false`
 6. Installs host Nginx site for the domain
@@ -99,7 +99,7 @@ What `setup.sh` does:
 ./setup.sh --help
 ```
 
-Useful flags: `--skip-ssl`, `--skip-nginx`, `--skip-frontend-build`, `--run-seeder=false`.
+Useful flags: `--skip-ssl`, `--skip-nginx`, `--skip-frontend-build`, `--frontend-build=docker`, `--run-seeder=false`.
 
 After deploy:
 

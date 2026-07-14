@@ -51,6 +51,7 @@ QUEUE_SCALE="${QUEUE_SCALE:-1}"
 RUN_SEEDER="${RUN_SEEDER:-true}"
 SKIP_SSL="${SKIP_SSL:-false}"
 SKIP_FRONTEND_BUILD="${SKIP_FRONTEND_BUILD:-false}"
+FRONTEND_BUILD="${FRONTEND_BUILD:-auto}"
 SKIP_NGINX="${SKIP_NGINX:-false}"
 APP_ENV="${APP_ENV:-production}"
 APP_DEBUG="${APP_DEBUG:-false}"
@@ -81,7 +82,9 @@ Optional:
   --queue-scale=N               docker compose --scale queue=N (default: 1)
   --run-seeder=true|false       Seed admin/providers on start (default: true)
   --skip-ssl                    Skip Certbot TLS setup
-  --skip-frontend-build         Skip npm ci && npm run build
+  --skip-frontend-build         Skip frontend build (requires existing frontend/dist)
+  --frontend-build=auto|docker|host
+                                How to build UI (default: auto = host npm if present, else Docker node image)
   --skip-nginx                  Skip installing host Nginx site
   -h, --help                    Show this help
 
@@ -204,6 +207,7 @@ while [[ $# -gt 0 ]]; do
     --run-seeder=*) RUN_SEEDER="${1#*=}" ;;
     --skip-ssl) SKIP_SSL=true ;;
     --skip-frontend-build) SKIP_FRONTEND_BUILD=true ;;
+    --frontend-build=*) FRONTEND_BUILD="${1#*=}" ;;
     --skip-nginx) SKIP_NGINX=true ;;
     *) die "Unknown option: $1 (try --help)" ;;
   esac
@@ -237,9 +241,6 @@ FRONTEND_URL="https://${DOMAIN}"
 
 need_cmd docker
 need_cmd openssl
-if [[ "$SKIP_FRONTEND_BUILD" != "true" ]]; then
-  need_cmd npm
-fi
 if [[ "$SKIP_NGINX" != "true" ]]; then
   need_cmd nginx
 fi
@@ -349,15 +350,54 @@ set_backend_env "SANCTUM_STATEFUL_DOMAINS" "${DOMAIN},localhost,localhost:3006,1
 grep -q '^APP_KEY=' "$ROOT/backend/.env" || printf 'APP_KEY=\n' >> "$ROOT/backend/.env"
 
 # ---------------------------------------------------------------------------
-# 3. Frontend build
+# 3. Frontend build (host npm OR Docker node — npm is NOT required on the server)
 # ---------------------------------------------------------------------------
-if [[ "$SKIP_FRONTEND_BUILD" != "true" ]]; then
-  log "Building frontend"
+build_frontend_host() {
+  need_cmd npm
+  log "Building frontend with host npm"
   (
     cd "$ROOT/frontend"
     npm ci
     npm run build
   )
+}
+
+build_frontend_docker() {
+  local node_image="${FRONTEND_NODE_IMAGE:-node:22-alpine}"
+  log "Building frontend with Docker ($node_image) — no host npm required"
+  docker run --rm \
+    -v "$ROOT/frontend:/app" \
+    -w /app \
+    "$node_image" \
+    sh -c "npm ci && npm run build"
+
+  # Ensure dist is readable by the nginx container user
+  if [[ -d "$ROOT/frontend/dist" ]]; then
+    chmod -R a+rX "$ROOT/frontend/dist" || true
+  fi
+}
+
+if [[ "$SKIP_FRONTEND_BUILD" != "true" ]]; then
+  case "$FRONTEND_BUILD" in
+    host)
+      build_frontend_host
+      ;;
+    docker)
+      build_frontend_docker
+      ;;
+    auto|"")
+      if command -v npm >/dev/null 2>&1; then
+        build_frontend_host
+      else
+        warn "npm not found on host — building frontend via Docker node image"
+        build_frontend_docker
+      fi
+      ;;
+    *)
+      die "Invalid --frontend-build=$FRONTEND_BUILD (use auto|docker|host)"
+      ;;
+  esac
+  [[ -d "$ROOT/frontend/dist" ]] || die "frontend/dist missing after build"
 else
   warn "Skipping frontend build"
   [[ -d "$ROOT/frontend/dist" ]] || die "frontend/dist missing — run without --skip-frontend-build"
