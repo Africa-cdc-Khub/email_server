@@ -413,13 +413,52 @@ API_HOST_PORT="${API_HOST_PORT:-8089}"
 API_HEALTH_URL="http://127.0.0.1:${API_HOST_PORT}/api/v1/health"
 API_UP_URL="http://127.0.0.1:${API_HOST_PORT}/up"
 
+ensure_backend_vendor() {
+  if [[ -f "$ROOT/backend/vendor/autoload.php" ]]; then
+    log "PHP vendor/ already present"
+    return 0
+  fi
+
+  log "Installing PHP dependencies (composer) into backend/vendor — one-time"
+  docker run --rm \
+    -v "$ROOT/backend:/app" \
+    -w /app \
+    composer:2 \
+    composer install --no-dev --optimize-autoloader --no-interaction
+
+  [[ -f "$ROOT/backend/vendor/autoload.php" ]] || die "composer install did not create vendor/autoload.php"
+}
+
+sync_backend_db_password() {
+  # Keep Laravel .env DB_PASSWORD in sync with docker/.env (avoids volume password drift)
+  local db_pass
+  db_pass="$(grep -E '^DB_PASSWORD=' "$ROOT/docker/.env" 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"' | tr -d "'")"
+  [[ -n "$db_pass" ]] || return 0
+  if [[ -f "$ROOT/backend/.env" ]]; then
+    if grep -q '^DB_PASSWORD=' "$ROOT/backend/.env"; then
+      awk -v p="$db_pass" 'BEGIN{done=0} /^DB_PASSWORD=/{print "DB_PASSWORD=\"" p "\""; done=1; next} {print} END{if(!done) print "DB_PASSWORD=\"" p "\""}' \
+        "$ROOT/backend/.env" > "$ROOT/backend/.env.tmp"
+      mv "$ROOT/backend/.env.tmp" "$ROOT/backend/.env"
+      chmod 600 "$ROOT/backend/.env"
+    else
+      printf 'DB_PASSWORD="%s"\n' "$db_pass" >> "$ROOT/backend/.env"
+    fi
+    log "Synced DB_PASSWORD into backend/.env"
+  fi
+}
+
 containers_crash_looping() {
   "${COMPOSE[@]}" ps 2>/dev/null | grep -E 'email-server-app|docker-queue' | grep -qi 'Restarting'
 }
 
+app_is_up() {
+  "${COMPOSE[@]}" ps 2>/dev/null | grep -E 'email-server-app' | grep -qi 'Up' \
+    && ! "${COMPOSE[@]}" ps 2>/dev/null | grep -E 'email-server-app' | grep -qi 'Restarting'
+}
+
 wait_for_api() {
   local max_attempts="${1:-45}"
-  local i code
+  local i code nginx_recreated=0
   log "Waiting for API on :${API_HOST_PORT} (up to ~$((max_attempts * 2))s)"
   log "Liveness check: GET ${API_UP_URL}"
 
@@ -427,20 +466,30 @@ wait_for_api() {
     if containers_crash_looping; then
       warn "App/queue containers are crash-looping — dumping logs"
       "${COMPOSE[@]}" ps || true
-      "${COMPOSE[@]}" logs app --tail 80 || true
-      "${COMPOSE[@]}" logs queue --tail 40 || true
+      "${COMPOSE[@]}" logs app --tail 100 || true
+      "${COMPOSE[@]}" logs queue --tail 50 || true
       return 1
     fi
 
     code="$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 2 --max-time 5 "$API_UP_URL" 2>/dev/null || true)"
-    code="${code:-000}"
-    # curl sometimes prints 000000 when both status write and failure happen
-    code="$(printf '%s' "$code" | tr -cd '0-9' | tail -c 3)"
+    code="$(printf '%s' "${code:-000}" | tr -cd '0-9')"
+    # normalize 000000 -> 000
+    if [[ "$code" =~ 000+$ ]]; then code="000"; fi
+    if [[ ${#code} -gt 3 ]]; then code="${code: -3}"; fi
     [[ -z "$code" ]] && code="000"
 
     if [[ "$code" == "200" ]]; then
       log "API is up (attempt ${i}/${max_attempts}) — /up=200"
       return 0
+    fi
+
+    # App up but nginx still 000/502 — bounce nginx once
+    if [[ "$nginx_recreated" -eq 0 ]] && app_is_up && [[ "$i" -ge 6 ]]; then
+      warn "App is Up but /up=${code} — recreating nginx"
+      "${COMPOSE[@]}" up -d --force-recreate --no-deps nginx || true
+      nginx_recreated=1
+      sleep 3
+      continue
     fi
 
     if (( i % 3 == 0 )); then
@@ -452,22 +501,38 @@ wait_for_api() {
 
   warn "API liveness timed out on ${API_UP_URL}"
   "${COMPOSE[@]}" ps || true
-  "${COMPOSE[@]}" logs app --tail 80 || true
-  "${COMPOSE[@]}" logs nginx --tail 30 || true
+  "${COMPOSE[@]}" logs app --tail 100 || true
+  "${COMPOSE[@]}" logs nginx --tail 40 || true
   return 1
 }
 
-# Always start with RUN_SEEDER=false in the running containers so entrypoint can't die on seed.
-# Seeding is done below via artisan after /up is healthy.
-log "Ensuring stack is up (migrations in entrypoint are non-fatal)"
+log "Preparing backend vendor + DB password sync"
+ensure_backend_vendor
+sync_backend_db_password
+rm -f "$ROOT/backend/bootstrap/cache/config.php" \
+  "$ROOT/backend/bootstrap/cache/routes-v7.php" \
+  "$ROOT/backend/bootstrap/cache/routes.php" 2>/dev/null || true
+
+log "Starting Docker stack"
 (
   cd "$ROOT/docker"
-  # Temporarily force no seeder in compose env for this up
   RUN_SEEDER=false "${COMPOSE[@]}" up -d --build --scale "queue=${QUEUE_SCALE}"
 )
 
 if ! wait_for_api 45; then
-  die "API did not become healthy. Common fix: DB_PASSWORD in docker/.env must match the existing MySQL data volume. Then: docker compose logs app --tail 100"
+  die "API did not become healthy.
+
+Try these on the server:
+  cd $ROOT/docker
+  docker compose logs app --tail 100
+  docker compose ps
+
+If DB auth fails, either set DB_PASSWORD in docker/.env + backend/.env to the
+ORIGINAL MySQL volume password, or reset the volume (DESTROYS DATA):
+  docker compose down
+  sudo rm -rf ${DATA_PATH}/mysql/*
+  docker compose up -d
+"
 fi
 
 # Seed / ensure admin after API is alive

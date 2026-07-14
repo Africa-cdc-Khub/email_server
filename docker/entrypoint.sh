@@ -11,11 +11,25 @@ export REDIS_CLIENT="${REDIS_CLIENT:-predis}"
 echo "==> Entry role=${CONTAINER_ROLE:-app} env=${APP_ENV:-unknown} redis_client=${REDIS_CLIENT}"
 
 if [ ! -f vendor/autoload.php ]; then
-  echo "==> Installing Composer dependencies..."
-  composer install --no-dev --optimize-autoloader --no-interaction || {
-    echo "ERROR: composer install failed" >&2
-    exit 1
-  }
+  if [ "$CONTAINER_ROLE" = "queue" ]; then
+    echo "==> Waiting for vendor/ (installed by setup or app)..."
+    i=1
+    while [ "$i" -le 90 ]; do
+      [ -f vendor/autoload.php ] && break
+      i=$((i + 1))
+      sleep 2
+    done
+    if [ ! -f vendor/autoload.php ]; then
+      echo "ERROR: vendor/autoload.php still missing after wait" >&2
+      exit 1
+    fi
+  else
+    echo "==> Installing Composer dependencies..."
+    composer install --no-dev --optimize-autoloader --no-interaction || {
+      echo "ERROR: composer install failed" >&2
+      exit 1
+    }
+  fi
 else
   echo "Vendor present, skipping composer install."
 fi
