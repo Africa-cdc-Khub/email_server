@@ -46,7 +46,7 @@ if [ "$CONTAINER_ROLE" != "queue" ]; then
   php artisan migrate --force
   php artisan storage:link --force 2>/dev/null || true
 
-  if [ "${RUN_SEEDER:-true}" = "true" ] && [ "$APP_ENV" != "production" ]; then
+  if [ "${RUN_SEEDER:-false}" = "true" ]; then
     php artisan db:seed --force
   fi
 
