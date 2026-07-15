@@ -41,13 +41,31 @@ class EmailProviderController extends Controller
     public function store(StoreEmailProviderRequest $request): JsonResponse
     {
         $data = $request->validated();
-        $data['slug'] = $data['slug'] ?? Str::slug($data['name']);
+        $data['slug'] = $this->uniqueSlug($data['slug'] ?? null, $data['name']);
+        $data['config'] = $data['config'] ?? [];
 
         if (! empty($data['is_default'])) {
             EmailProvider::query()->update(['is_default' => false]);
         }
 
-        $provider = EmailProvider::query()->create($data);
+        try {
+            $provider = EmailProvider::query()->create($data);
+        } catch (\Illuminate\Encryption\MissingAppKeyException $e) {
+            report($e);
+
+            return response()->json([
+                'message' => 'Server misconfiguration: APP_KEY is missing. Providers store encrypted credentials and cannot be saved until APP_KEY is set in backend/.env, then recreate the app container.',
+            ], 500);
+        } catch (\RuntimeException $e) {
+            if (str_contains($e->getMessage(), 'No application encryption key')) {
+                report($e);
+
+                return response()->json([
+                    'message' => 'Server misconfiguration: APP_KEY is missing. Run deploy/fix-app-key.sh on the server.',
+                ], 500);
+            }
+            throw $e;
+        }
 
         return response()->json(['data' => $this->transform($provider)], 201);
     }
@@ -187,5 +205,18 @@ class EmailProviderController extends Controller
             ],
             EmailDriver::Log => [],
         };
+    }
+
+    private function uniqueSlug(?string $slug, string $name): string
+    {
+        $base = Str::slug($slug ?: $name) ?: 'provider';
+        $candidate = $base;
+        $i = 1;
+        while (EmailProvider::query()->where('slug', $candidate)->exists()) {
+            $candidate = $base.'-'.$i;
+            $i++;
+        }
+
+        return $candidate;
     }
 }

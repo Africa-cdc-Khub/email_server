@@ -15,6 +15,7 @@ class HealthController extends Controller
     {
         $checks = [
             'app' => 'ok',
+            'app_key' => $this->checkAppKey(),
             'database' => $this->checkDatabase(),
             'redis' => $this->checkRedis(),
             'queue' => $this->checkQueue(),
@@ -23,13 +24,39 @@ class HealthController extends Controller
 
         $healthy = collect($checks)
             ->except('app')
-            ->every(fn (array $check) => $check['status'] === 'ok');
+            ->every(fn (array|string $check) => is_array($check) ? $check['status'] === 'ok' : $check === 'ok');
 
         return response()->json([
             'status' => $healthy ? 'healthy' : 'degraded',
             'checks' => $checks,
             'timestamp' => now()->toIso8601String(),
         ], $healthy ? 200 : 503);
+    }
+
+    /**
+     * @return array{status: string, message?: string}
+     */
+    private function checkAppKey(): array
+    {
+        $key = (string) config('app.key', '');
+        if ($key === '' || ! str_starts_with($key, 'base64:')) {
+            return [
+                'status' => 'error',
+                'message' => 'APP_KEY missing — provider/integration secrets cannot be encrypted. Set APP_KEY in backend/.env and recreate the app container.',
+            ];
+        }
+
+        try {
+            // Prove encrypt/decrypt works (same path used by email_providers.config)
+            $cipher = encrypt('health-probe');
+            if (decrypt($cipher) !== 'health-probe') {
+                return ['status' => 'error', 'message' => 'APP_KEY present but encrypt/decrypt failed'];
+            }
+
+            return ['status' => 'ok'];
+        } catch (Throwable $e) {
+            return ['status' => 'error', 'message' => $e->getMessage()];
+        }
     }
 
     /**

@@ -5,6 +5,7 @@ import FormField from '@/components/forms/FormField.vue'
 import PageHeader from '@/components/shared/PageHeader.vue'
 import ParentCard from '@/components/shared/ParentCard.vue'
 import { api } from '@/lib/api'
+import { apiErrorMessage } from '@/lib/apiError'
 
 type DriverField = {
   key: string
@@ -28,7 +29,7 @@ const saving = ref(false)
 const testTo = ref('')
 const testing = ref(false)
 const message = ref('')
-
+const error = ref('')
 const form = ref({
   name: '',
   driver: 'exchange',
@@ -46,6 +47,14 @@ const activeDriver = computed(() => drivers.value.find((d) => d.value === form.v
 async function loadDrivers() {
   const res = await api.get('/admin/email-providers/drivers')
   drivers.value = res.data.data
+  // Apply driver field defaults once on create
+  if (!isEdit.value && activeDriver.value) {
+    for (const field of activeDriver.value.fields) {
+      if (field.default !== undefined && form.value.config[field.key] === undefined) {
+        form.value.config[field.key] = field.default
+      }
+    }
+  }
 }
 
 async function loadProvider() {
@@ -68,6 +77,7 @@ async function loadProvider() {
 async function save() {
   saving.value = true
   message.value = ''
+  error.value = ''
   try {
     const payload = { ...form.value }
     if (isEdit.value && id.value) {
@@ -78,6 +88,8 @@ async function save() {
       message.value = 'Provider created.'
       await router.push({ name: 'providers' })
     }
+  } catch (err) {
+    error.value = apiErrorMessage(err, 'Could not save provider.')
   } finally {
     saving.value = false
   }
@@ -86,9 +98,13 @@ async function save() {
 async function sendTest() {
   if (!isEdit.value || !id.value || !testTo.value) return
   testing.value = true
+  message.value = ''
+  error.value = ''
   try {
     await api.post(`/admin/email-providers/${id.value}/test`, { to: testTo.value })
     message.value = `Test email sent to ${testTo.value}`
+  } catch (err) {
+    error.value = apiErrorMessage(err, 'Test email failed.')
   } finally {
     testing.value = false
   }
@@ -106,6 +122,7 @@ onMounted(async () => {
   <div>
     <PageHeader :title="isEdit ? 'Edit provider' : 'New provider'" />
     <v-alert v-if="message" type="success" variant="tonal" class="mb-4">{{ message }}</v-alert>
+    <v-alert v-if="error" type="error" variant="tonal" class="mb-4">{{ error }}</v-alert>
 
     <ParentCard :title="isEdit ? 'Provider settings' : 'New provider'">
       <v-row>
