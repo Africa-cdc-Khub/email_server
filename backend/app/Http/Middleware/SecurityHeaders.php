@@ -44,7 +44,8 @@ class SecurityHeaders
         $images = "img-src 'self' data: blob:;";
 
         if ($this->isApiDocsRequest($request)) {
-            return "{$base} script-src 'self' https://unpkg.com; style-src 'self' 'unsafe-inline' https://unpkg.com https://fonts.googleapis.com; {$fonts} {$images} connect-src 'self';";
+            // Self-hosted /docs-assets/* — works with host Nginx CSP (script-src 'self')
+            return "{$base} script-src 'self'; style-src 'self' 'unsafe-inline'; {$fonts} {$images} connect-src 'self';";
         }
 
         return "{$base} script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; {$fonts} {$images} connect-src 'self';";

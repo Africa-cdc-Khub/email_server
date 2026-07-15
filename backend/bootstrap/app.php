@@ -39,24 +39,12 @@ return Application::configure(basePath: dirname(__DIR__))
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Email Server API — Swagger</title>
-  <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5.18.2/swagger-ui.css">
+  <link rel="stylesheet" href="/docs-assets/swagger-ui.css">
 </head>
 <body>
 <div id="swagger-ui"></div>
-<script src="https://unpkg.com/swagger-ui-dist@5.18.2/swagger-ui-bundle.js"></script>
-<script>
-  window.onload = () => {
-    SwaggerUIBundle({
-      url: '/api/docs.json',
-      dom_id: '#swagger-ui',
-      deepLinking: true,
-      presets: [SwaggerUIBundle.presets.apis, SwaggerUIBundle.SwaggerUIStandalonePreset],
-      layout: 'BaseLayout',
-      persistAuthorization: true,
-      tryItOutEnabled: true,
-    });
-  };
-</script>
+<script src="/docs-assets/swagger-ui-bundle.js"></script>
+<script src="/docs-assets/init.js"></script>
 </body>
 </html>
 HTML, 200)->header('Content-Type', 'text/html; charset=UTF-8');

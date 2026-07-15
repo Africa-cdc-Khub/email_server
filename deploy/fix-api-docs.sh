@@ -38,15 +38,43 @@ rm -f backend/bootstrap/cache/config.php \
   backend/bootstrap/cache/routes.php \
   backend/bootstrap/cache/routes-v7.php 2>/dev/null || true
 
-echo "==> 4) Recreate app (loads new bootstrap + entrypoint APP_KEY check)"
-cd docker
-docker compose up -d --force-recreate --no-deps app
+echo "==> 4) Install host Nginx site (adds /docs-assets/ proxy)"
+if [[ -f "$ROOT/deploy/configs/nginx-notifications.africacdc.org.conf" ]]; then
+  sudo cp "$ROOT/deploy/configs/nginx-security-headers.conf" \
+    /etc/nginx/snippets/email-server-security-headers.conf 2>/dev/null || true
+  TMP="$(mktemp)"
+  sed "s/notifications\.africacdc\.org/${DOMAIN}/g" \
+    "$ROOT/deploy/configs/nginx-notifications.africacdc.org.conf" > "$TMP"
+  sudo cp "$TMP" "/etc/nginx/sites-available/${DOMAIN}.conf"
+  rm -f "$TMP"
+  sudo ln -sfn "/etc/nginx/sites-available/${DOMAIN}.conf" \
+    "/etc/nginx/sites-enabled/${DOMAIN}.conf"
+  if sudo nginx -t; then
+    sudo systemctl reload nginx
+    echo "    nginx reloaded"
+  else
+    echo "WARNING: nginx -t failed — check site config" >&2
+  fi
+  if [[ -d "/etc/letsencrypt/live/${DOMAIN}" ]]; then
+    sudo certbot --nginx -d "$DOMAIN" --agree-tos --redirect \
+      --non-interactive --keep-until-expiring \
+      -m "${CERTBOT_EMAIL:-andrewa@africacdc.org}" || true
+  fi
+fi
+
+echo "==> 5) Recreate app + nginx + frontend"
+cd "$ROOT/docker"
+docker compose up -d --force-recreate --no-deps app nginx frontend
 sleep 5
 
 docker compose exec -T app php artisan config:clear || true
 docker compose exec -T app php artisan route:clear || true
 
-echo "==> 5) Verify"
+echo "==> 6) Verify docs-assets"
+curl -sI "https://${DOMAIN}/docs-assets/init.js" | head -n 5 || true
+curl -sI "https://${DOMAIN}/docs-assets/swagger-ui-bundle.js" | head -n 5 || true
+
+echo "==> 7) Verify APP_KEY + route"
 docker compose exec -T app grep -E '^APP_KEY=base64:' .env | sed 's/=.*/=[ok]/' || {
   echo "ERROR: APP_KEY still missing inside container" >&2
   exit 1
@@ -54,20 +82,9 @@ docker compose exec -T app grep -E '^APP_KEY=base64:' .env | sed 's/=.*/=[ok]/' 
 docker compose exec -T app printenv API_DOCS_ENABLED || true
 docker compose exec -T app php artisan route:list --path=documentation || true
 
-echo "==> 6) Internal probe"
-docker compose exec -T app php -r '
-require "vendor/autoload.php";
-$app = require "bootstrap/app.php";
-$kernel = $app->make(Illuminate\Contracts\Http\Kernel::class);
-$req = Illuminate\Http\Request::create("/api/documentation", "GET", [], [], [], ["HTTP_ACCEPT"=>"text/html"]);
-$res = $kernel->handle($req);
-echo "status=".$res->getStatusCode()." type=".$res->headers->get("Content-Type").PHP_EOL;
-echo substr((string)$res->getContent(), 0, 120).PHP_EOL;
-' 2>&1 || true
-
-echo "==> 7) Public probe"
+echo "==> 8) Public probe"
 curl -sI "https://${DOMAIN}/api/documentation" | head -n 8 || true
 echo
-curl -s "https://${DOMAIN}/api/documentation" | head -c 150 || true
+curl -s "https://${DOMAIN}/api/documentation" | head -c 250 || true
 echo
-echo "Done."
+echo "Done. Hard-refresh the browser (Ctrl/Cmd+Shift+R)."
