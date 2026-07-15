@@ -81,20 +81,27 @@ fi
 # Ensure APP_KEY without artisan (artisan --version itself needs the key).
 # flock avoids races when app + multiple queue workers start together.
 ensure_app_key() {
-  if grep -q '^APP_KEY=base64:' .env 2>/dev/null; then
+  if grep -qE '^APP_KEY=base64:.+' .env 2>/dev/null; then
     return 0
   fi
 
-  echo "==> Generating APP_KEY (no artisan)..."
+  echo "==> Generating APP_KEY (missing or empty in backend/.env)..."
   KEY="$(php -r 'echo "base64:".base64_encode(random_bytes(32));' 2>/dev/null || true)"
   if [ -z "$KEY" ]; then
     KEY="base64:$(openssl rand -base64 32 | tr -d '\n')"
   fi
 
-  grep -v '^APP_KEY=' .env > .env.appkey.tmp 2>/dev/null || cp .env .env.appkey.tmp
+  if ! grep -v '^APP_KEY=' .env > .env.appkey.tmp 2>/dev/null; then
+    cp .env .env.appkey.tmp
+  fi
   printf 'APP_KEY=%s\n' "$KEY" >> .env.appkey.tmp
-  mv .env.appkey.tmp .env
+  if ! mv .env.appkey.tmp .env 2>/dev/null; then
+    echo "ERROR: cannot write APP_KEY to .env (check permissions on backend/.env)" >&2
+    exit 1
+  fi
   chmod 600 .env 2>/dev/null || true
+
+  rm -f bootstrap/cache/config.php bootstrap/cache/services.php 2>/dev/null || true
 }
 
 if command -v flock >/dev/null 2>&1; then
@@ -106,7 +113,7 @@ else
   ensure_app_key
 fi
 
-if ! grep -q '^APP_KEY=base64:' .env 2>/dev/null; then
+if ! grep -qE '^APP_KEY=base64:.+' .env 2>/dev/null; then
   echo "ERROR: APP_KEY still missing after generation" >&2
   exit 1
 fi
