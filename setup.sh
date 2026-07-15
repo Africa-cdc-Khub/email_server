@@ -1110,16 +1110,16 @@ log "Ensuring Laravel storage:link in app container"
 log "Generating OpenAPI spec for /api/docs.json"
 "${COMPOSE[@]}" exec -T app php -r '
   require "vendor/autoload.php";
-  \$app = require "bootstrap/app.php";
-  \$app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
+  $app = require "bootstrap/app.php";
+  $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
   try {
-    \$openapi = OpenApi\Generator::scan([app_path("OpenApi")]);
-    \$dir = storage_path("api-docs");
-    if (!is_dir(\$dir)) { mkdir(\$dir, 0775, true); }
-    file_put_contents(\$dir."/openapi.json", \$openapi->toJson());
+    $openapi = OpenApi\Generator::scan([app_path("OpenApi")]);
+    $dir = storage_path("api-docs");
+    if (!is_dir($dir)) { mkdir($dir, 0775, true); }
+    file_put_contents($dir."/openapi.json", $openapi->toJson());
     echo "openapi_ok\n";
-  } catch (Throwable \$e) {
-    fwrite(STDERR, \$e->getMessage().PHP_EOL);
+  } catch (Throwable $e) {
+    fwrite(STDERR, $e->getMessage().PHP_EOL);
     exit(1);
   }
 ' && log "OpenAPI cached at storage/api-docs/openapi.json" \

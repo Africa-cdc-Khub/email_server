@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useTheme } from 'vuetify'
 import { useBrandingStore } from '@/stores/branding'
 
@@ -14,13 +14,24 @@ const props = withDefaults(
 
 const theme = useTheme()
 const branding = useBrandingStore()
+const failed = ref(false)
 
-const logoSrc = computed(() => {
+const preferredSrc = computed(() => {
   const url = theme.global.current.value.dark
     ? branding.branding.logo_dark_url ?? branding.branding.logo_url
     : branding.branding.logo_url
   return url ?? '/branding-logo.png'
 })
+
+const logoSrc = computed(() => (failed.value ? '/branding-logo.png' : preferredSrc.value))
+
+watch(preferredSrc, () => {
+  failed.value = false
+})
+
+function onError() {
+  if (!failed.value) failed.value = true
+}
 </script>
 
 <template>
@@ -29,6 +40,7 @@ const logoSrc = computed(() => {
     :alt="branding.branding.app_name"
     class="app-logo"
     :class="{ 'app-logo--inverse': inverse }"
+    @error="onError"
   />
 </template>
 

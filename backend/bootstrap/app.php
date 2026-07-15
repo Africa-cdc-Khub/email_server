@@ -34,7 +34,14 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->append(\App\Http\Middleware\SecurityHeaders::class);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
+        // /api/documentation is an HTML page — do not force JSON error envelopes for it
         $exceptions->shouldRenderJsonWhen(
-            fn (Request $request) => $request->is('api/*') || $request->expectsJson(),
+            function (Request $request): bool {
+                if ($request->is('api/documentation', 'docs')) {
+                    return false;
+                }
+
+                return $request->is('api/*') || $request->expectsJson();
+            },
         );
     })->create();

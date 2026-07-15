@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Facades\Storage;
 
 class BrandingSetting extends Model
 {
@@ -76,10 +77,17 @@ class BrandingSetting extends Model
             return $path;
         }
 
-        // Same-origin relative URL so host Nginx can proxy /storage/ → API
-        // (absolute APP_URL alone does not help if /storage hits the SPA).
         $normalized = ltrim(str_replace('\\', '/', $path), '/');
+        if ($normalized === '' || str_contains($normalized, '..')) {
+            return null;
+        }
 
-        return '/storage/'.$normalized;
+        // Prefer API-proxied URL (works even when host Nginx /storage/ → SPA is misconfigured).
+        // Only expose the URL when the file actually exists on the public disk.
+        if (! Storage::disk('public')->exists($normalized)) {
+            return null;
+        }
+
+        return '/api/v1/branding/assets/'.$normalized;
     }
 }

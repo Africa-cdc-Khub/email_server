@@ -45,14 +45,17 @@ if [[ -d "/etc/letsencrypt/live/${DOMAIN}" ]]; then
     -m "${CERTBOT_EMAIL:-andrewa@africacdc.org}" || true
 fi
 
-echo "==> Recreating frontend + nginx containers (frontend.conf /storage proxy)"
+echo "==> Recreating app + frontend + nginx (API asset route + /storage proxy)"
 cd "${ROOT}/docker"
-docker compose up -d --force-recreate --no-deps frontend nginx
+docker compose up -d --force-recreate --no-deps app frontend nginx
 docker compose exec -T app php artisan storage:link --force || true
 docker compose exec -T app php artisan config:clear || true
+docker compose exec -T app php artisan route:clear || true
 
-echo "==> Probe /storage (expect 200 or 404 for a real file — not SPA HTML)"
-curl -sI "https://${DOMAIN}/storage/" | head -n 5 || true
+echo "==> Probe branding asset via API (should be image/png)"
+curl -sI "https://${DOMAIN}/api/v1/branding/assets/branding/logo.png" | head -n 8 || true
+echo
+curl -s "https://${DOMAIN}/api/v1/branding" | head -c 400 || true
 echo
 echo "Done. Re-upload branding logos if files are missing under:"
 echo "  ${DATA_PATH}/storage/app/public/branding/"
