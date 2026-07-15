@@ -38,16 +38,18 @@ class HealthController extends Controller
      */
     private function checkAppKey(): array
     {
-        $key = (string) config('app.key', '');
-        if ($key === '' || ! str_starts_with($key, 'base64:')) {
-            return [
-                'status' => 'error',
-                'message' => 'APP_KEY missing — provider/integration secrets cannot be encrypted. Set APP_KEY in backend/.env and recreate the app container.',
-            ];
-        }
-
         try {
-            // Prove encrypt/decrypt works (same path used by email_providers.config)
+            $configKey = (string) config('app.key', '');
+            $envKey = (string) env('APP_KEY', '');
+
+            if ($configKey === '' && $envKey === '') {
+                return [
+                    'status' => 'error',
+                    'message' => 'APP_KEY missing — provider secrets cannot be encrypted. Run deploy/fix-app-key.sh (and remove duplicate/empty APP_KEY= lines from backend/.env).',
+                ];
+            }
+
+            // Real proof — same path as EmailProvider config encryption
             $cipher = encrypt('health-probe');
             if (decrypt($cipher) !== 'health-probe') {
                 return ['status' => 'error', 'message' => 'APP_KEY present but encrypt/decrypt failed'];
@@ -55,7 +57,10 @@ class HealthController extends Controller
 
             return ['status' => 'ok'];
         } catch (Throwable $e) {
-            return ['status' => 'error', 'message' => $e->getMessage()];
+            return [
+                'status' => 'error',
+                'message' => $e->getMessage(),
+            ];
         }
     }
 

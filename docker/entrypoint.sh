@@ -80,18 +80,25 @@ fi
 
 # Ensure APP_KEY without artisan (artisan --version itself needs the key).
 # flock avoids races when app + multiple queue workers start together.
+#
+# Important: Dotenv uses the FIRST APP_KEY= line. An empty APP_KEY= above a
+# real base64 key makes config('app.key') empty while grep still "finds" a key.
 ensure_app_key() {
-  if grep -qE '^APP_KEY=base64:.+' .env 2>/dev/null; then
-    return 0
-  fi
+  # Prefer a real base64 key if any line has one
+  KEY="$(grep -E '^APP_KEY=base64:.+' .env 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"' | tr -d "'" | tr -d '\r' || true)"
 
-  echo "==> Generating APP_KEY (missing or empty in backend/.env)..."
-  KEY="$(php -r 'echo "base64:".base64_encode(random_bytes(32));' 2>/dev/null || true)"
   if [ -z "$KEY" ]; then
-    KEY="base64:$(openssl rand -base64 32 | tr -d '\n')"
+    echo "==> Generating APP_KEY (missing or empty in backend/.env)..."
+    KEY="$(php -r 'echo "base64:".base64_encode(random_bytes(32));' 2>/dev/null || true)"
+    if [ -z "$KEY" ]; then
+      KEY="base64:$(openssl rand -base64 32 | tr -d '\n')"
+    fi
+  else
+    echo "==> APP_KEY present — normalizing to a single .env line"
   fi
 
-  if ! grep -v '^APP_KEY=' .env > .env.appkey.tmp 2>/dev/null; then
+  # Collapse every APP_KEY= line to exactly one valid value
+  if ! grep -vE '^APP_KEY=' .env > .env.appkey.tmp 2>/dev/null; then
     cp .env .env.appkey.tmp
   fi
   printf 'APP_KEY=%s\n' "$KEY" >> .env.appkey.tmp
@@ -101,7 +108,11 @@ ensure_app_key() {
   fi
   chmod 600 .env 2>/dev/null || true
 
-  rm -f bootstrap/cache/config.php bootstrap/cache/services.php 2>/dev/null || true
+  # Export so php-fpm inherits it (empty process env would otherwise override .env)
+  export APP_KEY="$KEY"
+
+  rm -f bootstrap/cache/config.php bootstrap/cache/services.php \
+    bootstrap/cache/routes.php bootstrap/cache/routes-v7.php 2>/dev/null || true
 }
 
 if command -v flock >/dev/null 2>&1; then
@@ -113,10 +124,16 @@ else
   ensure_app_key
 fi
 
-if ! grep -qE '^APP_KEY=base64:.+' .env 2>/dev/null; then
+# Re-export after flock subshell (subshell export does not affect parent)
+APP_KEY="$(grep -E '^APP_KEY=base64:.+' .env 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"' | tr -d "'" | tr -d '\r' || true)"
+export APP_KEY
+
+if [ -z "$APP_KEY" ]; then
   echo "ERROR: APP_KEY still missing after generation" >&2
   exit 1
 fi
+
+echo "==> APP_KEY exported for php-fpm (${#APP_KEY} chars)"
 
 dump_artisan_error() {
   echo "ERROR: php artisan failed to boot — last output:" >&2
