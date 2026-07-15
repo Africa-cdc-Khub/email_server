@@ -47,6 +47,35 @@ class EmailProvider extends Model
 
     public function configValue(string $key, mixed $default = null): mixed
     {
-        return data_get($this->config ?? [], $key, $default);
+        return data_get($this->safeConfig(), $key, $default);
+    }
+
+    /**
+     * Read encrypted config without killing list/show when APP_KEY changed.
+     *
+     * @return array<string, mixed>
+     */
+    public function safeConfig(): array
+    {
+        try {
+            $config = $this->config;
+
+            return is_array($config) ? $config : [];
+        } catch (\Throwable $e) {
+            report($e);
+
+            return [];
+        }
+    }
+
+    public function configIsReadable(): bool
+    {
+        try {
+            $this->config;
+
+            return true;
+        } catch (\Throwable) {
+            return false;
+        }
     }
 }

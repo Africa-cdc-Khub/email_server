@@ -22,7 +22,37 @@ class EmailProviderController extends Controller
             ->orderBy('priority')
             ->orderBy('name')
             ->get()
-            ->map(fn (EmailProvider $provider) => $this->transform($provider));
+            ->map(function (EmailProvider $provider) {
+                try {
+                    return $this->transform($provider);
+                } catch (\Throwable $e) {
+                    report($e);
+
+                    // Never fail the whole list because one row's secrets won't decrypt
+                    return [
+                        'id' => $provider->id,
+                        'name' => $provider->name,
+                        'slug' => $provider->slug,
+                        'driver' => $provider->driver instanceof EmailDriver
+                            ? $provider->driver->value
+                            : (string) $provider->getRawOriginal('driver'),
+                        'driver_label' => $provider->driver instanceof EmailDriver
+                            ? $provider->driver->label()
+                            : (string) $provider->getRawOriginal('driver'),
+                        'config' => [],
+                        'config_corrupt' => true,
+                        'from_address' => $provider->from_address,
+                        'from_name' => $provider->from_name,
+                        'is_default' => (bool) $provider->is_default,
+                        'is_active' => (bool) $provider->is_active,
+                        'priority' => (int) $provider->priority,
+                        'description' => $provider->description,
+                        'created_at' => $provider->created_at,
+                        'updated_at' => $provider->updated_at,
+                    ];
+                }
+            })
+            ->values();
 
         return response()->json(['data' => $providers]);
     }
@@ -84,7 +114,7 @@ class EmailProviderController extends Controller
         }
 
         if (isset($data['config']) && is_array($data['config'])) {
-            $data['config'] = array_merge($emailProvider->config ?? [], array_filter(
+            $data['config'] = array_merge($emailProvider->safeConfig(), array_filter(
                 $data['config'],
                 fn ($value) => $value !== null && $value !== ''
             ));
@@ -131,7 +161,8 @@ class EmailProviderController extends Controller
      */
     private function transform(EmailProvider $provider, bool $revealSecrets = false): array
     {
-        $config = $provider->config ?? [];
+        $readable = $provider->configIsReadable();
+        $config = $provider->safeConfig();
 
         if (! $revealSecrets) {
             $config = $this->maskSecrets($config);
@@ -144,6 +175,7 @@ class EmailProviderController extends Controller
             'driver' => $provider->driver->value,
             'driver_label' => $provider->driver->label(),
             'config' => $config,
+            'config_corrupt' => ! $readable,
             'from_address' => $provider->from_address,
             'from_name' => $provider->from_name,
             'is_default' => $provider->is_default,
