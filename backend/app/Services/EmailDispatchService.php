@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Enums\EmailDriver;
 use App\Exceptions\PermanentEmailDeliveryException;
 use App\Jobs\SendEmailJob;
 use App\Models\EmailLog;
@@ -17,6 +18,7 @@ class EmailDispatchService
     public function __construct(
         private readonly DynamicMailConfigService $mailConfig,
         private readonly EmailBrandingService $branding,
+        private readonly PhpMailerSmtpMailer $phpMailerSmtp,
     ) {}
 
     /**
@@ -267,32 +269,46 @@ class EmailDispatchService
     ): EmailLog {
         $provider = $this->mailConfig->resolveProvider($providerId);
         $this->mailConfig->purgeExchangeClient();
-        $mailer = $this->mailConfig->applyProvider($provider);
+        $from = $this->mailConfig->resolveFromIdentity($provider);
 
         try {
-            Mail::mailer($mailer)->send([], [], function (Message $message) use ($to, $subject, $body, $isHtml, $provider, $cc, $bcc, $fromName) {
-                $from = $this->mailConfig->resolveFromIdentity($provider);
+            if ($provider->driver === EmailDriver::Smtp) {
+                $this->phpMailerSmtp->send(
+                    provider: $provider,
+                    to: $to,
+                    subject: $subject,
+                    body: $body,
+                    isHtml: $isHtml,
+                    fromAddress: (string) ($from['address'] ?? ''),
+                    fromName: $fromName ?: (string) ($from['name'] ?? ''),
+                    cc: $cc,
+                    bcc: $bcc,
+                );
+            } else {
+                $mailer = $this->mailConfig->applyProvider($provider);
 
-                $message->to($to)->subject($subject);
+                Mail::mailer($mailer)->send([], [], function (Message $message) use ($to, $subject, $body, $isHtml, $from, $cc, $bcc, $fromName) {
+                    $message->to($to)->subject($subject);
 
-                if (! empty($from['address'])) {
-                    $message->from($from['address'], $fromName ?: $from['name']);
-                }
+                    if (! empty($from['address'])) {
+                        $message->from($from['address'], $fromName ?: $from['name']);
+                    }
 
-                foreach ($cc as $address) {
-                    $message->cc($address);
-                }
+                    foreach ($cc as $address) {
+                        $message->cc($address);
+                    }
 
-                foreach ($bcc as $address) {
-                    $message->bcc($address);
-                }
+                    foreach ($bcc as $address) {
+                        $message->bcc($address);
+                    }
 
-                if ($isHtml) {
-                    $message->html($body);
-                } else {
-                    $message->text($body);
-                }
-            });
+                    if ($isHtml) {
+                        $message->html($body);
+                    } else {
+                        $message->text($body);
+                    }
+                });
+            }
 
             $log->update(['status' => 'sent', 'error_message' => null]);
         } catch (Throwable $e) {

@@ -55,6 +55,23 @@ class DynamicMailConfigService
      */
     public function resolveFromIdentity(EmailProvider $provider): array
     {
+        // SMTP should prefer the provider's own From — hosts often reject
+        // MAIL_FROM when it doesn't match the authenticated mailbox.
+        if ($provider->driver === EmailDriver::Smtp) {
+            return [
+                'address' => ConfigValue::firstNonEmpty(
+                    $provider->from_address,
+                    config('mail.from.address'),
+                    config('exchange-email.from_email'),
+                ),
+                'name' => (string) (ConfigValue::firstNonEmpty(
+                    $provider->from_name,
+                    config('mail.from.name'),
+                    config('exchange-email.from_name'),
+                ) ?? $this->exchangeResolver->resolveFromName($provider)),
+            ];
+        }
+
         return [
             'address' => $this->exchangeResolver->resolveFromAddress($provider),
             'name' => $this->exchangeResolver->resolveFromName($provider),

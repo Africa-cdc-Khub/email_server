@@ -4,6 +4,7 @@ import FormField from '@/components/forms/FormField.vue'
 import PageHeader from '@/components/shared/PageHeader.vue'
 import ParentCard from '@/components/shared/ParentCard.vue'
 import { api } from '@/lib/api'
+import { apiErrorMessage } from '@/lib/apiError'
 
 type ProviderOption = { id: number; name: string; driver: string; is_default?: boolean }
 
@@ -65,8 +66,8 @@ async function sendMail() {
     form.value.body = ''
     form.value.cc = ''
     form.value.bcc = ''
-  } catch {
-    error.value = 'Failed to queue email. Check the form and try again.'
+  } catch (err) {
+    error.value = apiErrorMessage(err, 'Failed to queue email. Check the form and try again.')
   } finally {
     sending.value = false
   }
