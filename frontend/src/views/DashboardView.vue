@@ -6,6 +6,7 @@ import StatCard from '@/components/dashboard/StatCard.vue'
 import PageHeader from '@/components/shared/PageHeader.vue'
 import ParentCard from '@/components/shared/ParentCard.vue'
 import { api } from '@/lib/api'
+import { formatDateTime12h } from '@/lib/formatDate'
 import { useAuthStore } from '@/stores/auth'
 import { useBrandingStore } from '@/stores/branding'
 
@@ -162,6 +163,9 @@ onMounted(async () => {
             <v-chip size="small" :color="statusColor(item.status)" variant="tonal" class="text-capitalize">
               {{ item.status }}
             </v-chip>
+          </template>
+          <template #item.created_at="{ item }">
+            <span class="text-no-wrap">{{ formatDateTime12h(item.created_at) }}</span>
           </template>
           <template #item.subject="{ item }">
             <span class="text-truncate d-inline-block dashboard-table__subject">{{ item.subject }}</span>

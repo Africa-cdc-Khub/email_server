@@ -71,6 +71,10 @@ class EmailLog extends Model
      */
     public function toLogArray(): array
     {
+        $meta = $this->meta ?? [];
+        $hasBody = is_string($meta['body'] ?? null) && $meta['body'] !== '';
+        $canRetry = $hasBody && in_array($this->status, ['failed', 'pending'], true);
+
         return [
             'id' => $this->id,
             'to' => $this->to,
@@ -80,6 +84,7 @@ class EmailLog extends Model
             'error_message' => $this->error_message,
             'sending_system' => $this->sendingSystemLabel(),
             'source' => $this->sourceLabel(),
+            'can_retry' => $canRetry,
             'email_provider' => $this->emailProvider ? [
                 'id' => $this->emailProvider->id,
                 'name' => $this->emailProvider->name,
@@ -88,8 +93,9 @@ class EmailLog extends Model
                 'id' => $this->externalIntegration->id,
                 'name' => $this->externalIntegration->name,
             ] : null,
-            'created_at' => $this->created_at,
-            'updated_at' => $this->updated_at,
+            'external_integration_id' => $this->external_integration_id,
+            'created_at' => $this->created_at?->toIso8601String(),
+            'updated_at' => $this->updated_at?->toIso8601String(),
         ];
     }
 }

@@ -136,7 +136,16 @@ class EmailDispatchService
     ): EmailLog {
         $provider = $this->mailConfig->resolveProvider($providerId);
 
-        $meta = $source !== null ? ['source' => $source] : null;
+        $meta = [
+            'body' => $body,
+            'is_html' => $isHtml,
+            'cc' => $cc,
+            'bcc' => $bcc,
+        ];
+
+        if ($source !== null) {
+            $meta['source'] = $source;
+        }
 
         $log = EmailLog::query()->create([
             'email_provider_id' => $provider->id,
@@ -164,6 +173,71 @@ class EmailDispatchService
                 $this->mailConfig->resolveFromIdentity($provider)['name'],
             ),
         );
+    }
+
+    /**
+     * Re-queue a failed (or pending) email that still has its body stored in meta.
+     */
+    public function retry(EmailLog $log): EmailLog
+    {
+        if ($log->status === 'sent') {
+            throw new RuntimeException('This email was already sent successfully.');
+        }
+
+        $meta = $log->meta ?? [];
+        $body = (string) ($meta['body'] ?? '');
+
+        if ($body === '') {
+            throw new RuntimeException(
+                'This email cannot be resent because its body was not stored. Only queued deliveries can be retried.'
+            );
+        }
+
+        $log->update([
+            'status' => 'pending',
+            'error_message' => null,
+        ]);
+
+        SendEmailJob::dispatch($log->id);
+
+        return $log->fresh() ?? $log;
+    }
+
+    /**
+     * Re-queue all failed emails that still have a stored body.
+     * Optional client filter: external_integration_id or "none" for admin/internal.
+     *
+     * @return array{queued: int, skipped: int}
+     */
+    public function retryAllFailed(?string $externalIntegrationId = null): array
+    {
+        $query = EmailLog::query()
+            ->where('status', 'failed')
+            ->orderBy('id');
+
+        if ($externalIntegrationId !== null && $externalIntegrationId !== '') {
+            if ($externalIntegrationId === 'none' || $externalIntegrationId === '0') {
+                $query->whereNull('external_integration_id');
+            } else {
+                $query->where('external_integration_id', (int) $externalIntegrationId);
+            }
+        }
+
+        $queued = 0;
+        $skipped = 0;
+
+        $query->chunkById(100, function ($logs) use (&$queued, &$skipped) {
+            foreach ($logs as $log) {
+                try {
+                    $this->retry($log);
+                    $queued++;
+                } catch (RuntimeException) {
+                    $skipped++;
+                }
+            }
+        });
+
+        return ['queued' => $queued, 'skipped' => $skipped];
     }
 
     public function testProvider(EmailProvider $provider, string $to): EmailLog
