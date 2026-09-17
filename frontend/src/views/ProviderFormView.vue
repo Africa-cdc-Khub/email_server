@@ -34,6 +34,8 @@ const message = ref('')
 const error = ref('')
 /** Which secret fields already exist server-side (never returned in cleartext). */
 const storedSecrets = ref<Record<string, boolean>>({})
+/** True when server ciphertext cannot be decrypted (usually after APP_KEY rotation). */
+const configCorrupt = ref(false)
 const form = ref({
   name: '',
   driver: 'exchange',
@@ -77,6 +79,7 @@ async function loadProvider() {
   const res = await api.get(`/admin/email-providers/${id.value}`)
   const p = res.data.data
   storedSecrets.value = { ...(p.config_secrets ?? {}) }
+  configCorrupt.value = Boolean(p.config_corrupt)
 
   const config: Record<string, string | number> = { ...(p.config ?? {}) }
   // Secrets are never returned by the API — keep password fields empty.
@@ -133,6 +136,7 @@ async function save() {
     if (isEdit.value && id.value) {
       const res = await api.put(`/admin/email-providers/${id.value}`, payload)
       storedSecrets.value = { ...(res.data.data?.config_secrets ?? storedSecrets.value) }
+      configCorrupt.value = Boolean(res.data.data?.config_corrupt)
       // Clear password inputs after a successful save so secrets aren't left in DOM state.
       for (const key of SECRET_KEYS) {
         if (form.value.config[key] !== undefined) {
@@ -213,7 +217,11 @@ onMounted(async () => {
 
         <v-col cols="12" md="6" class="form-stack">
           <div class="text-subtitle-1 font-weight-bold mb-4">Connection settings</div>
-          <v-alert v-if="isEdit" type="info" variant="tonal" density="compact" class="mb-4">
+          <v-alert v-if="isEdit && configCorrupt" type="warning" variant="tonal" density="compact" class="mb-4">
+            Stored credentials cannot be decrypted (the server encryption key may have changed). Re-enter the password
+            or secret fields below, then save.
+          </v-alert>
+          <v-alert v-else-if="isEdit" type="info" variant="tonal" density="compact" class="mb-4">
             Credentials are encrypted on the server and are never shown in this form. Leave secret fields blank to keep
             existing values.
           </v-alert>

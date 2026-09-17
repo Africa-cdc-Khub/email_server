@@ -78,4 +78,24 @@ class EmailProvider extends Model
             return false;
         }
     }
+
+    /**
+     * Assign a new config payload without decrypting existing ciphertext.
+     *
+     * Eloquent's encrypted cast decrypts the original attribute when syncing
+     * dirty state — that throws "The MAC is invalid" after an APP_KEY change.
+     * Clearing the raw attribute first lets us re-encrypt fresh values.
+     *
+     * @param  array<string, mixed>  $config
+     */
+    public function setConfigSafely(array $config): void
+    {
+        if (! $this->configIsReadable()) {
+            $attributes = $this->getAttributes();
+            $attributes['config'] = null;
+            $this->setRawAttributes($attributes, true);
+        }
+
+        $this->config = $config;
+    }
 }

@@ -118,13 +118,41 @@ class EmailProviderController extends Controller
             EmailProvider::query()->where('id', '!=', $emailProvider->id)->update(['is_default' => false]);
         }
 
+        $configIncoming = null;
         if (isset($data['config']) && is_array($data['config'])) {
             // Never overwrite stored secrets with blanks or UI placeholders.
-            $incoming = $this->stripUnsetSecrets($data['config']);
-            $data['config'] = array_merge($emailProvider->safeConfig(), $incoming);
+            $configIncoming = $this->stripUnsetSecrets($data['config']);
+            unset($data['config']);
         }
 
-        $emailProvider->update($data);
+        try {
+            if ($configIncoming !== null) {
+                $emailProvider->setConfigSafely(array_merge($emailProvider->safeConfig(), $configIncoming));
+            }
+            $emailProvider->fill($data);
+            $emailProvider->save();
+        } catch (\Illuminate\Encryption\MissingAppKeyException $e) {
+            report($e);
+
+            return response()->json([
+                'message' => 'Server misconfiguration: APP_KEY is missing. Providers store encrypted credentials and cannot be saved until APP_KEY is set in backend/.env, then recreate the app container.',
+            ], 500);
+        } catch (\RuntimeException $e) {
+            if (str_contains($e->getMessage(), 'No application encryption key')) {
+                report($e);
+
+                return response()->json([
+                    'message' => 'Server misconfiguration: APP_KEY is missing. Run deploy/fix-app-key.sh on the server.',
+                ], 500);
+            }
+            throw $e;
+        } catch (\Illuminate\Contracts\Encryption\DecryptException $e) {
+            report($e);
+
+            return response()->json([
+                'message' => 'Stored credentials cannot be decrypted (APP_KEY may have changed). Re-enter the password/secret fields and save again.',
+            ], 422);
+        }
 
         return response()->json(['data' => $this->transform($emailProvider->fresh())]);
     }
