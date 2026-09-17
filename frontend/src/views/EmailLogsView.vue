@@ -4,6 +4,7 @@ import PageHeader from '@/components/shared/PageHeader.vue'
 import { api } from '@/lib/api'
 import { apiErrorMessage } from '@/lib/apiError'
 import { formatDateTime12h } from '@/lib/formatDate'
+import { useAuthStore } from '@/stores/auth'
 
 type EmailLog = {
   id: number
@@ -34,6 +35,8 @@ const retryingAll = ref(false)
 const statusFilter = ref<string | null>(null)
 const clientFilter = ref<string | null>(null)
 const search = ref('')
+const auth = useAuthStore()
+const canResend = computed(() => auth.isAdmin)
 
 const statuses = ref<FilterOption[]>([
   { value: 'pending', label: 'Pending' },
@@ -154,6 +157,7 @@ onMounted(async () => {
     >
       <template #actions>
         <v-btn
+          v-if="canResend"
           color="error"
           variant="tonal"
           prepend-icon="mdi-email-sync-outline"
@@ -259,7 +263,7 @@ onMounted(async () => {
       </template>
       <template #item.actions="{ item }">
         <v-btn
-          v-if="item.can_retry"
+          v-if="canResend && item.can_retry"
           size="small"
           color="primary"
           variant="tonal"

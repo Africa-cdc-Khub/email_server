@@ -57,9 +57,11 @@ class HealthController extends Controller
 
             return ['status' => 'ok'];
         } catch (Throwable $e) {
+            report($e);
+
             return [
                 'status' => 'error',
-                'message' => $e->getMessage(),
+                'message' => 'Encryption check failed',
             ];
         }
     }
@@ -75,7 +77,9 @@ class HealthController extends Controller
 
             return ['status' => 'ok'];
         } catch (Throwable $e) {
-            return ['status' => 'error', 'message' => $e->getMessage()];
+            report($e);
+
+            return ['status' => 'error', 'message' => 'Database unreachable'];
         }
     }
 
@@ -94,7 +98,9 @@ class HealthController extends Controller
 
             return ['status' => 'ok', 'driver' => $driver];
         } catch (Throwable $e) {
-            return ['status' => 'error', 'message' => $e->getMessage()];
+            report($e);
+
+            return ['status' => 'error', 'message' => 'Redis unreachable'];
         }
     }
 
@@ -122,7 +128,9 @@ class HealthController extends Controller
                 'emails_queue_depth' => $size,
             ];
         } catch (Throwable $e) {
-            return ['status' => 'error', 'connection' => 'redis', 'message' => $e->getMessage()];
+            report($e);
+
+            return ['status' => 'error', 'connection' => 'redis', 'message' => 'Queue unreachable'];
         }
     }
 
@@ -145,7 +153,9 @@ class HealthController extends Controller
 
             return ['status' => 'ok', 'store' => $store];
         } catch (Throwable $e) {
-            return ['status' => 'error', 'store' => $store, 'message' => $e->getMessage()];
+            report($e);
+
+            return ['status' => 'error', 'store' => $store, 'message' => 'Cache unreachable'];
         }
     }
 }

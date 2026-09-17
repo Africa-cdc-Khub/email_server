@@ -48,12 +48,13 @@ Route::prefix('v1')->group(function () {
             Route::get('/dashboard', DashboardController::class);
             Route::get('/email-logs', [EmailLogController::class, 'index']);
             Route::get('/email-logs/filter-options', [EmailLogController::class, 'filterOptions']);
-            Route::post('/email-logs/retry-failed', [EmailLogController::class, 'retryFailed'])
-                ->middleware('throttle:10,1');
-            Route::post('/email-logs/{email_log}/retry', [EmailLogController::class, 'retry'])
-                ->middleware('throttle:30,1');
 
             Route::middleware(EnsureUserIsAdmin::class)->group(function () {
+                Route::post('/email-logs/retry-failed', [EmailLogController::class, 'retryFailed'])
+                    ->middleware('throttle:10,1');
+                Route::post('/email-logs/{email_log}/retry', [EmailLogController::class, 'retry'])
+                    ->middleware('throttle:30,1');
+
                 Route::apiResource('users', UserController::class);
                 Route::post('/send-mail', [MailController::class, 'send'])
                     ->middleware('throttle:30,1');

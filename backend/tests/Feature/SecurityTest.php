@@ -50,6 +50,17 @@ class SecurityTest extends TestCase
         $this->withToken($token)
             ->getJson('/api/v1/admin/email-providers')
             ->assertForbidden();
+
+        $this->withToken($token)
+            ->postJson('/api/v1/admin/email-logs/retry-failed')
+            ->assertForbidden();
+    }
+
+    public function test_unauthenticated_api_returns_json_401_without_accept_header(): void
+    {
+        $this->get('/api/v1/admin/users')
+            ->assertUnauthorized()
+            ->assertJson(['message' => 'Unauthenticated.']);
     }
 
     public function test_integration_cannot_override_provider_id(): void
@@ -238,5 +249,62 @@ class SecurityTest extends TestCase
             'client_id' => 'staff-portal',
             'client_secret' => 'short',
         ])->assertStatus(422);
+    }
+
+    public function test_email_provider_apis_never_return_plaintext_secrets(): void
+    {
+        $admin = User::factory()->create(['is_admin' => true, 'is_active' => true]);
+        $token = $admin->createToken('admin-panel')->plainTextToken;
+
+        $secret = 'SuperSecretClientValue-NeverExpose!';
+        $password = 'SmtpPassword-NeverExpose!';
+
+        $create = $this->withToken($token)->postJson('/api/v1/admin/email-providers', [
+            'name' => 'Secure Exchange',
+            'driver' => EmailDriver::Exchange->value,
+            'from_address' => 'noreply@example.com',
+            'is_default' => true,
+            'is_active' => true,
+            'config' => [
+                'tenant_id' => 'tenant-1',
+                'client_id' => 'client-1',
+                'client_secret' => $secret,
+                'password' => $password,
+            ],
+        ])->assertCreated();
+
+        $providerId = $create->json('data.id');
+        $this->assertNotNull($providerId);
+        $this->assertSame($secret, EmailProvider::query()->findOrFail($providerId)->safeConfig()['client_secret'] ?? null);
+        $this->assertArrayNotHasKey('client_secret', $create->json('data.config') ?? []);
+        $this->assertArrayNotHasKey('password', $create->json('data.config') ?? []);
+        $this->assertTrue($create->json('data.config_secrets.client_secret'));
+        $this->assertStringNotContainsString($secret, $create->getContent());
+        $this->assertStringNotContainsString($password, $create->getContent());
+
+        $show = $this->withToken($token)
+            ->getJson("/api/v1/admin/email-providers/{$providerId}")
+            ->assertOk();
+
+        $this->assertArrayNotHasKey('client_secret', $show->json('data.config') ?? []);
+        $this->assertTrue($show->json('data.config_secrets.client_secret'));
+        $this->assertStringNotContainsString($secret, $show->getContent());
+
+        $update = $this->withToken($token)->putJson("/api/v1/admin/email-providers/{$providerId}", [
+            'config' => [
+                'tenant_id' => 'tenant-2',
+                'client_secret' => '********',
+            ],
+        ])->assertOk();
+
+        $this->assertSame('tenant-2', $update->json('data.config.tenant_id'));
+        $this->assertStringNotContainsString($secret, $update->getContent());
+        $this->assertSame(
+            $secret,
+            EmailProvider::query()->findOrFail($providerId)->safeConfig()['client_secret'] ?? null
+        );
+
+        $index = $this->withToken($token)->getJson('/api/v1/admin/email-providers')->assertOk();
+        $this->assertStringNotContainsString($secret, $index->getContent());
     }
 }

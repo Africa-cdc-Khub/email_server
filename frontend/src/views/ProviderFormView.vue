@@ -18,6 +18,8 @@ type DriverField = {
 
 type Driver = { value: string; label: string; fields: DriverField[] }
 
+const SECRET_KEYS = new Set(['client_secret', 'password', 'secret'])
+
 const route = useRoute()
 const router = useRouter()
 const isEdit = computed(() => route.name === 'provider-edit')
@@ -30,6 +32,8 @@ const testTo = ref('')
 const testing = ref(false)
 const message = ref('')
 const error = ref('')
+/** Which secret fields already exist server-side (never returned in cleartext). */
+const storedSecrets = ref<Record<string, boolean>>({})
 const form = ref({
   name: '',
   driver: 'exchange',
@@ -43,6 +47,17 @@ const form = ref({
 })
 
 const activeDriver = computed(() => drivers.value.find((d) => d.value === form.value.driver))
+
+function isSecretField(field: DriverField): boolean {
+  return field.type === 'password' || SECRET_KEYS.has(field.key)
+}
+
+function secretHint(field: DriverField): string {
+  if (isEdit.value && storedSecrets.value[field.key]) {
+    return 'Stored securely — leave blank to keep the current value'
+  }
+  return ''
+}
 
 async function loadDrivers() {
   const res = await api.get('/admin/email-providers/drivers')
@@ -61,6 +76,14 @@ async function loadProvider() {
   if (!isEdit.value || !id.value) return
   const res = await api.get(`/admin/email-providers/${id.value}`)
   const p = res.data.data
+  storedSecrets.value = { ...(p.config_secrets ?? {}) }
+
+  const config: Record<string, string | number> = { ...(p.config ?? {}) }
+  // Secrets are never returned by the API — keep password fields empty.
+  for (const key of SECRET_KEYS) {
+    delete config[key]
+  }
+
   form.value = {
     name: p.name,
     driver: p.driver,
@@ -70,8 +93,25 @@ async function loadProvider() {
     is_default: p.is_default,
     priority: p.priority,
     description: p.description ?? '',
-    config: { ...(p.config ?? {}) },
+    config,
   }
+}
+
+function buildConfigPayload(): Record<string, string | number> {
+  const payload: Record<string, string | number> = {}
+  for (const [key, value] of Object.entries(form.value.config)) {
+    if (SECRET_KEYS.has(key)) {
+      // Only send a secret when the admin typed a new value.
+      if (typeof value === 'string' && value.trim() !== '') {
+        payload[key] = value
+      }
+      continue
+    }
+    if (value !== null && value !== undefined && value !== '') {
+      payload[key] = value
+    }
+  }
+  return payload
 }
 
 async function save() {
@@ -79,9 +119,26 @@ async function save() {
   message.value = ''
   error.value = ''
   try {
-    const payload = { ...form.value }
+    const payload = {
+      name: form.value.name,
+      driver: form.value.driver,
+      from_address: form.value.from_address,
+      from_name: form.value.from_name,
+      is_active: form.value.is_active,
+      is_default: form.value.is_default,
+      priority: form.value.priority,
+      description: form.value.description,
+      config: buildConfigPayload(),
+    }
     if (isEdit.value && id.value) {
-      await api.put(`/admin/email-providers/${id.value}`, payload)
+      const res = await api.put(`/admin/email-providers/${id.value}`, payload)
+      storedSecrets.value = { ...(res.data.data?.config_secrets ?? storedSecrets.value) }
+      // Clear password inputs after a successful save so secrets aren't left in DOM state.
+      for (const key of SECRET_KEYS) {
+        if (form.value.config[key] !== undefined) {
+          form.value.config[key] = ''
+        }
+      }
       message.value = 'Provider updated.'
     } else {
       await api.post('/admin/email-providers', payload)
@@ -156,9 +213,16 @@ onMounted(async () => {
 
         <v-col cols="12" md="6" class="form-stack">
           <div class="text-subtitle-1 font-weight-bold mb-4">Connection settings</div>
+          <v-alert v-if="isEdit" type="info" variant="tonal" density="compact" class="mb-4">
+            Credentials are encrypted on the server and are never shown in this form. Leave secret fields blank to keep
+            existing values.
+          </v-alert>
           <template v-if="activeDriver">
             <template v-for="field in activeDriver.fields" :key="field.key">
-              <FormField :label="field.label" :required="field.required">
+              <FormField
+                :label="field.label"
+                :required="field.required && !(isEdit && isSecretField(field) && storedSecrets[field.key])"
+              >
                 <v-select
                   v-if="field.type === 'select'"
                   v-model="form.config[field.key]"
@@ -171,9 +235,13 @@ onMounted(async () => {
                 <v-text-field
                   v-else
                   v-model="form.config[field.key]"
-                  :type="field.type === 'password' ? 'password' : field.type === 'number' ? 'number' : 'text'"
+                  :type="isSecretField(field) ? 'password' : field.type === 'number' ? 'number' : 'text'"
+                  :placeholder="secretHint(field)"
+                  :autocomplete="isSecretField(field) ? 'new-password' : 'off'"
                   variant="outlined"
-                  hide-details
+                  :hint="secretHint(field)"
+                  :persistent-hint="Boolean(secretHint(field))"
+                  :hide-details="!secretHint(field)"
                 />
               </FormField>
             </template>

@@ -89,7 +89,6 @@ class EmailLogController extends Controller
 
             return response()->json([
                 'message' => 'Could not queue email for resend.',
-                'error' => $e->getMessage(),
             ], 500);
         }
 
@@ -114,7 +113,6 @@ class EmailLogController extends Controller
 
             return response()->json([
                 'message' => 'Could not queue failed emails for resend.',
-                'error' => $e->getMessage(),
             ], 500);
         }
 

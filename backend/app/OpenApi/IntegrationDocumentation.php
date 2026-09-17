@@ -22,8 +22,8 @@ class IntegrationDocumentation
      *             @OA\Schema(
      *                 required={"client_id","client_secret"},
      *
-     *                 @OA\Property(property="client_id", type="string", example="staff-portal", description="Your integration identifier (same value shown as Client ID in the admin panel)"),
-     *                 @OA\Property(property="client_secret", type="string", example="StaffPortalSecret2026!", description="Secret key issued when the integration was created. Minimum 16 characters.")
+     *                 @OA\Property(property="client_id", type="string", example="your-client-id", description="Your integration identifier (same value shown as Client ID in the admin panel)"),
+     *                 @OA\Property(property="client_secret", type="string", example="your-client-secret-min-16-chars", description="Secret key issued when the integration was created. Minimum 16 characters. Never a real production value.")
      *             )
      *         ),
      *
@@ -33,8 +33,8 @@ class IntegrationDocumentation
      *             @OA\Schema(
      *                 required={"client_id","client_secret"},
      *
-     *                 @OA\Property(property="client_id", type="string", example="staff-portal", description="Your integration identifier (same value shown as Client ID in the admin panel)"),
-     *                 @OA\Property(property="client_secret", type="string", example="StaffPortalSecret2026!", description="Secret key issued when the integration was created. Minimum 16 characters.")
+     *                 @OA\Property(property="client_id", type="string", example="your-client-id", description="Your integration identifier (same value shown as Client ID in the admin panel)"),
+     *                 @OA\Property(property="client_secret", type="string", example="your-client-secret-min-16-chars", description="Secret key issued when the integration was created. Minimum 16 characters. Never a real production value.")
      *             )
      *         )
      *     ),

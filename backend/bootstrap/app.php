@@ -55,13 +55,16 @@ HTML, 200)->header('Content-Type', 'text/html; charset=UTF-8');
         },
     )
     ->withMiddleware(function (Middleware $middleware): void {
-        // Admin UI uses Bearer tokens (localStorage), not cookie/CSRF SPA auth.
+        // Admin UI uses Bearer tokens (sessionStorage), not cookie/CSRF SPA auth.
         // Never call statefulApi() — it makes SANCTUM_STATEFUL_DOMAINS (e.g.
         // notifications.africacdc.org) require CSRF and breaks browser login
         // while curl http://127.0.0.1:8089 still succeeds.
         $middleware->validateCsrfTokens(except: [
             'api/*',
         ]);
+        // Laravel defaults to route('login') which does not exist — that throws 500
+        // on unauthenticated API calls that omit Accept: application/json.
+        $middleware->redirectGuestsTo(fn () => '/login');
         $middleware->throttleApi('api');
         $middleware->trustProxies(
             // Only trust private/docker peers — never the public internet.
@@ -83,7 +86,9 @@ HTML, 200)->header('Content-Type', 'text/html; charset=UTF-8');
                     return false;
                 }
 
-                return $request->is('api/*') || $request->expectsJson();
+                // Use str_starts_with: $request->is('api/*') does not match nested paths
+                // like api/v1/admin/users (* does not cross "/").
+                return str_starts_with($request->path(), 'api/') || $request->expectsJson();
             },
         );
     })->create();

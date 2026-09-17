@@ -8,7 +8,7 @@ import { mixWithWhite } from '@/lib/colorUtils'
 const defaultPrimary = '#0d7a3a'
 const defaultSecondary = '#c9a227'
 
-const materialProLight = {
+const appLightTheme = {
   dark: false,
   colors: {
     background: '#eef5f9',
@@ -26,7 +26,7 @@ const materialProLight = {
   },
 }
 
-const materialProDark = {
+const appDarkTheme = {
   dark: true,
   colors: {
     background: '#111c2d',
@@ -57,6 +57,6 @@ export default createVuetify({
   },
   theme: {
     defaultTheme: 'light',
-    themes: { light: materialProLight, dark: materialProDark },
+    themes: { light: appLightTheme, dark: appDarkTheme },
   },
 })

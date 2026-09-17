@@ -40,6 +40,11 @@ class EmailProviderController extends Controller
                             ? $provider->driver->label()
                             : (string) $provider->getRawOriginal('driver'),
                         'config' => [],
+                        'config_secrets' => [
+                            'client_secret' => false,
+                            'password' => false,
+                            'secret' => false,
+                        ],
                         'config_corrupt' => true,
                         'from_address' => $provider->from_address,
                         'from_name' => $provider->from_name,
@@ -102,7 +107,7 @@ class EmailProviderController extends Controller
 
     public function show(EmailProvider $emailProvider): JsonResponse
     {
-        return response()->json(['data' => $this->transform($emailProvider, revealSecrets: true)]);
+        return response()->json(['data' => $this->transform($emailProvider)]);
     }
 
     public function update(UpdateEmailProviderRequest $request, EmailProvider $emailProvider): JsonResponse
@@ -114,15 +119,14 @@ class EmailProviderController extends Controller
         }
 
         if (isset($data['config']) && is_array($data['config'])) {
-            $data['config'] = array_merge($emailProvider->safeConfig(), array_filter(
-                $data['config'],
-                fn ($value) => $value !== null && $value !== ''
-            ));
+            // Never overwrite stored secrets with blanks or UI placeholders.
+            $incoming = $this->stripUnsetSecrets($data['config']);
+            $data['config'] = array_merge($emailProvider->safeConfig(), $incoming);
         }
 
         $emailProvider->update($data);
 
-        return response()->json(['data' => $this->transform($emailProvider->fresh(), revealSecrets: true)]);
+        return response()->json(['data' => $this->transform($emailProvider->fresh())]);
     }
 
     public function destroy(EmailProvider $emailProvider): JsonResponse
@@ -156,16 +160,21 @@ class EmailProviderController extends Controller
         return response()->json(['data' => $this->transform($emailProvider->fresh())]);
     }
 
+    /** @var list<string> */
+    private const SECRET_CONFIG_KEYS = ['client_secret', 'password', 'secret'];
+
     /**
      * @return array<string, mixed>
      */
-    private function transform(EmailProvider $provider, bool $revealSecrets = false): array
+    private function transform(EmailProvider $provider): array
     {
         $readable = $provider->configIsReadable();
         $config = $provider->safeConfig();
+        $secretFlags = [];
 
-        if (! $revealSecrets) {
-            $config = $this->maskSecrets($config);
+        foreach (self::SECRET_CONFIG_KEYS as $key) {
+            $secretFlags[$key] = $readable && ! empty($config[$key]);
+            unset($config[$key]);
         }
 
         return [
@@ -175,6 +184,7 @@ class EmailProviderController extends Controller
             'driver' => $provider->driver->value,
             'driver_label' => $provider->driver->label(),
             'config' => $config,
+            'config_secrets' => $secretFlags,
             'config_corrupt' => ! $readable,
             'from_address' => $provider->from_address,
             'from_name' => $provider->from_name,
@@ -188,14 +198,27 @@ class EmailProviderController extends Controller
     }
 
     /**
+     * Drop empty / placeholder secret values so updates keep the encrypted original.
+     *
      * @param  array<string, mixed>  $config
      * @return array<string, mixed>
      */
-    private function maskSecrets(array $config): array
+    private function stripUnsetSecrets(array $config): array
     {
-        foreach (['client_secret', 'password'] as $key) {
-            if (! empty($config[$key])) {
-                $config[$key] = '********';
+        $placeholders = ['********', '****', '••••••••', '[redacted]', 'redacted'];
+
+        foreach ($config as $key => $value) {
+            if ($value === null || $value === '') {
+                unset($config[$key]);
+                continue;
+            }
+
+            if (
+                in_array($key, self::SECRET_CONFIG_KEYS, true)
+                && is_string($value)
+                && in_array(strtolower(trim($value)), $placeholders, true)
+            ) {
+                unset($config[$key]);
             }
         }
 
