@@ -172,7 +172,17 @@ class EmailProviderController extends Controller
 
     public function test(TestEmailProviderRequest $request, EmailProvider $emailProvider, EmailDispatchService $dispatch): JsonResponse
     {
-        $log = $dispatch->testProvider($emailProvider, $request->validated('to'));
+        try {
+            $log = $dispatch->testProvider($emailProvider, $request->validated('to'));
+        } catch (\Throwable $e) {
+            report($e);
+
+            return response()->json([
+                'message' => $e->getMessage() !== ''
+                    ? $e->getMessage()
+                    : 'SMTP test failed. Check host, port, encryption, username, and password.',
+            ], 422);
+        }
 
         return response()->json([
             'message' => 'Test email sent.',

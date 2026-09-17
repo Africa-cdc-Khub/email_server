@@ -10,34 +10,36 @@ export REDIS_CLIENT="${REDIS_CLIENT:-predis}"
 
 echo "==> Entry role=${CONTAINER_ROLE:-app} env=${APP_ENV:-unknown} redis_client=${REDIS_CLIENT}"
 
-if [ ! -f vendor/autoload.php ] \
-  || [ ! -f vendor/symfony/deprecation-contracts/function.php ]; then
-  if [ "$CONTAINER_ROLE" = "queue" ]; then
-    echo "==> Waiting for complete vendor/ (installed by setup or app)..."
+# Always sync vendor with composer.lock. Skipping when vendor/ already exists
+# left production without new packages (e.g. phpmailer) after git pull → fatal 500s.
+if [ "$CONTAINER_ROLE" = "queue" ]; then
+  if [ ! -f vendor/autoload.php ]; then
+    echo "==> Waiting for vendor/ (installed by app)..."
     i=1
     while [ "$i" -le 90 ]; do
       if [ -f vendor/autoload.php ] \
-        && [ -f vendor/symfony/deprecation-contracts/function.php ]; then
+        && [ -d vendor/phpmailer/phpmailer ]; then
         break
       fi
       i=$((i + 1))
       sleep 2
     done
-    if [ ! -f vendor/autoload.php ] \
-      || [ ! -f vendor/symfony/deprecation-contracts/function.php ]; then
-      echo "ERROR: vendor/ still incomplete after wait" >&2
-      exit 1
-    fi
-  else
-    echo "==> Installing Composer dependencies (vendor missing or incomplete)..."
-    rm -rf vendor
-    composer install --no-dev --optimize-autoloader --no-interaction || {
-      echo "ERROR: composer install failed" >&2
-      exit 1
-    }
+  fi
+  if [ ! -f vendor/autoload.php ]; then
+    echo "ERROR: vendor/ still missing after wait" >&2
+    exit 1
   fi
 else
-  echo "Vendor present, skipping composer install."
+  echo "==> Syncing Composer dependencies with lockfile..."
+  composer install --no-dev --optimize-autoloader --no-interaction || {
+    echo "ERROR: composer install failed" >&2
+    exit 1
+  }
+fi
+
+if [ ! -d vendor/phpmailer/phpmailer ]; then
+  echo "ERROR: phpmailer/phpmailer missing after composer install" >&2
+  exit 1
 fi
 
 wait_for_tcp() {
