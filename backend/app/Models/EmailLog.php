@@ -84,6 +84,9 @@ class EmailLog extends Model
             'error_message' => $this->error_message,
             'sending_system' => $this->sendingSystemLabel(),
             'source' => $this->sourceLabel(),
+            'sender_ip' => is_string($meta['sender_ip'] ?? null) && $meta['sender_ip'] !== ''
+                ? $meta['sender_ip']
+                : null,
             'can_retry' => $canRetry,
             'email_provider' => $this->emailProvider ? [
                 'id' => $this->emailProvider->id,

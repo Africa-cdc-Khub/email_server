@@ -29,6 +29,7 @@ type DashboardData = {
     driver: string | null
     sending_system: string
     source: string
+    sender_ip: string | null
     created_at: string
   }>
 }
@@ -152,6 +153,7 @@ onMounted(async () => {
             { title: 'Subject', key: 'subject' },
             { title: 'Sending system', key: 'sending_system' },
             { title: 'Source', key: 'source' },
+            { title: 'IP address', key: 'sender_ip' },
             { title: 'Status', key: 'status' },
             { title: 'When', key: 'created_at' },
           ]"
@@ -159,6 +161,9 @@ onMounted(async () => {
           class="dashboard-table"
           hover
         >
+          <template #item.sender_ip="{ item }">
+            <span class="text-no-wrap">{{ item.sender_ip || '—' }}</span>
+          </template>
           <template #item.status="{ item }">
             <v-chip size="small" :color="statusColor(item.status)" variant="tonal" class="text-capitalize">
               {{ item.status }}

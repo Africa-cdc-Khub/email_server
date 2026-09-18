@@ -34,6 +34,7 @@ class IntegrationMailController extends Controller
             cc: $request->validated('cc') ?? [],
             bcc: $request->validated('bcc') ?? [],
             source: 'integration',
+            senderIp: $request->ip(),
         );
 
         $integration->update(['last_used_at' => now()]);

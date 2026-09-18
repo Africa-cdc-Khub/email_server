@@ -173,7 +173,7 @@ class EmailProviderController extends Controller
     public function test(TestEmailProviderRequest $request, EmailProvider $emailProvider, EmailDispatchService $dispatch): JsonResponse
     {
         try {
-            $log = $dispatch->testProvider($emailProvider, $request->validated('to'));
+            $log = $dispatch->testProvider($emailProvider, $request->validated('to'), $request->ip());
         } catch (\Throwable $e) {
             report($e);
 

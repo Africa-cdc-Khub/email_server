@@ -46,6 +46,7 @@ class AdminPasswordResetService
             body: $this->resetEmailBody($appName, $resetUrl, $expiryMinutes),
             isHtml: true,
             source: 'password_reset',
+            senderIp: request()?->ip(),
         );
     }
 

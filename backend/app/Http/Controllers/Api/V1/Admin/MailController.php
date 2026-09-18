@@ -23,6 +23,7 @@ class MailController extends Controller
                 cc: $request->validated('cc') ?? [],
                 bcc: $request->validated('bcc') ?? [],
                 source: 'admin',
+                senderIp: $request->ip(),
             );
         } catch (Throwable $e) {
             report($e);

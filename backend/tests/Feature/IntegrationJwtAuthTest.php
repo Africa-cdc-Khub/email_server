@@ -58,6 +58,11 @@ class IntegrationJwtAuthTest extends TestCase
 
         $sendResponse->assertOk()->assertJsonPath('status', 'pending');
         Queue::assertPushed(SendEmailJob::class);
+
+        $log = \App\Models\EmailLog::query()->latest('id')->first();
+        $this->assertNotNull($log);
+        $this->assertSame('127.0.0.1', $log->meta['sender_ip'] ?? null);
+        $this->assertSame('127.0.0.1', $log->toLogArray()['sender_ip'] ?? null);
     }
 
     public function test_integration_send_accepts_swagger_form_style_payload(): void

@@ -39,7 +39,8 @@ class EmailLogController extends Controller
                     $q->where(function ($inner) use ($term) {
                         $inner->where('to', 'like', $term)
                             ->orWhere('subject', 'like', $term)
-                            ->orWhere('error_message', 'like', $term);
+                            ->orWhere('error_message', 'like', $term)
+                            ->orWhere('meta->sender_ip', 'like', $term);
                     });
                 }
             )

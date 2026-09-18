@@ -15,6 +15,7 @@ type EmailLog = {
   error_message: string | null
   sending_system: string
   source: string
+  sender_ip: string | null
   can_retry?: boolean
   external_integration_id: number | null
   created_at: string
@@ -206,7 +207,7 @@ onMounted(async () => {
       <v-col cols="12" md="4">
         <v-text-field
           v-model="search"
-          label="Search to / subject"
+          label="Search to / subject / IP"
           clearable
           variant="outlined"
           hide-details
@@ -229,6 +230,7 @@ onMounted(async () => {
         { title: 'To', key: 'to' },
         { title: 'Subject', key: 'subject' },
         { title: 'Client', key: 'source' },
+        { title: 'IP address', key: 'sender_ip' },
         { title: 'Sending system', key: 'sending_system' },
         { title: 'Status', key: 'status' },
         { title: 'Driver', key: 'driver' },
@@ -245,6 +247,9 @@ onMounted(async () => {
         <v-chip size="small" variant="tonal" color="primary">
           {{ item.source }}
         </v-chip>
+      </template>
+      <template #item.sender_ip="{ item }">
+        <span class="text-no-wrap text-caption">{{ item.sender_ip || '—' }}</span>
       </template>
       <template #item.status="{ item }">
         <v-chip

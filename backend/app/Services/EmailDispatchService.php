@@ -37,6 +37,7 @@ class EmailDispatchService
         array $cc = [],
         array $bcc = [],
         ?string $source = null,
+        ?string $senderIp = null,
     ): EmailLog {
         $provider = $this->mailConfig->resolveProvider($providerId);
 
@@ -49,6 +50,10 @@ class EmailDispatchService
 
         if ($source !== null) {
             $meta['source'] = $source;
+        }
+
+        if ($senderIp !== null && $senderIp !== '') {
+            $meta['sender_ip'] = $senderIp;
         }
 
         $log = EmailLog::query()->create([
@@ -135,6 +140,7 @@ class EmailDispatchService
         array $cc = [],
         array $bcc = [],
         ?string $source = null,
+        ?string $senderIp = null,
     ): EmailLog {
         $provider = $this->mailConfig->resolveProvider($providerId);
 
@@ -147,6 +153,10 @@ class EmailDispatchService
 
         if ($source !== null) {
             $meta['source'] = $source;
+        }
+
+        if ($senderIp !== null && $senderIp !== '') {
+            $meta['sender_ip'] = $senderIp;
         }
 
         $log = EmailLog::query()->create([
@@ -242,13 +252,24 @@ class EmailDispatchService
         return ['queued' => $queued, 'skipped' => $skipped];
     }
 
-    public function testProvider(EmailProvider $provider, string $to): EmailLog
+    public function testProvider(EmailProvider $provider, string $to, ?string $senderIp = null): EmailLog
     {
         $subject = 'Email Server test — '.$provider->name.' — '.now()->toDateTimeString();
         $body = '<p>This is a test email from the <strong>Email Server</strong> admin panel.</p>'
             .'<p>Provider: <code>'.e($provider->name).'</code> ('.e($provider->driver->value).')</p>';
 
-        return $this->send($to, $subject, $body, true, $provider->id, null, [], [], 'admin_test');
+        return $this->send(
+            to: $to,
+            subject: $subject,
+            body: $body,
+            isHtml: true,
+            providerId: $provider->id,
+            integration: null,
+            cc: [],
+            bcc: [],
+            source: 'admin_test',
+            senderIp: $senderIp,
+        );
     }
 
     /**
