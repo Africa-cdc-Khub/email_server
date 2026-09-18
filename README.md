@@ -143,7 +143,8 @@ openssl rand -base64 48   # JWT_SECRET
 openssl rand -base64 24   # DB / admin passwords
 ```
 
-Edit **`backend/.env`** for Exchange/mail (used by the app container via bind mount):
+Edit **`backend/.env`** for app/runtime settings (used by the app container via bind mount).
+**Do not put Exchange/SMTP secrets in `.env`** — configure them in the admin UI under Email providers (encrypted in the database).
 
 ```env
 APP_ENV=production
@@ -151,18 +152,12 @@ APP_DEBUG=false
 APP_URL=https://notifications.africacdc.org
 FRONTEND_URL=https://notifications.africacdc.org
 
-MAIL_MAILER=exchange
-MAIL_FROM_ADDRESS=notifications@africacdc.org
-MAIL_FROM_NAME="Africa CDC Notifications"
-
-EXCHANGE_TENANT_ID=...
-EXCHANGE_CLIENT_ID=...
-EXCHANGE_CLIENT_SECRET=...
-EXCHANGE_AUTH_METHOD=client_credentials
-EXCHANGE_SCOPE=https://graph.microsoft.com/.default
+MAIL_MAILER=log
 
 JWT_SECRET=<same-as-docker/.env>
 ```
+
+After deploy, open **Email providers** and set Exchange / SMTP credentials there.
 
 Generate the Laravel app key once containers are up (or after first start):
 
@@ -420,17 +415,16 @@ Authorization: Bearer <jwt>
 
 ---
 
-## Exchange configuration
+## Exchange / SMTP configuration
 
-| Field | Env |
-|-------|-----|
-| Tenant ID | `EXCHANGE_TENANT_ID` |
-| Client ID | `EXCHANGE_CLIENT_ID` |
-| Client secret | `EXCHANGE_CLIENT_SECRET` |
-| Auth method | `client_credentials` |
-| Scope | `https://graph.microsoft.com/.default` |
+Configure **Email providers** in the admin UI. Credentials are encrypted in the database (`email_providers.config`).
 
-Also configure/provider-edit in the admin UI (stored encrypted in DB). Env values take precedence when set.
+| Driver | Fields (admin UI) |
+|--------|-------------------|
+| Exchange | Tenant ID, Client ID, Client secret, From address |
+| SMTP | Host, Port, Encryption, Username (mailbox email), Password, From address |
+
+Do **not** store `EXCHANGE_*` or `MAIL_HOST` / `MAIL_PASSWORD` in `.env`.
 
 ---
 
@@ -438,6 +432,7 @@ Also configure/provider-edit in the admin UI (stored encrypted in DB). Env value
 
 - [ ] `APP_ENV=production`, `APP_DEBUG=false`
 - [ ] Strong unique `ADMIN_PASSWORD`, `DB_PASSWORD`, `MYSQL_ROOT_PASSWORD`, `JWT_SECRET`
+- [ ] No mail/Exchange secrets in `.env` — only in admin Email providers
 - [ ] `RUN_SEEDER=false` after first seed
 - [ ] Host Nginx only; Docker ports bound via Compose to host (`8089`/`3006`) — prefer firewall so they are not public
 - [ ] TLS via Certbot on `notifications.africacdc.org` (`fullchain.pem` / `privkey.pem` under `/etc/letsencrypt/live/...`)

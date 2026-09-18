@@ -23,54 +23,56 @@ class DatabaseSeeder extends Seeder
                 'logo_dark_path' => 'branding/logo-dark.png',
                 'primary_color' => env('BRANDING_PRIMARY_COLOR') ?: '#0d7a3a',
                 'secondary_color' => env('BRANDING_SECONDARY_COLOR') ?: '#c9a227',
-                'support_email' => env('MAIL_FROM_ADDRESS') ?: 'notifications@africacdc.org',
+                'support_email' => env('BRANDING_SUPPORT_EMAIL') ?: 'notifications@africacdc.org',
             ],
         );
 
-        $exchange = EmailProvider::query()->updateOrCreate(
+        // Provider shells only — secrets are set in the admin UI (encrypted in DB).
+        // firstOrCreate so re-seed never overwrites existing credentials.
+        $exchange = EmailProvider::query()->firstOrCreate(
             ['slug' => 'default-exchange'],
             [
                 'name' => 'Default Exchange',
                 'driver' => EmailDriver::Exchange,
                 'config' => [
-                    'tenant_id' => env('EXCHANGE_TENANT_ID', ''),
-                    'client_id' => env('EXCHANGE_CLIENT_ID', ''),
-                    'client_secret' => env('EXCHANGE_CLIENT_SECRET', ''),
-                    'redirect_uri' => env('EXCHANGE_REDIRECT_URI', ''),
-                    'scope' => env('EXCHANGE_SCOPE', 'https://graph.microsoft.com/Mail.Send'),
-                    'auth_method' => env('EXCHANGE_AUTH_METHOD', 'client_credentials'),
+                    'tenant_id' => '',
+                    'client_id' => '',
+                    'client_secret' => '',
+                    'redirect_uri' => '',
+                    'scope' => 'https://graph.microsoft.com/.default',
+                    'auth_method' => 'client_credentials',
                 ],
-                'from_address' => env('MAIL_FROM_ADDRESS', 'notifications@africacdc.org'),
-                'from_name' => env('MAIL_FROM_NAME', 'Africa CDC Mailer'),
+                'from_address' => 'notifications@africacdc.org',
+                'from_name' => 'Africa CDC Mailer',
                 'is_default' => true,
                 'is_active' => true,
                 'priority' => 10,
-                'description' => 'Microsoft Graph API — same pattern as Staff APM / Helpdesk.',
+                'description' => 'Microsoft Graph API — configure tenant/client secrets in the admin UI.',
             ],
         );
 
-        EmailProvider::query()->updateOrCreate(
+        EmailProvider::query()->firstOrCreate(
             ['slug' => 'fallback-smtp'],
             [
                 'name' => 'SMTP Fallback',
                 'driver' => EmailDriver::Smtp,
                 'config' => [
-                    'host' => env('MAIL_HOST', 'smtp.office365.com'),
-                    'port' => (int) env('MAIL_PORT', 587),
-                    'encryption' => env('MAIL_ENCRYPTION', 'tls'),
-                    'username' => env('MAIL_USERNAME', ''),
-                    'password' => env('MAIL_PASSWORD', ''),
+                    'host' => '',
+                    'port' => 465,
+                    'encryption' => 'ssl',
+                    'username' => '',
+                    'password' => '',
                 ],
-                'from_address' => env('MAIL_FROM_ADDRESS', 'notifications@africacdc.org'),
-                'from_name' => env('MAIL_FROM_NAME', 'Africa CDC Mailer'),
+                'from_address' => 'notifications@africacdc.org',
+                'from_name' => 'Africa CDC Mailer',
                 'is_default' => false,
                 'is_active' => false,
                 'priority' => 100,
-                'description' => 'SMTP provider — Office 365 / generic SMTP.',
+                'description' => 'SMTP provider — configure host/credentials in the admin UI (not .env).',
             ],
         );
 
-        EmailProvider::query()->updateOrCreate(
+        EmailProvider::query()->firstOrCreate(
             ['slug' => 'dev-log'],
             [
                 'name' => 'Development Log',

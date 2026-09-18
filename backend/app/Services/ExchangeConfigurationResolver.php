@@ -11,37 +11,41 @@ class ExchangeConfigurationResolver
     public const DEFAULT_FROM_NAME = 'Africa CDC Mailer';
 
     /**
+     * Resolve Exchange settings from the email provider (DB) only.
+     * Secrets are never read from .env — configure them in the admin UI.
+     *
      * @return array<string, mixed>
      */
     public function resolve(?EmailProvider $provider = null): array
     {
-        $env = config('exchange-email', []);
+        // When no provider is passed, use runtime config set by applyProvider().
+        $runtime = $provider === null ? config('exchange-email', []) : [];
 
         return [
             'tenant_id' => ConfigValue::firstNonEmpty(
-                $env['tenant_id'] ?? null,
                 $provider?->configValue('tenant_id'),
+                $runtime['tenant_id'] ?? null,
             ),
             'client_id' => ConfigValue::firstNonEmpty(
-                $env['client_id'] ?? null,
                 $provider?->configValue('client_id'),
+                $runtime['client_id'] ?? null,
             ),
             'client_secret' => ConfigValue::firstNonEmpty(
-                $env['client_secret'] ?? null,
                 $provider?->configValue('client_secret'),
+                $runtime['client_secret'] ?? null,
             ),
             'redirect_uri' => ConfigValue::firstNonEmpty(
-                $env['redirect_uri'] ?? null,
                 $provider?->configValue('redirect_uri'),
+                $runtime['redirect_uri'] ?? null,
             ),
             'scope' => ConfigValue::firstNonEmpty(
-                $env['scope'] ?? null,
                 $provider?->configValue('scope'),
+                $runtime['scope'] ?? null,
                 'https://graph.microsoft.com/.default',
             ),
             'auth_method' => ConfigValue::firstNonEmpty(
-                $env['auth_method'] ?? null,
                 $provider?->configValue('auth_method'),
+                $runtime['auth_method'] ?? null,
                 'client_credentials',
             ),
             'from_email' => $this->resolveFromAddress($provider),
@@ -51,21 +55,23 @@ class ExchangeConfigurationResolver
 
     public function resolveFromAddress(?EmailProvider $provider = null): ?string
     {
+        $runtime = $provider === null ? config('exchange-email', []) : [];
+
         return ConfigValue::firstNonEmpty(
-            config('mail.from.address'),
-            config('exchange-email.from_email'),
             $provider?->from_address,
+            $runtime['from_email'] ?? null,
+            BrandingSetting::query()->value('support_email'),
         );
     }
 
     public function resolveFromName(?EmailProvider $provider = null): string
     {
+        $runtime = $provider === null ? config('exchange-email', []) : [];
         $brandingName = BrandingSetting::query()->value('app_name');
 
         return (string) (ConfigValue::firstNonEmpty(
-            config('mail.from.name'),
-            config('exchange-email.from_name'),
             $provider?->from_name,
+            $runtime['from_name'] ?? null,
             $brandingName,
         ) ?? self::DEFAULT_FROM_NAME);
     }

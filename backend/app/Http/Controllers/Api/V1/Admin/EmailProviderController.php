@@ -288,7 +288,7 @@ class EmailProviderController extends Controller
                     ['value' => 'ssl', 'label' => 'SSL'],
                     ['value' => '', 'label' => 'None'],
                 ]],
-                ['key' => 'username', 'label' => 'Username', 'type' => 'text', 'required' => false],
+                ['key' => 'username', 'label' => 'Username (mailbox email)', 'type' => 'text', 'required' => false],
                 ['key' => 'password', 'label' => 'Password', 'type' => 'password', 'required' => false],
             ],
             EmailDriver::Ses => [

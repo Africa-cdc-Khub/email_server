@@ -4,7 +4,6 @@ namespace App\Services;
 
 use App\Enums\EmailDriver;
 use App\Models\EmailProvider;
-use App\Support\ConfigValue;
 use Illuminate\Support\Facades\Config;
 use RuntimeException;
 
@@ -55,23 +54,6 @@ class DynamicMailConfigService
      */
     public function resolveFromIdentity(EmailProvider $provider): array
     {
-        // SMTP should prefer the provider's own From — hosts often reject
-        // MAIL_FROM when it doesn't match the authenticated mailbox.
-        if ($provider->driver === EmailDriver::Smtp) {
-            return [
-                'address' => ConfigValue::firstNonEmpty(
-                    $provider->from_address,
-                    config('mail.from.address'),
-                    config('exchange-email.from_email'),
-                ),
-                'name' => (string) (ConfigValue::firstNonEmpty(
-                    $provider->from_name,
-                    config('mail.from.name'),
-                    config('exchange-email.from_name'),
-                ) ?? $this->exchangeResolver->resolveFromName($provider)),
-            ];
-        }
-
         return [
             'address' => $this->exchangeResolver->resolveFromAddress($provider),
             'name' => $this->exchangeResolver->resolveFromName($provider),
@@ -104,26 +86,11 @@ class DynamicMailConfigService
             EmailDriver::Exchange => ['transport' => 'exchange'],
             EmailDriver::Smtp => [
                 'transport' => 'smtp',
-                'host' => ConfigValue::firstNonEmpty(
-                    $provider->configValue('host'),
-                    config('mail.mailers.smtp.host'),
-                ) ?? '127.0.0.1',
-                'port' => (int) (ConfigValue::firstNonEmpty(
-                    $provider->configValue('port'),
-                    config('mail.mailers.smtp.port'),
-                ) ?? 587),
-                'encryption' => ConfigValue::firstNonEmpty(
-                    $provider->configValue('encryption'),
-                    config('mail.mailers.smtp.encryption'),
-                ),
-                'username' => ConfigValue::firstNonEmpty(
-                    $provider->configValue('username'),
-                    config('mail.mailers.smtp.username'),
-                ),
-                'password' => ConfigValue::firstNonEmpty(
-                    $provider->configValue('password'),
-                    config('mail.mailers.smtp.password'),
-                ),
+                'host' => $provider->configValue('host') ?: null,
+                'port' => (int) ($provider->configValue('port') ?: 587),
+                'encryption' => $provider->configValue('encryption') ?: null,
+                'username' => $provider->configValue('username') ?: null,
+                'password' => $provider->configValue('password') ?: null,
                 'timeout' => null,
                 'local_domain' => parse_url((string) config('app.url'), PHP_URL_HOST),
             ],

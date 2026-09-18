@@ -217,6 +217,10 @@ onMounted(async () => {
 
         <v-col cols="12" md="6" class="form-stack">
           <div class="text-subtitle-1 font-weight-bold mb-4">Connection settings</div>
+          <v-alert v-if="isEdit && form.driver === 'smtp'" type="info" variant="tonal" density="compact" class="mb-4">
+            For cPanel / mail.africacdc.net use port <strong>465</strong> + <strong>SSL</strong>. Username must be the
+            full mailbox email (same as From address), not the hostname.
+          </v-alert>
           <v-alert v-if="isEdit && configCorrupt" type="warning" variant="tonal" density="compact" class="mb-4">
             Stored credentials cannot be decrypted (the server encryption key may have changed). Re-enter the password
             or secret fields below, then save.

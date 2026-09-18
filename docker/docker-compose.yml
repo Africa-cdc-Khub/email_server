@@ -23,7 +23,7 @@ x-app-env: &app-env
   REDIS_QUEUE_CONNECTION: queue
   CACHE_STORE: redis
   SESSION_DRIVER: redis
-  MAIL_MAILER: exchange
+  MAIL_MAILER: log
   ADMIN_EMAIL: ${ADMIN_EMAIL:-andrewa@africacdc.org}
   ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Set ADMIN_PASSWORD in docker/.env}
   ADMIN_RESET_PASSWORD: ${ADMIN_RESET_PASSWORD:-false}

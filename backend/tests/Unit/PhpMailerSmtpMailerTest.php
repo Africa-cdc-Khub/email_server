@@ -50,8 +50,6 @@ class PhpMailerSmtpMailerTest extends TestCase
             'is_active' => true,
         ]);
 
-        config()->set('mail.mailers.smtp.host', null);
-
         $this->expectException(RuntimeException::class);
         $this->expectExceptionMessage('SMTP host is not configured');
 
@@ -93,5 +91,77 @@ class PhpMailerSmtpMailerTest extends TestCase
             fromAddress: '',
             fromName: 'From',
         );
+    }
+
+    public function test_requires_password_when_username_present(): void
+    {
+        $provider = EmailProvider::query()->create([
+            'name' => 'SMTP',
+            'slug' => 'smtp-pass',
+            'driver' => EmailDriver::Smtp,
+            'config' => [
+                'host' => 'mail.example.com',
+                'port' => 465,
+                'encryption' => 'ssl',
+                'username' => 'notifications@example.com',
+            ],
+            'from_address' => 'notifications@example.com',
+            'is_default' => true,
+            'is_active' => true,
+        ]);
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('SMTP password is missing');
+
+        app(PhpMailerSmtpMailer::class)->resolveSettings($provider, 'notifications@example.com');
+    }
+
+    public function test_replaces_hostname_username_with_from_address(): void
+    {
+        $provider = EmailProvider::query()->create([
+            'name' => 'SMTP',
+            'slug' => 'smtp-host-user',
+            'driver' => EmailDriver::Smtp,
+            'config' => [
+                'host' => 'mail.africacdc.net',
+                'port' => 465,
+                'encryption' => 'ssl',
+                'username' => 'mail.africacdc.net',
+                'password' => 'secret',
+            ],
+            'from_address' => 'notifications@africacdc.net',
+            'is_default' => true,
+            'is_active' => true,
+        ]);
+
+        $settings = app(PhpMailerSmtpMailer::class)->resolveSettings(
+            $provider,
+            'notifications@africacdc.net'
+        );
+
+        $this->assertSame('notifications@africacdc.net', $settings['username']);
+        $this->assertSame('ssl', $settings['encryption']);
+        $this->assertSame(465, $settings['port']);
+    }
+
+    public function test_infers_ssl_encryption_from_port_465(): void
+    {
+        $provider = EmailProvider::query()->create([
+            'name' => 'SMTP',
+            'slug' => 'smtp-port',
+            'driver' => EmailDriver::Smtp,
+            'config' => [
+                'host' => 'mail.example.com',
+                'port' => 465,
+                'username' => 'user@example.com',
+                'password' => 'secret',
+            ],
+            'is_default' => true,
+            'is_active' => true,
+        ]);
+
+        $settings = app(PhpMailerSmtpMailer::class)->resolveSettings($provider, 'user@example.com');
+
+        $this->assertSame('ssl', $settings['encryption']);
     }
 }

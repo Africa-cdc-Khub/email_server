@@ -32,7 +32,7 @@ class ExchangeGraphMailClient
 
         if (! $this->exchangeResolver->isConfigured()) {
             throw new RuntimeException(
-                'Exchange OAuth is not configured. Set EXCHANGE_TENANT_ID, EXCHANGE_CLIENT_ID, and EXCHANGE_CLIENT_SECRET in the environment, or on the email provider.'
+                'Exchange OAuth is not configured. Edit the Exchange email provider in the admin UI and set tenant ID, client ID, and client secret.'
             );
         }
 

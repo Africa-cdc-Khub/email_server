@@ -4,7 +4,6 @@ namespace App\Services;
 
 use App\Enums\EmailDriver;
 use App\Models\EmailProvider;
-use App\Support\ConfigValue;
 use PHPMailer\PHPMailer\Exception as PhpMailerException;
 use PHPMailer\PHPMailer\PHPMailer;
 use RuntimeException;
@@ -34,68 +33,58 @@ class PhpMailerSmtpMailer
             throw new RuntimeException('PHPMailer SMTP transport requires an SMTP provider.');
         }
 
-        $host = (string) (ConfigValue::firstNonEmpty(
-            $provider->configValue('host'),
-            config('mail.mailers.smtp.host'),
-        ) ?? '');
-
-        if ($host === '') {
-            throw new RuntimeException('SMTP host is not configured for this provider.');
-        }
-
-        $port = (int) (ConfigValue::firstNonEmpty(
-            $provider->configValue('port'),
-            config('mail.mailers.smtp.port'),
-        ) ?? 587);
-
-        $encryption = strtolower((string) (ConfigValue::firstNonEmpty(
-            $provider->configValue('encryption'),
-            config('mail.mailers.smtp.encryption'),
-        ) ?? ''));
-
-        $username = (string) (ConfigValue::firstNonEmpty(
-            $provider->configValue('username'),
-            config('mail.mailers.smtp.username'),
-        ) ?? '');
-
-        $password = (string) (ConfigValue::firstNonEmpty(
-            $provider->configValue('password'),
-            config('mail.mailers.smtp.password'),
-        ) ?? '');
-
-        if ($fromAddress === '') {
-            throw new RuntimeException('From address is required to send SMTP mail.');
-        }
+        $settings = $this->resolveSettings($provider, $fromAddress);
 
         $mail = new PHPMailer(true);
 
         try {
-            $mail->CharSet = 'UTF-8';
+            $mail->CharSet = PHPMailer::CHARSET_UTF8;
+            $mail->Encoding = PHPMailer::ENCODING_BASE64;
             $mail->isSMTP();
-            $mail->Host = $host;
-            $mail->Port = $port;
-            $mail->Timeout = 30;
+            $mail->Host = $settings['host'];
+            $mail->Port = $settings['port'];
+            $mail->Timeout = 45;
+            $mail->SMTPKeepAlive = false;
+            $mail->AuthType = 'LOGIN';
 
-            if ($username !== '') {
+            $ehlo = parse_url((string) config('app.url'), PHP_URL_HOST);
+            if (is_string($ehlo) && $ehlo !== '') {
+                $mail->Hostname = $ehlo;
+            }
+
+            if ($settings['username'] !== '') {
                 $mail->SMTPAuth = true;
-                $mail->Username = $username;
-                $mail->Password = $password;
+                $mail->Username = $settings['username'];
+                $mail->Password = $settings['password'];
             } else {
                 $mail->SMTPAuth = false;
             }
 
-            if ($encryption === 'ssl') {
+            if ($settings['encryption'] === 'ssl') {
+                // Implicit TLS (SMTPS) — typical for cPanel / port 465.
                 $mail->SMTPSecure = PHPMailer::ENCRYPTION_SMTPS;
-                $mail->SMTPAutoTLS = true;
-            } elseif ($encryption === 'tls') {
+                $mail->SMTPAutoTLS = false;
+            } elseif ($settings['encryption'] === 'tls') {
+                // Explicit STARTTLS — typical for Office 365 / port 587.
                 $mail->SMTPSecure = PHPMailer::ENCRYPTION_STARTTLS;
                 $mail->SMTPAutoTLS = true;
             } else {
-                $mail->SMTPSecure = '';
+                $mail->SMTPSecure = false;
                 $mail->SMTPAutoTLS = false;
             }
 
+            // Allow corporate / cPanel certs that sometimes mismatch when
+            // connecting by an alternate hostname.
+            $mail->SMTPOptions = [
+                'ssl' => [
+                    'verify_peer' => false,
+                    'verify_peer_name' => false,
+                    'allow_self_signed' => true,
+                ],
+            ];
+
             $mail->setFrom($fromAddress, $fromName);
+            $mail->Sender = $fromAddress;
             $mail->addAddress($to);
 
             foreach ($cc as $address) {
@@ -117,9 +106,88 @@ class PhpMailerSmtpMailer
                 $mail->Body = $body;
             }
 
-            $mail->send();
+            if (! $mail->send()) {
+                throw new RuntimeException(
+                    'SMTP send failed: '.($mail->ErrorInfo !== '' ? $mail->ErrorInfo : 'unknown PHPMailer error')
+                );
+            }
         } catch (PhpMailerException $e) {
-            throw new RuntimeException('SMTP send failed: '.$e->getMessage(), previous: $e);
+            $detail = trim($mail->ErrorInfo !== '' ? $mail->ErrorInfo : $e->getMessage());
+            throw new RuntimeException(
+                sprintf(
+                    'SMTP send failed (%s:%d/%s, user=%s): %s',
+                    $settings['host'],
+                    $settings['port'],
+                    $settings['encryption'] ?: 'none',
+                    $settings['username'] !== '' ? $settings['username'] : '(none)',
+                    $detail !== '' ? $detail : 'unknown PHPMailer error'
+                ),
+                previous: $e
+            );
         }
+    }
+
+    /**
+     * @return array{host: string, port: int, encryption: string, username: string, password: string}
+     */
+    public function resolveSettings(EmailProvider $provider, string $fromAddress = ''): array
+    {
+        $host = (string) ($provider->configValue('host') ?? '');
+
+        if ($host === '') {
+            throw new RuntimeException(
+                'SMTP host is not configured for this provider. Set it under Email providers in the admin UI.'
+            );
+        }
+
+        $port = (int) ($provider->configValue('port') ?: 587);
+
+        $encryption = strtolower((string) ($provider->configValue('encryption') ?? ''));
+
+        // Laravel-style scheme aliases if stored that way in provider config.
+        $encryption = match ($encryption) {
+            'smtps' => 'ssl',
+            'smtp' => '',
+            default => $encryption,
+        };
+
+        if ($encryption === '') {
+            $encryption = match (true) {
+                $port === 465 => 'ssl',
+                in_array($port, [587, 2587], true) => 'tls',
+                default => '',
+            };
+        }
+
+        $username = (string) ($provider->configValue('username') ?? '');
+        $password = (string) ($provider->configValue('password') ?? '');
+
+        // Admins sometimes paste the hostname into Username. cPanel/Office365
+        // need the mailbox address (usually the From address).
+        if ($username === '' || strcasecmp($username, $host) === 0) {
+            if (str_contains($fromAddress, '@')) {
+                $username = $fromAddress;
+            }
+        }
+
+        if ($fromAddress === '') {
+            throw new RuntimeException(
+                'From address is required. Set it on the email provider in the admin UI.'
+            );
+        }
+
+        if ($username !== '' && $password === '') {
+            throw new RuntimeException(
+                'SMTP password is missing. Edit the provider, enter the mailbox password, and save.'
+            );
+        }
+
+        return [
+            'host' => $host,
+            'port' => $port,
+            'encryption' => $encryption,
+            'username' => $username,
+            'password' => $password,
+        ];
     }
 }
