@@ -30,8 +30,8 @@ const drawer = ref(!mdAndDown.value)
     </v-navigation-drawer>
 
     <v-main class="bg-background">
-      <v-container fluid class="page-wrapper py-6">
-        <div class="max-width">
+      <v-container fluid class="page-wrapper py-6 px-4 px-md-6 px-lg-8">
+        <div class="page-content">
           <RouterView />
         </div>
       </v-container>

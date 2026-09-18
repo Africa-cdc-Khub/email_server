@@ -14,11 +14,14 @@ body,
 .page-wrapper {
   background: rgb(var(--v-theme-background));
   min-height: calc(100vh - 70px);
+  width: 100%;
+  max-width: none;
 }
 
-.max-width {
-  max-width: 1400px;
-  margin: 0 auto;
+.page-content {
+  width: 100%;
+  max-width: none;
+  margin: 0;
 }
 
 .left-sidebar .v-list-item--active {
