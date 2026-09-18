@@ -5,12 +5,15 @@ import PageHeader from '@/components/shared/PageHeader.vue'
 import ParentCard from '@/components/shared/ParentCard.vue'
 import { api } from '@/lib/api'
 
+type IntegrationSummary = { id: number; name: string; slug: string }
+
 type UserRow = {
   id: number
   name: string
   email: string
   is_admin: boolean
   is_active: boolean
+  external_integrations: IntegrationSummary[]
 }
 
 const items = ref<UserRow[]>([])
@@ -38,7 +41,7 @@ onMounted(load)
 
 <template>
   <div>
-    <PageHeader title="User management" subtitle="Admin accounts for the email server panel">
+    <PageHeader title="User management" subtitle="Admin and app-scoped accounts for the email server panel">
       <template #actions>
         <v-btn color="primary" prepend-icon="mdi-plus" :to="{ name: 'user-new' }">Add user</v-btn>
       </template>
@@ -51,7 +54,8 @@ onMounted(load)
         :headers="[
           { title: 'Name', key: 'name' },
           { title: 'Email', key: 'email' },
-          { title: 'Admin', key: 'is_admin' },
+          { title: 'Role', key: 'is_admin' },
+          { title: 'App access', key: 'external_integrations' },
           { title: 'Active', key: 'is_active' },
           { title: 'Actions', key: 'actions', sortable: false },
         ]"
@@ -60,6 +64,24 @@ onMounted(load)
           <v-chip :color="item.is_admin ? 'primary' : 'default'" size="small" variant="tonal">
             {{ item.is_admin ? 'Admin' : 'User' }}
           </v-chip>
+        </template>
+        <template #item.external_integrations="{ item }">
+          <template v-if="item.is_admin">
+            <v-chip size="small" color="primary" variant="tonal">All apps</v-chip>
+          </template>
+          <template v-else-if="!item.external_integrations?.length">
+            <span class="text-medium-emphasis">None</span>
+          </template>
+          <div v-else class="d-flex flex-wrap ga-1">
+            <v-chip
+              v-for="app in item.external_integrations"
+              :key="app.id"
+              size="small"
+              variant="tonal"
+            >
+              {{ app.name }}
+            </v-chip>
+          </div>
         </template>
         <template #item.is_active="{ item }">
           <v-icon :color="item.is_active ? 'success' : 'error'">

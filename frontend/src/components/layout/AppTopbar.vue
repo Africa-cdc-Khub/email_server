@@ -33,6 +33,7 @@ async function logout() {
       target="_blank"
       rel="noopener"
       class="d-none d-md-inline-flex"
+      title="Open API docs (sign-in required)"
     >
       API docs
     </v-btn>

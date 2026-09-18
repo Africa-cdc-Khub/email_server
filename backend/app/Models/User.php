@@ -7,6 +7,7 @@ use Database\Factories\UserFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Attributes\Hidden;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Laravel\Sanctum\HasApiTokens;
@@ -52,6 +53,11 @@ class User extends Authenticatable
         ];
     }
 
+    public function externalIntegrations(): BelongsToMany
+    {
+        return $this->belongsToMany(ExternalIntegration::class)->withTimestamps();
+    }
+
     public function hasTwoFactorEnabled(): bool
     {
         return $this->two_factor_email_enabled || $this->two_factor_totp_enabled;
@@ -73,5 +79,39 @@ class User extends Authenticatable
         }
 
         return $methods;
+    }
+
+    /**
+     * Integration IDs this user may view email logs for.
+     * Admins get null (unrestricted). Non-admins get their assigned apps only.
+     *
+     * @return list<int>|null
+     */
+    public function allowedExternalIntegrationIds(): ?array
+    {
+        if ($this->is_admin) {
+            return null;
+        }
+
+        return $this->externalIntegrations()
+            ->pluck('external_integrations.id')
+            ->map(fn ($id) => (int) $id)
+            ->values()
+            ->all();
+    }
+
+    public function canAccessExternalIntegration(?int $integrationId): bool
+    {
+        if ($this->is_admin) {
+            return true;
+        }
+
+        if ($integrationId === null) {
+            return false;
+        }
+
+        $allowed = $this->allowedExternalIntegrationIds() ?? [];
+
+        return in_array($integrationId, $allowed, true);
     }
 }

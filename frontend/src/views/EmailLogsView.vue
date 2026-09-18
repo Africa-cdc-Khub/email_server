@@ -45,9 +45,10 @@ const statuses = ref<FilterOption[]>([
   { value: 'failed', label: 'Failed' },
 ])
 const clients = ref<ClientOption[]>([])
+const canViewInternal = ref(true)
 
 const clientItems = computed(() => [
-  { value: 'none', title: 'Admin / internal' },
+  ...(canViewInternal.value ? [{ value: 'none', title: 'Admin / internal' }] : []),
   ...clients.value.map((c) => ({ value: String(c.id), title: c.name })),
 ])
 
@@ -56,6 +57,10 @@ async function loadFilters() {
     const res = await api.get('/admin/email-logs/filter-options')
     statuses.value = res.data.data.statuses ?? statuses.value
     clients.value = res.data.data.clients ?? []
+    canViewInternal.value = res.data.data.can_view_internal !== false
+    if (!canViewInternal.value && clientFilter.value === 'none') {
+      clientFilter.value = null
+    }
   } catch {
     // Keep built-in status options
   }

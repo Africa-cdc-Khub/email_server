@@ -32,7 +32,8 @@ class AdminUserManagementTest extends TestCase
         ]);
 
         $response->assertCreated()
-            ->assertJsonPath('data.email', 'ops@emailserver.local');
+            ->assertJsonPath('data.email', 'ops@emailserver.local')
+            ->assertJsonPath('data.external_integration_ids', []);
 
         $this->assertDatabaseHas('users', ['email' => 'ops@emailserver.local']);
     }

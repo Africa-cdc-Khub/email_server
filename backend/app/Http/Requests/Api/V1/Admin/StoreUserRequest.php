@@ -20,6 +20,8 @@ class StoreUserRequest extends FormRequest
             'password' => ['required', 'string', Password::defaults()],
             'is_admin' => ['sometimes', 'boolean'],
             'is_active' => ['sometimes', 'boolean'],
+            'external_integration_ids' => ['sometimes', 'array'],
+            'external_integration_ids.*' => ['integer', 'distinct', 'exists:external_integrations,id'],
         ];
     }
 }

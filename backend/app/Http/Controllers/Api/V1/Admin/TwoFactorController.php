@@ -8,6 +8,7 @@ use App\Http\Requests\Api\V1\Admin\ConfirmTotpSetupRequest;
 use App\Http\Requests\Api\V1\Admin\ResendTwoFactorEmailRequest;
 use App\Http\Requests\Api\V1\Admin\VerifyTwoFactorRequest;
 use App\Services\AdminTwoFactorService;
+use App\Support\ApiDocsAuthCookie;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -77,10 +78,10 @@ class TwoFactorController extends Controller
 
         $token = $user->createToken('admin-panel')->plainTextToken;
 
-        return response()->json([
+        return ApiDocsAuthCookie::attach(response()->json([
             'token' => $token,
             'user' => $this->transformUser($user),
-        ]);
+        ]), $token);
     }
 
     public function resendEmail(ResendTwoFactorEmailRequest $request, AdminTwoFactorService $twoFactor): JsonResponse

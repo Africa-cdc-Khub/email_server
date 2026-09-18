@@ -130,13 +130,14 @@ return [
     | Swagger / OpenAPI UI
     |--------------------------------------------------------------------------
     |
-    | Disabled by default in production. Set API_DOCS_ENABLED=true in .env to
-    | expose /api/documentation and /api/docs.json on production servers.
+    | Served at /api/documentation (spec at /api/docs.json). Requires an
+    | authenticated admin session (Sanctum bearer or docs auth cookie).
+    | Disabled only when API_DOCS_ENABLED=false.
     |
     */
 
     'api_docs_enabled' => filter_var(
-        env('API_DOCS_ENABLED', env('APP_ENV', 'production') === 'production' ? 'false' : 'true'),
+        env('API_DOCS_ENABLED', 'true'),
         FILTER_VALIDATE_BOOL
     ),
 

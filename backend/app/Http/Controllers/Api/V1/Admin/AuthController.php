@@ -9,6 +9,7 @@ use App\Http\Requests\Api\V1\Admin\ResetPasswordRequest;
 use App\Models\User;
 use App\Services\AdminPasswordResetService;
 use App\Services\AdminTwoFactorService;
+use App\Support\ApiDocsAuthCookie;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
@@ -48,10 +49,10 @@ class AuthController extends Controller
 
         $token = $user->createToken('admin-panel')->plainTextToken;
 
-        return response()->json([
+        return ApiDocsAuthCookie::attach(response()->json([
             'token' => $token,
             'user' => $this->transformUser($user),
-        ]);
+        ]), $token);
     }
 
     public function me(Request $request): JsonResponse
@@ -63,7 +64,7 @@ class AuthController extends Controller
     {
         $request->user()->currentAccessToken()?->delete();
 
-        return response()->json(['message' => 'Logged out.']);
+        return ApiDocsAuthCookie::clear(response()->json(['message' => 'Logged out.']));
     }
 
     public function forgotPassword(ForgotPasswordRequest $request, AdminPasswordResetService $passwordReset): JsonResponse

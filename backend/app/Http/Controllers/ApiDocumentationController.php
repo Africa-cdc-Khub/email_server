@@ -16,7 +16,7 @@ class ApiDocumentationController extends Controller
                 /** @var array<string, mixed> $decoded */
                 $decoded = json_decode((string) file_get_contents($cached), true, 512, JSON_THROW_ON_ERROR);
 
-                return response()->json($decoded);
+                return response()->json($this->withAppServer($decoded));
             } catch (Throwable) {
                 // Fall through to live generation
             }
@@ -40,7 +40,7 @@ class ApiDocumentationController extends Controller
             @mkdir(dirname($cached), 0775, true);
             @file_put_contents($cached, $json);
 
-            return response()->json($decoded);
+            return response()->json($this->withAppServer($decoded));
         } catch (Throwable $e) {
             report($e);
 
@@ -72,5 +72,22 @@ class ApiDocumentationController extends Controller
                 500
             )->header('Content-Type', 'text/html; charset=UTF-8');
         }
+    }
+
+    /**
+     * @param  array<string, mixed>  $spec
+     * @return array<string, mixed>
+     */
+    private function withAppServer(array $spec): array
+    {
+        $base = rtrim((string) config('app.url'), '/');
+        $spec['servers'] = [
+            [
+                'url' => $base.'/api/v1',
+                'description' => 'API v1',
+            ],
+        ];
+
+        return $spec;
     }
 }

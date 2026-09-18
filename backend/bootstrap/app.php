@@ -1,6 +1,9 @@
 <?php
 
 use App\Http\Controllers\ApiDocumentationController;
+use App\Http\Middleware\EnsureUserIsActive;
+use App\Http\Middleware\PromoteApiDocsTokenFromCookie;
+use App\Support\ApiDocsAuthCookie;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
@@ -20,38 +23,15 @@ return Application::configure(basePath: dirname(__DIR__))
                 return;
             }
 
-            Route::get('/api/documentation', function () {
-                $candidates = [
-                    resource_path('swagger/ui.html'),
-                    base_path('resources/swagger/ui.html'),
-                ];
-                foreach ($candidates as $path) {
-                    if (is_readable($path)) {
-                        return response((string) file_get_contents($path), 200)
-                            ->header('Content-Type', 'text/html; charset=UTF-8');
-                    }
-                }
-
-                return response(<<<'HTML'
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Email Server API — Swagger</title>
-  <link rel="stylesheet" href="/docs-assets/swagger-ui.css">
-</head>
-<body>
-<div id="swagger-ui"></div>
-<script src="/docs-assets/swagger-ui-bundle.js"></script>
-<script src="/docs-assets/init.js"></script>
-</body>
-</html>
-HTML, 200)->header('Content-Type', 'text/html; charset=UTF-8');
+            Route::middleware([
+                PromoteApiDocsTokenFromCookie::class,
+                'auth:sanctum',
+                EnsureUserIsActive::class,
+            ])->group(function (): void {
+                Route::get('/api/documentation', [ApiDocumentationController::class, 'ui']);
+                Route::get('/docs', fn () => redirect('/api/documentation'));
+                Route::get('/api/docs.json', [ApiDocumentationController::class, 'spec']);
             });
-
-            Route::get('/docs', fn () => redirect('/api/documentation'));
-            Route::get('/api/docs.json', [ApiDocumentationController::class, 'spec']);
         },
     )
     ->withMiddleware(function (Middleware $middleware): void {
@@ -61,6 +41,9 @@ HTML, 200)->header('Content-Type', 'text/html; charset=UTF-8');
         // while curl http://127.0.0.1:8089 still succeeds.
         $middleware->validateCsrfTokens(except: [
             'api/*',
+        ]);
+        $middleware->encryptCookies(except: [
+            ApiDocsAuthCookie::NAME,
         ]);
         // Laravel defaults to route('login') which does not exist — that throws 500
         // on unauthenticated API calls that omit Accept: application/json.
@@ -79,10 +62,15 @@ HTML, 200)->header('Content-Type', 'text/html; charset=UTF-8');
         $middleware->append(\App\Http\Middleware\SecurityHeaders::class);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
-        // /api/documentation is an HTML page — do not force JSON error envelopes for it
         $exceptions->shouldRenderJsonWhen(
             function (Request $request): bool {
-                if ($request->is('api/documentation', 'docs')) {
+                // Swagger HTML page should redirect guests to /login (not JSON 401),
+                // but only when the docs routes are enabled.
+                if (
+                    config('app.api_docs_enabled')
+                    && $request->is('api/documentation', 'docs')
+                    && ! $request->expectsJson()
+                ) {
                     return false;
                 }
 
