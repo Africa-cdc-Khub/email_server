@@ -1196,7 +1196,12 @@ fi
 # ---------------------------------------------------------------------------
 if [[ "$SKIP_NGINX" != "true" ]]; then
   log "Installing Nginx site + security headers for ${DOMAIN}"
-  run_root mkdir -p /etc/nginx/snippets
+  run_root mkdir -p /etc/nginx/snippets /etc/nginx/conf.d
+
+  # Shared memory zones (http{}) — required before any site uses limit_req zone=api_limit
+  run_root cp "$ROOT/deploy/configs/nginx-http-rate-limit.conf" \
+    /etc/nginx/conf.d/email-server-rate-limit.conf
+
   run_root cp "$ROOT/deploy/configs/nginx-security-headers.conf" \
     /etc/nginx/snippets/email-server-security-headers.conf
 
@@ -1212,6 +1217,7 @@ if [[ "$SKIP_NGINX" != "true" ]]; then
     run_root systemctl reload nginx
   else
     warn "nginx -t failed after installing hardened site — check /etc/nginx/sites-available/${DOMAIN}.conf"
+    warn "Also check: sudo grep -R api_limit /etc/nginx/"
   fi
 else
   warn "Skipping Nginx site install"
@@ -1222,13 +1228,33 @@ fi
 # ---------------------------------------------------------------------------
 if [[ "$SKIP_SSL" != "true" ]]; then
   log "Issuing/installing SSL certificate with Certbot for ${DOMAIN}"
-  run_root certbot --nginx \
+
+  # Ensure rate-limit zones exist even if --skip-nginx was used earlier on a broken host
+  if [[ -f "$ROOT/deploy/configs/nginx-http-rate-limit.conf" ]]; then
+    run_root mkdir -p /etc/nginx/conf.d
+    run_root cp "$ROOT/deploy/configs/nginx-http-rate-limit.conf" \
+      /etc/nginx/conf.d/email-server-rate-limit.conf
+    run_root nginx -t && run_root systemctl reload nginx || warn "nginx -t still failing before certbot"
+  fi
+
+  if ! run_root certbot --nginx \
     -d "$DOMAIN" \
     --agree-tos \
     --redirect \
     -m "$CERTBOT_EMAIL" \
     --non-interactive \
-    --keep-until-expiring
+    --keep-until-expiring; then
+    warn "Certbot --nginx failed — trying webroot HTTP-01 instead"
+    run_root mkdir -p /var/www/html
+    run_root certbot certonly --webroot \
+      -w /var/www/html \
+      -d "$DOMAIN" \
+      --agree-tos \
+      -m "$CERTBOT_EMAIL" \
+      --non-interactive \
+      --keep-until-expiring \
+      || warn "Certbot webroot also failed — fix nginx (api_limit zone) then re-run certbot"
+  fi
 
   log "Verifying HTTPS"
   curl -fsSI "https://${DOMAIN}/api/v1/health" | head -n 1 || warn "HTTPS health check failed — DNS/firewall may need attention"
