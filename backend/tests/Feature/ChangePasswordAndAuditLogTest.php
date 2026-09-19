@@ -84,6 +84,16 @@ class ChangePasswordAndAuditLogTest extends TestCase
             ->getJson('/api/v1/admin/audit-logs?search=Record+audit')
             ->assertOk()
             ->assertJsonStructure(['data', 'meta' => ['current_page', 'total']]);
+
+        $this->withToken($token)
+            ->getJson('/api/v1/admin/audit-logs/filter-options')
+            ->assertOk()
+            ->assertJsonStructure(['data' => ['event_types', 'target_tables', 'http_methods']]);
+
+        $this->withToken($token)
+            ->getJson('/api/v1/admin/audit-logs?event_type=record_created&event_type_exact=1&target_table=users')
+            ->assertOk()
+            ->assertJsonPath('meta.total', fn ($total) => (int) $total >= 1);
     }
 
     public function test_non_admin_cannot_list_audit_logs(): void

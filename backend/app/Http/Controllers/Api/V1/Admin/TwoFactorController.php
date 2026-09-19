@@ -8,9 +8,11 @@ use App\Http\Requests\Api\V1\Admin\ConfirmTotpSetupRequest;
 use App\Http\Requests\Api\V1\Admin\ResendTwoFactorEmailRequest;
 use App\Http\Requests\Api\V1\Admin\VerifyTwoFactorRequest;
 use App\Services\AdminTwoFactorService;
+use App\Services\AuditLogService;
 use App\Support\ApiDocsAuthCookie;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Validation\ValidationException;
 
 class TwoFactorController extends Controller
 {
@@ -68,15 +70,38 @@ class TwoFactorController extends Controller
         ]);
     }
 
-    public function verify(VerifyTwoFactorRequest $request, AdminTwoFactorService $twoFactor): JsonResponse
+    public function verify(VerifyTwoFactorRequest $request, AdminTwoFactorService $twoFactor, AuditLogService $audit): JsonResponse
     {
-        $user = $twoFactor->verifyLoginChallenge(
-            $request->validated('challenge_token'),
-            $request->validated('method'),
-            $request->validated('code'),
-        );
+        try {
+            $user = $twoFactor->verifyLoginChallenge(
+                $request->validated('challenge_token'),
+                $request->validated('method'),
+                $request->validated('code'),
+            );
+        } catch (ValidationException $e) {
+            $audit->log('Failed two-factor verification', [
+                'actor_type' => AuditLogService::ACTOR_SYSTEM_USER,
+                'event_type' => 'auth_2fa_failed',
+                'http_method' => 'POST',
+                'request_uri' => $request->path(),
+                'new_values' => ['method' => $request->validated('method')],
+            ]);
+
+            throw $e;
+        }
 
         $token = $user->createToken('admin-panel')->plainTextToken;
+
+        $audit->log('User logged in (2FA)', [
+            'actor_type' => AuditLogService::ACTOR_SYSTEM_USER,
+            'event_type' => 'auth_login',
+            'user' => $user,
+            'http_method' => 'POST',
+            'request_uri' => $request->path(),
+            'target_table' => 'users',
+            'target_id' => $user->id,
+            'new_values' => ['method' => $request->validated('method')],
+        ]);
 
         return ApiDocsAuthCookie::attach(response()->json([
             'token' => $token,

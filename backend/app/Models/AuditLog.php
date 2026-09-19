@@ -9,6 +9,8 @@ class AuditLog extends Model
 {
     protected $fillable = [
         'user_id',
+        'actor_type',
+        'external_integration_id',
         'user_name',
         'user_email',
         'action',
@@ -21,6 +23,8 @@ class AuditLog extends Model
         'new_values',
         'ip_address',
         'user_agent',
+        'is_suspicious',
+        'suspicious_reasons',
     ];
 
     protected function casts(): array
@@ -28,11 +32,17 @@ class AuditLog extends Model
         return [
             'old_values' => 'array',
             'new_values' => 'array',
+            'is_suspicious' => 'boolean',
         ];
     }
 
     public function user(): BelongsTo
     {
         return $this->belongsTo(User::class);
+    }
+
+    public function externalIntegration(): BelongsTo
+    {
+        return $this->belongsTo(ExternalIntegration::class);
     }
 }

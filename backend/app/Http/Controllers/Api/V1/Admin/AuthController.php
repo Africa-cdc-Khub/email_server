@@ -36,9 +36,11 @@ class AuthController extends Controller
 
         if ($user === null || ! Hash::check($request->validated('password'), $user->password)) {
             $audit->log('Failed login attempt', [
+                'actor_type' => AuditLogService::ACTOR_SYSTEM_USER,
                 'event_type' => 'auth_failed',
                 'http_method' => 'POST',
                 'request_uri' => $request->path(),
+                'attempted_email' => $request->validated('email'),
                 'new_values' => ['email' => $request->validated('email')],
             ]);
 
@@ -48,6 +50,17 @@ class AuthController extends Controller
         }
 
         if (! $user->is_active) {
+            $audit->log('Login attempt on deactivated account', [
+                'actor_type' => AuditLogService::ACTOR_SYSTEM_USER,
+                'event_type' => 'auth_failed_inactive',
+                'http_method' => 'POST',
+                'request_uri' => $request->path(),
+                'user' => $user,
+                'attempted_email' => $user->email,
+                'target_table' => 'users',
+                'target_id' => $user->id,
+            ]);
+
             throw ValidationException::withMessages([
                 'email' => ['This account has been deactivated.'],
             ]);
@@ -60,6 +73,7 @@ class AuthController extends Controller
         $token = $user->createToken('admin-panel')->plainTextToken;
 
         $audit->log('User logged in', [
+            'actor_type' => AuditLogService::ACTOR_SYSTEM_USER,
             'event_type' => 'auth_login',
             'user' => $user,
             'http_method' => 'POST',
@@ -117,9 +131,17 @@ class AuthController extends Controller
         ]);
     }
 
-    public function forgotPassword(ForgotPasswordRequest $request, AdminPasswordResetService $passwordReset): JsonResponse
+    public function forgotPassword(ForgotPasswordRequest $request, AdminPasswordResetService $passwordReset, AuditLogService $audit): JsonResponse
     {
         $passwordReset->sendResetLink($request->validated('email'));
+
+        $audit->log('Password reset link requested', [
+            'event_type' => 'auth_forgot',
+            'http_method' => 'POST',
+            'request_uri' => $request->path(),
+            'attempted_email' => $request->validated('email'),
+            'new_values' => ['email' => $request->validated('email')],
+        ]);
 
         return response()->json([
             'message' => 'If an account exists for that email, a password reset link has been sent.',

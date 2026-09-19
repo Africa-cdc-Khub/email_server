@@ -3,15 +3,23 @@
 namespace App\Services;
 
 use App\Models\AuditLog;
+use App\Models\ExternalIntegration;
 use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Schema;
 
 /**
- * Staff-portal-style audit logging for admin panel actions.
+ * Staff-portal-style audit logging for admin panel + integration client auth.
  */
 class AuditLogService
 {
+    public const ACTOR_SYSTEM_USER = 'system_user';
+
+    public const ACTOR_CLIENT = 'client';
+
+    public const ACTOR_SYSTEM = 'system';
+
     /** @var list<string> */
     private const SENSITIVE_KEYS = [
         'password',
@@ -30,6 +38,10 @@ class AuditLogService
         'totp_secret',
     ];
 
+    public function __construct(
+        private readonly SuspiciousAuditDetector $suspicious,
+    ) {}
+
     public function log(string $action, array $context = []): void
     {
         $request = request();
@@ -38,33 +50,104 @@ class AuditLogService
             $user = $context['user'];
         }
 
+        $integration = null;
+        if (isset($context['integration']) && $context['integration'] instanceof ExternalIntegration) {
+            $integration = $context['integration'];
+        }
+
         $method = strtoupper((string) ($context['http_method'] ?? $request?->method() ?? 'GET'));
         $uri = (string) ($context['request_uri'] ?? $request?->path() ?? '');
         if (strlen($uri) > 500) {
             $uri = substr($uri, 0, 500).'…';
         }
 
-        AuditLog::query()->create([
-            'user_id' => $user?->id,
-            'user_name' => $user?->name,
-            'user_email' => $user?->email,
-            'action' => $action,
+        $actorType = $this->resolveActorType($context, $user, $integration);
+
+        $userEmail = $user?->email;
+        if (isset($context['attempted_email']) && is_string($context['attempted_email']) && $context['attempted_email'] !== '') {
+            $userEmail = $context['attempted_email'];
+        } elseif ($integration !== null && $userEmail === null) {
+            $userEmail = $integration->slug;
+        }
+
+        $userName = $user?->name ?? ($context['user_name'] ?? null);
+        if ($userName === null && $integration !== null) {
+            $userName = $integration->name;
+        }
+
+        $newValues = isset($context['new_values']) ? $this->sanitize($context['new_values']) : null;
+        $ip = $request?->ip();
+
+        $incoming = [
             'event_type' => $context['event_type'] ?? $this->inferEventType($method),
+            'action' => $action,
+            'ip_address' => $ip,
+            'user_email' => $userEmail,
+            'user_id' => $user?->id,
+            'actor_type' => $actorType,
+            'target_table' => $context['target_table'] ?? null,
+            'http_method' => $method,
+            'new_values' => $newValues,
+        ];
+
+        $flags = $this->suspicious->evaluate($incoming);
+
+        $payload = [
+            'user_id' => $user?->id,
+            'user_name' => $userName,
+            'user_email' => $userEmail,
+            'action' => $action,
+            'event_type' => $incoming['event_type'],
             'http_method' => $method,
             'request_uri' => $uri,
             'target_table' => $context['target_table'] ?? null,
             'target_id' => isset($context['target_id']) ? (string) $context['target_id'] : null,
             'old_values' => isset($context['old_values']) ? $this->sanitize($context['old_values']) : null,
-            'new_values' => isset($context['new_values']) ? $this->sanitize($context['new_values']) : null,
-            'ip_address' => $request?->ip(),
+            'new_values' => $newValues,
+            'ip_address' => $ip,
             'user_agent' => substr((string) ($request?->userAgent() ?? ''), 0, 500),
-        ]);
+        ];
+
+        if (Schema::hasColumn('audit_logs', 'actor_type')) {
+            $payload['actor_type'] = $actorType;
+        }
+
+        if (Schema::hasColumn('audit_logs', 'external_integration_id')) {
+            $payload['external_integration_id'] = $integration?->id
+                ?? (isset($context['external_integration_id']) ? (int) $context['external_integration_id'] : null);
+        }
+
+        if (Schema::hasColumn('audit_logs', 'is_suspicious')) {
+            $payload['is_suspicious'] = $flags['is_suspicious'];
+            $payload['suspicious_reasons'] = $flags['reasons'] !== []
+                ? implode('; ', $flags['reasons'])
+                : null;
+        }
+
+        AuditLog::query()->create($payload);
+
+        if ($flags['is_suspicious'] && in_array($incoming['event_type'], [
+            'auth_failed',
+            'auth_2fa_failed',
+            'auth_failed_inactive',
+            'auth_login',
+            'client_auth_failed',
+            'client_auth_ip_denied',
+            'client_auth_success',
+        ], true)) {
+            $this->suspicious->escalateRelatedAuthFailures(
+                $ip,
+                is_string($userEmail) ? strtolower($userEmail) : null,
+                $flags['reasons'],
+            );
+        }
     }
 
     public function logRouteAccess(Request $request): void
     {
         $route = $request->route()?->getName() ?? $request->path();
         $context = [
+            'actor_type' => self::ACTOR_SYSTEM_USER,
             'http_method' => $request->method(),
             'request_uri' => $request->path(),
         ];
@@ -93,12 +176,41 @@ class AuditLogService
         ?string $action = null,
     ): void {
         $this->log($action ?? "Record audit: {$targetTable} #{$targetId} — {$eventType}", [
+            'actor_type' => self::ACTOR_SYSTEM_USER,
             'event_type' => 'record_'.preg_replace('/[^a-z0-9_]+/i', '', $eventType),
             'target_table' => $targetTable,
             'target_id' => (string) $targetId,
             'old_values' => $oldValues,
             'new_values' => $newValues,
         ]);
+    }
+
+    /**
+     * @param  array<string, mixed>  $context
+     */
+    protected function resolveActorType(array $context, ?User $user, ?ExternalIntegration $integration): string
+    {
+        if (isset($context['actor_type']) && is_string($context['actor_type']) && $context['actor_type'] !== '') {
+            return $context['actor_type'];
+        }
+
+        if ($integration !== null) {
+            return self::ACTOR_CLIENT;
+        }
+
+        if ($user !== null || isset($context['attempted_email'])) {
+            return self::ACTOR_SYSTEM_USER;
+        }
+
+        $eventType = (string) ($context['event_type'] ?? '');
+        if (str_starts_with($eventType, 'client_')) {
+            return self::ACTOR_CLIENT;
+        }
+        if (str_starts_with($eventType, 'auth_')) {
+            return self::ACTOR_SYSTEM_USER;
+        }
+
+        return self::ACTOR_SYSTEM;
     }
 
     protected function inferEventType(string $method): string

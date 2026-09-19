@@ -54,4 +54,14 @@ return [
         'max_bytes_total' => (int) env('MAIL_ATTACHMENT_MAX_TOTAL_BYTES', 15 * 1024 * 1024),
     ],
 
+    /*
+    | Suspicious audit-log heuristics (auth brute-force bursts, etc.).
+    */
+    'audit_suspicious' => [
+        'window_minutes' => (int) env('AUDIT_SUSPICIOUS_WINDOW_MINUTES', 15),
+        'auth_fail_ip_threshold' => (int) env('AUDIT_AUTH_FAIL_IP_THRESHOLD', 3),
+        'auth_fail_email_threshold' => (int) env('AUDIT_AUTH_FAIL_EMAIL_THRESHOLD', 3),
+        'password_reset_threshold' => (int) env('AUDIT_PASSWORD_RESET_THRESHOLD', 5),
+    ],
+
 ];

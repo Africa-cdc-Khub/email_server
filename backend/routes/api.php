@@ -62,6 +62,7 @@ Route::prefix('v1')->group(function () {
 
                 Route::apiResource('users', UserController::class);
                 Route::get('/captcha', CaptchaController::class);
+                Route::get('/audit-logs/filter-options', [AuditLogController::class, 'filterOptions']);
                 Route::get('/audit-logs', [AuditLogController::class, 'index']);
                 Route::post('/send-mail', [MailController::class, 'send'])
                     ->middleware('throttle:30,1');
