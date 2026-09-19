@@ -114,6 +114,12 @@ class EmailProviderController extends Controller
     {
         $data = $request->validated();
 
+        if (array_key_exists('is_active', $data) && $data['is_active'] === false && $emailProvider->is_default) {
+            return response()->json([
+                'message' => 'Cannot disable the default provider. Set another provider as default first.',
+            ], 422);
+        }
+
         if (! empty($data['is_default'])) {
             EmailProvider::query()->where('id', '!=', $emailProvider->id)->update(['is_default' => false]);
         }
@@ -155,19 +161,6 @@ class EmailProviderController extends Controller
         }
 
         return response()->json(['data' => $this->transform($emailProvider->fresh())]);
-    }
-
-    public function destroy(EmailProvider $emailProvider): JsonResponse
-    {
-        if ($emailProvider->is_default) {
-            return response()->json([
-                'message' => 'Cannot delete the default provider. Set another provider as default first.',
-            ], 422);
-        }
-
-        $emailProvider->delete();
-
-        return response()->json(['message' => 'Provider deleted.']);
     }
 
     public function test(TestEmailProviderRequest $request, EmailProvider $emailProvider, EmailDispatchService $dispatch): JsonResponse

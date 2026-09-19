@@ -147,13 +147,25 @@ class AccountRegistrationTest extends TestCase
 
     public function test_admin_can_approve_pending_user(): void
     {
+        EmailProvider::query()->create([
+            'name' => 'Log',
+            'slug' => 'log',
+            'driver' => EmailDriver::Log,
+            'config' => [],
+            'is_default' => true,
+            'is_active' => true,
+        ]);
+
         $admin = User::factory()->create(['is_admin' => true, 'is_active' => true]);
         $pending = User::factory()->create([
+            'email' => 'partner-approve@example.com',
             'approval_status' => UserApprovalStatus::Pending,
             'is_active' => false,
             'is_admin' => false,
             'totp_required' => false,
         ]);
+
+        Queue::fake();
 
         $this->withToken($admin->createToken('admin-panel')->plainTextToken)
             ->postJson('/api/v1/admin/users/'.$pending->id.'/approve')
@@ -163,16 +175,34 @@ class AccountRegistrationTest extends TestCase
         $this->assertTrue($pending->isApproved());
         $this->assertTrue($pending->is_active);
         $this->assertTrue($pending->totp_required);
+
+        Queue::assertPushed(SendEmailJob::class);
+        $log = EmailLog::query()->where('to', 'partner-approve@example.com')->first();
+        $this->assertNotNull($log);
+        $this->assertSame('account_approved', $log->meta['source'] ?? null);
+        $this->assertStringContainsString('/login', (string) ($log->meta['body'] ?? ''));
     }
 
     public function test_admin_can_reject_pending_user(): void
     {
+        EmailProvider::query()->create([
+            'name' => 'Log',
+            'slug' => 'log-reject',
+            'driver' => EmailDriver::Log,
+            'config' => [],
+            'is_default' => true,
+            'is_active' => true,
+        ]);
+
         $admin = User::factory()->create(['is_admin' => true, 'is_active' => true]);
         $pending = User::factory()->create([
+            'email' => 'partner-reject@example.com',
             'approval_status' => UserApprovalStatus::Pending,
             'is_active' => false,
             'is_admin' => false,
         ]);
+
+        Queue::fake();
 
         $this->withToken($admin->createToken('admin-panel')->plainTextToken)
             ->postJson('/api/v1/admin/users/'.$pending->id.'/reject', [
@@ -184,6 +214,12 @@ class AccountRegistrationTest extends TestCase
         $this->assertSame(UserApprovalStatus::Rejected, $pending->approval_status);
         $this->assertFalse($pending->is_active);
         $this->assertSame('Incomplete organisation details', $pending->rejection_reason);
+
+        Queue::assertPushed(SendEmailJob::class);
+        $log = EmailLog::query()->where('to', 'partner-reject@example.com')->first();
+        $this->assertNotNull($log);
+        $this->assertSame('account_rejected', $log->meta['source'] ?? null);
+        $this->assertStringContainsString('Incomplete organisation details', (string) ($log->meta['body'] ?? ''));
     }
 
     public function test_approved_user_can_login(): void

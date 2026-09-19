@@ -7,6 +7,7 @@ use App\Http\Requests\Api\V1\Admin\StoreExternalIntegrationRequest;
 use App\Http\Requests\Api\V1\Admin\UpdateExternalIntegrationRequest;
 use App\Models\ExternalIntegration;
 use App\Models\User;
+use App\Services\ApprovalNotifier;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
@@ -92,14 +93,18 @@ class ExternalIntegrationController extends Controller
         return response()->json(['data' => $this->transform($externalIntegration)]);
     }
 
-    public function update(UpdateExternalIntegrationRequest $request, ExternalIntegration $externalIntegration): JsonResponse
-    {
+    public function update(
+        UpdateExternalIntegrationRequest $request,
+        ExternalIntegration $externalIntegration,
+        ApprovalNotifier $notifier,
+    ): JsonResponse {
         $this->authorize('update', $externalIntegration);
 
         /** @var User $user */
         $user = $request->user();
         $data = $request->validated();
         $clientSecret = null;
+        $wasActive = (bool) $externalIntegration->is_active;
 
         if (! $user->is_admin) {
             // Non-admins cannot activate their own clients.
@@ -115,26 +120,30 @@ class ExternalIntegrationController extends Controller
         unset($data['client_secret'], $data['generate_secret']);
 
         $externalIntegration->update($data);
+        $externalIntegration->refresh();
+
+        $becameActive = ! $wasActive && (bool) $externalIntegration->is_active;
+        $becameInactive = $wasActive && ! (bool) $externalIntegration->is_active;
+        if ($becameActive) {
+            $notifier->notifyIntegrationApproved($externalIntegration);
+        } elseif ($becameInactive) {
+            $notifier->notifyIntegrationRejected($externalIntegration);
+        }
 
         $response = [
-            'data' => $this->transform($externalIntegration->fresh()->load('emailProvider:id,name,driver')),
+            'data' => $this->transform($externalIntegration->load('emailProvider:id,name,driver')),
         ];
 
         if ($clientSecret !== null) {
             $response['client_secret'] = $clientSecret;
             $response['message'] = 'Integration updated. Share the new client_secret with the connecting system.';
+        } elseif ($becameActive) {
+            $response['message'] = 'Integration approved and activated. Linked users have been notified.';
+        } elseif ($becameInactive) {
+            $response['message'] = 'Integration disabled. Linked users have been notified.';
         }
 
         return response()->json($response);
-    }
-
-    public function destroy(ExternalIntegration $externalIntegration): JsonResponse
-    {
-        $this->authorize('delete', $externalIntegration);
-
-        $externalIntegration->delete();
-
-        return response()->json(['message' => 'Integration deleted.']);
     }
 
     /**

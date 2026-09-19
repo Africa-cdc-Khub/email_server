@@ -17,7 +17,9 @@ type Provider = {
 
 const items = ref<Provider[]>([])
 const loading = ref(true)
+const actingId = ref<number | null>(null)
 const error = ref('')
+const message = ref('')
 const router = useRouter()
 
 async function load() {
@@ -36,22 +38,34 @@ async function load() {
 
 async function setDefault(item: Provider) {
   error.value = ''
+  message.value = ''
   try {
     await api.post(`/admin/email-providers/${item.id}/set-default`)
+    message.value = `“${item.name}” is now the default provider.`
     await load()
   } catch (err) {
     error.value = apiErrorMessage(err, 'Could not set default provider.')
   }
 }
 
-async function remove(item: Provider) {
-  if (!confirm(`Delete provider "${item.name}"?`)) return
+async function setActive(item: Provider, active: boolean) {
+  if (item.is_default && !active) {
+    error.value = 'Cannot disable the default provider. Set another provider as default first.'
+    return
+  }
+  actingId.value = item.id
   error.value = ''
+  message.value = ''
   try {
-    await api.delete(`/admin/email-providers/${item.id}`)
+    await api.put(`/admin/email-providers/${item.id}`, { is_active: active })
+    message.value = active
+      ? `“${item.name}” enabled.`
+      : `“${item.name}” disabled.`
     await load()
   } catch (err) {
-    error.value = apiErrorMessage(err, 'Could not delete provider.')
+    error.value = apiErrorMessage(err, active ? 'Could not enable provider.' : 'Could not disable provider.')
+  } finally {
+    actingId.value = null
   }
 }
 
@@ -65,7 +79,12 @@ onMounted(load)
       <v-btn color="primary" prepend-icon="mdi-plus" :to="{ name: 'provider-new' }">Add provider</v-btn>
     </div>
 
-    <v-alert v-if="error" type="error" variant="tonal" class="mb-4">{{ error }}</v-alert>
+    <v-alert v-if="message" type="success" variant="tonal" class="mb-4" closable @click:close="message = ''">
+      {{ message }}
+    </v-alert>
+    <v-alert v-if="error" type="error" variant="tonal" class="mb-4" closable @click:close="error = ''">
+      {{ error }}
+    </v-alert>
     <v-alert
       v-if="items.some((i) => i.config_corrupt)"
       type="warning"
@@ -85,7 +104,7 @@ onMounted(load)
         { title: 'From', key: 'from_address' },
         { title: 'Default', key: 'is_default' },
         { title: 'Active', key: 'is_active' },
-        { title: 'Actions', key: 'actions', sortable: false },
+        { title: 'Actions', key: 'actions', sortable: false, width: 220 },
       ]"
     >
       <template #item.name="{ item }">
@@ -101,9 +120,41 @@ onMounted(load)
         </v-icon>
       </template>
       <template #item.actions="{ item }">
-        <v-btn size="small" variant="text" icon="mdi-pencil" @click="router.push({ name: 'provider-edit', params: { id: item.id } })" />
-        <v-btn v-if="!item.is_default" size="small" variant="text" icon="mdi-star" @click="setDefault(item)" />
-        <v-btn v-if="!item.is_default" size="small" variant="text" color="error" icon="mdi-delete" @click="remove(item)" />
+        <div class="d-flex ga-1 flex-wrap align-center">
+          <v-btn
+            size="small"
+            variant="text"
+            icon="mdi-pencil"
+            @click="router.push({ name: 'provider-edit', params: { id: item.id } })"
+          />
+          <v-btn
+            v-if="!item.is_default"
+            size="small"
+            variant="text"
+            icon="mdi-star"
+            @click="setDefault(item)"
+          />
+          <v-btn
+            v-if="item.is_active && !item.is_default"
+            size="small"
+            color="warning"
+            variant="tonal"
+            :loading="actingId === item.id"
+            @click="setActive(item, false)"
+          >
+            Disable
+          </v-btn>
+          <v-btn
+            v-else-if="!item.is_active"
+            size="small"
+            color="success"
+            variant="tonal"
+            :loading="actingId === item.id"
+            @click="setActive(item, true)"
+          >
+            Enable
+          </v-btn>
+        </div>
       </template>
       <template #no-data>
         <div class="text-medium-emphasis pa-6">

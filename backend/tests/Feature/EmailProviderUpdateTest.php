@@ -115,4 +115,47 @@ class EmailProviderUpdateTest extends TestCase
             EmailProvider::query()->findOrFail($provider->id)->safeConfig()['password'] ?? null
         );
     }
+
+    public function test_admin_can_disable_non_default_provider_but_not_delete(): void
+    {
+        $admin = User::factory()->create(['is_admin' => true, 'is_active' => true]);
+        $token = $admin->createToken('admin-panel')->plainTextToken;
+
+        EmailProvider::factory()->create([
+            'name' => 'Default',
+            'is_default' => true,
+            'is_active' => true,
+        ]);
+        $secondary = EmailProvider::factory()->create([
+            'name' => 'Secondary',
+            'is_default' => false,
+            'is_active' => true,
+        ]);
+
+        $this->withToken($token)
+            ->deleteJson('/api/v1/admin/email-providers/'.$secondary->id)
+            ->assertMethodNotAllowed();
+
+        $this->withToken($token)
+            ->putJson('/api/v1/admin/email-providers/'.$secondary->id, ['is_active' => false])
+            ->assertOk()
+            ->assertJsonPath('data.is_active', false);
+
+        $this->assertFalse((bool) $secondary->fresh()->is_active);
+    }
+
+    public function test_admin_cannot_disable_default_provider(): void
+    {
+        $admin = User::factory()->create(['is_admin' => true, 'is_active' => true]);
+        $default = EmailProvider::factory()->create([
+            'is_default' => true,
+            'is_active' => true,
+        ]);
+
+        $this->withToken($admin->createToken('admin-panel')->plainTextToken)
+            ->putJson('/api/v1/admin/email-providers/'.$default->id, ['is_active' => false])
+            ->assertStatus(422);
+
+        $this->assertTrue((bool) $default->fresh()->is_active);
+    }
 }

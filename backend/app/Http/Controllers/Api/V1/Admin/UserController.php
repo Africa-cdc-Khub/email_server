@@ -8,6 +8,7 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\Api\V1\Admin\StoreUserRequest;
 use App\Http\Requests\Api\V1\Admin\UpdateUserRequest;
 use App\Models\User;
+use App\Services\ApprovalNotifier;
 use App\Services\AuditLogService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -167,7 +168,7 @@ class UserController extends Controller
         return response()->json(['message' => 'User deleted.']);
     }
 
-    public function approve(Request $request, User $user, AuditLogService $audit): JsonResponse
+    public function approve(Request $request, User $user, AuditLogService $audit, ApprovalNotifier $notifier): JsonResponse
     {
         if ($user->is_admin) {
             return response()->json(['message' => 'Admin accounts do not require approval.'], 422);
@@ -204,13 +205,15 @@ class UserController extends Controller
             ],
         ]);
 
+        $notifier->notifyAccountApproved($user->fresh());
+
         return response()->json([
             'message' => 'Account approved.',
             'data' => $this->transform($user->fresh()->load(['externalIntegrations:id,name,slug'])),
         ]);
     }
 
-    public function reject(Request $request, User $user, AuditLogService $audit): JsonResponse
+    public function reject(Request $request, User $user, AuditLogService $audit, ApprovalNotifier $notifier): JsonResponse
     {
         if ($user->is_admin) {
             return response()->json(['message' => 'Admin accounts cannot be rejected.'], 422);
@@ -248,6 +251,8 @@ class UserController extends Controller
                 'rejection_reason' => $reason,
             ],
         ]);
+
+        $notifier->notifyAccountRejected($user->fresh(), $reason);
 
         return response()->json([
             'message' => 'Account rejected.',

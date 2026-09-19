@@ -26,9 +26,4 @@ class ExternalIntegrationPolicy
     {
         return $this->view($user, $externalIntegration);
     }
-
-    public function delete(User $user, ExternalIntegration $externalIntegration): bool
-    {
-        return $this->view($user, $externalIntegration);
-    }
 }

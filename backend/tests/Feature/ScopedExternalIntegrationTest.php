@@ -4,10 +4,13 @@ namespace Tests\Feature;
 
 use App\Enums\EmailDriver;
 use App\Enums\UserApprovalStatus;
+use App\Jobs\SendEmailJob;
+use App\Models\EmailLog;
 use App\Models\EmailProvider;
 use App\Models\ExternalIntegration;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Queue;
 use Tests\TestCase;
 
 class ScopedExternalIntegrationTest extends TestCase
@@ -152,5 +155,120 @@ class ScopedExternalIntegrationTest extends TestCase
             ->getJson('/api/v1/admin/email-providers')
             ->assertOk()
             ->assertJsonStructure(['data']);
+    }
+
+    public function test_admin_can_disable_integration_but_not_delete(): void
+    {
+        $admin = User::factory()->create(['is_admin' => true, 'is_active' => true]);
+        $integration = ExternalIntegration::query()->create([
+            'name' => 'Live App',
+            'slug' => 'live-app',
+            'api_key_hash' => ExternalIntegration::hashClientSecret('secret-live-app-1234'),
+            'api_key_prefix' => 'sec…',
+            'is_active' => true,
+        ]);
+
+        $token = $admin->createToken('admin-panel')->plainTextToken;
+
+        $this->withToken($token)
+            ->deleteJson('/api/v1/admin/external-integrations/'.$integration->id)
+            ->assertMethodNotAllowed();
+
+        $this->withToken($token)
+            ->putJson('/api/v1/admin/external-integrations/'.$integration->id, [
+                'is_active' => false,
+            ])
+            ->assertOk()
+            ->assertJsonPath('data.is_active', false);
+
+        $this->assertFalse((bool) $integration->fresh()->is_active);
+        $this->assertDatabaseHas('external_integrations', ['id' => $integration->id]);
+    }
+
+    public function test_activating_integration_notifies_linked_users(): void
+    {
+        EmailProvider::query()->create([
+            'name' => 'Log',
+            'slug' => 'log-notify',
+            'driver' => EmailDriver::Log,
+            'config' => [],
+            'is_default' => true,
+            'is_active' => true,
+        ]);
+
+        $admin = User::factory()->create(['is_admin' => true, 'is_active' => true]);
+        $owner = User::factory()->create([
+            'email' => 'client-owner@example.com',
+            'is_admin' => false,
+            'is_active' => true,
+            'approval_status' => UserApprovalStatus::Approved,
+        ]);
+        $integration = ExternalIntegration::query()->create([
+            'name' => 'Partner Client',
+            'slug' => 'partner-client',
+            'api_key_hash' => ExternalIntegration::hashClientSecret('secret-partner-client-1'),
+            'api_key_prefix' => 'sec…',
+            'is_active' => false,
+        ]);
+        $owner->externalIntegrations()->attach($integration->id);
+
+        Queue::fake();
+
+        $this->withToken($admin->createToken('admin-panel')->plainTextToken)
+            ->putJson('/api/v1/admin/external-integrations/'.$integration->id, [
+                'is_active' => true,
+            ])
+            ->assertOk()
+            ->assertJsonPath('data.is_active', true);
+
+        Queue::assertPushed(SendEmailJob::class);
+        $log = EmailLog::query()->where('to', 'client-owner@example.com')->first();
+        $this->assertNotNull($log);
+        $this->assertSame('integration_approved', $log->meta['source'] ?? null);
+        $this->assertStringContainsString('Partner Client', (string) ($log->meta['body'] ?? ''));
+        $this->assertStringContainsString('/integrations', (string) ($log->meta['body'] ?? ''));
+    }
+
+    public function test_disabling_integration_notifies_linked_users(): void
+    {
+        EmailProvider::query()->create([
+            'name' => 'Log',
+            'slug' => 'log-disable-notify',
+            'driver' => EmailDriver::Log,
+            'config' => [],
+            'is_default' => true,
+            'is_active' => true,
+        ]);
+
+        $admin = User::factory()->create(['is_admin' => true, 'is_active' => true]);
+        $owner = User::factory()->create([
+            'email' => 'client-disabled@example.com',
+            'is_admin' => false,
+            'is_active' => true,
+            'approval_status' => UserApprovalStatus::Approved,
+        ]);
+        $integration = ExternalIntegration::query()->create([
+            'name' => 'Live Client',
+            'slug' => 'live-client',
+            'api_key_hash' => ExternalIntegration::hashClientSecret('secret-live-client-1'),
+            'api_key_prefix' => 'sec…',
+            'is_active' => true,
+        ]);
+        $owner->externalIntegrations()->attach($integration->id);
+
+        Queue::fake();
+
+        $this->withToken($admin->createToken('admin-panel')->plainTextToken)
+            ->putJson('/api/v1/admin/external-integrations/'.$integration->id, [
+                'is_active' => false,
+            ])
+            ->assertOk()
+            ->assertJsonPath('data.is_active', false);
+
+        Queue::assertPushed(SendEmailJob::class);
+        $log = EmailLog::query()->where('to', 'client-disabled@example.com')->first();
+        $this->assertNotNull($log);
+        $this->assertSame('integration_rejected', $log->meta['source'] ?? null);
+        $this->assertStringContainsString('Live Client', (string) ($log->meta['body'] ?? ''));
     }
 }
