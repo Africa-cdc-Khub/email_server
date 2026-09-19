@@ -8,6 +8,12 @@ import { mixWithWhite } from '@/lib/colorUtils'
 const defaultPrimary = '#0d7a3a'
 const defaultSecondary = '#c9a227'
 
+const cspNonceMeta = document.querySelector('meta[name="csp-nonce"]')?.getAttribute('content')
+const cspNonce =
+  cspNonceMeta && cspNonceMeta !== '__CSP_NONCE__' && cspNonceMeta !== ''
+    ? cspNonceMeta
+    : undefined
+
 const appLightTheme = {
   dark: false,
   colors: {
@@ -56,6 +62,7 @@ export default createVuetify({
     VDataTable: { density: 'comfortable', hover: true },
   },
   theme: {
+    cspNonce,
     defaultTheme: 'light',
     themes: { light: appLightTheme, dark: appDarkTheme },
   },

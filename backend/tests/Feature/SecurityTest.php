@@ -63,6 +63,23 @@ class SecurityTest extends TestCase
             ->assertJson(['message' => 'Unauthenticated.']);
     }
 
+    public function test_api_security_headers_omit_google_fonts_and_disable_caching(): void
+    {
+        $response = $this->getJson('/api/v1/admin/auth/me');
+
+        $response->assertUnauthorized();
+
+        $csp = (string) $response->headers->get('Content-Security-Policy');
+        $this->assertNotSame('', $csp);
+        $this->assertStringNotContainsString('fonts.googleapis.com', $csp);
+        $this->assertStringNotContainsString('fonts.gstatic.com', $csp);
+        $this->assertStringNotContainsString("style-src 'self' 'unsafe-inline'", $csp);
+        $this->assertStringContainsString("font-src 'self' data:", $csp);
+
+        $cache = strtolower((string) $response->headers->get('Cache-Control'));
+        $this->assertStringContainsString('no-store', $cache);
+    }
+
     public function test_integration_cannot_override_provider_id(): void
     {
         config(['integration.jwt_secret' => 'testing-jwt-secret-key-with-at-least-sixty-four-characters-long!!']);

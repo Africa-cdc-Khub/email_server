@@ -30,6 +30,12 @@ class SecurityHeaders
         $csp = $this->contentSecurityPolicy($request);
         $this->setMissing($response, 'Content-Security-Policy', $csp);
 
+        // Authenticated admin API — never let shared caches store responses.
+        if ($this->shouldDisableCaching($request)) {
+            $response->headers->set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+            $response->headers->set('Pragma', 'no-cache');
+        }
+
         if ($request->secure()) {
             $this->setMissing($response, 'Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
         }
@@ -40,20 +46,31 @@ class SecurityHeaders
     private function contentSecurityPolicy(Request $request): string
     {
         $base = "default-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'; object-src 'none';";
-        $fonts = "font-src 'self' data: https://fonts.gstatic.com;";
+        // Fonts are self-hosted (Inter via @fontsource, MDI via npm) — no Google Fonts CDN.
+        $fonts = "font-src 'self' data:;";
         $images = "img-src 'self' data: blob:;";
 
         if ($this->isApiDocsRequest($request)) {
-            // Self-hosted /docs-assets/* — works with host Nginx CSP (script-src 'self')
-            return "{$base} script-src 'self'; style-src 'self' 'unsafe-inline'; {$fonts} {$images} connect-src 'self';";
+            // Swagger UI injects <style> tags; keep element inline styles for docs only.
+            return "{$base} script-src 'self'; style-src-elem 'self' 'unsafe-inline'; style-src-attr 'unsafe-inline'; {$fonts} {$images} connect-src 'self';";
         }
 
-        return "{$base} script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; {$fonts} {$images} connect-src 'self';";
+        // JSON API — no third-party style/font CDNs; no blanket style-src unsafe-inline.
+        return "{$base} script-src 'self'; style-src 'self'; {$fonts} {$images} connect-src 'self';";
     }
 
     private function isApiDocsRequest(Request $request): bool
     {
         return in_array($request->path(), ['api/documentation', 'api/docs.json', 'docs'], true);
+    }
+
+    private function shouldDisableCaching(Request $request): bool
+    {
+        if ($request->is('docs-assets/*') || $request->is('storage/*')) {
+            return false;
+        }
+
+        return $request->is('api/*') || $request->is('up') || $request->is('docs');
     }
 
     private function setMissing(Response $response, string $name, string $value): void
