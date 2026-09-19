@@ -2,6 +2,8 @@
 
 namespace App\Http\Requests\Api\V1;
 
+use App\Rules\SafeMailHeader;
+use App\Services\EmailAttachmentService;
 use Illuminate\Foundation\Http\FormRequest;
 
 class IntegrationSendMailRequest extends FormRequest
@@ -13,9 +15,12 @@ class IntegrationSendMailRequest extends FormRequest
 
     public function rules(): array
     {
-        return [
+        /** @var EmailAttachmentService $attachments */
+        $attachments = app(EmailAttachmentService::class);
+
+        return array_merge([
             'to' => ['required', 'email'],
-            'subject' => ['required', 'string', 'max:500'],
+            'subject' => ['required', 'string', 'max:500', new SafeMailHeader],
             'body' => ['required', 'string'],
             'is_html' => ['sometimes', 'boolean'],
             'provider_id' => ['sometimes', 'nullable', 'integer', 'exists:email_providers,id'],
@@ -23,7 +28,7 @@ class IntegrationSendMailRequest extends FormRequest
             'cc.*' => ['email'],
             'bcc' => ['sometimes', 'nullable', 'array'],
             'bcc.*' => ['email'],
-        ];
+        ], $attachments->validationRules());
     }
 
     protected function prepareForValidation(): void

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import FormField from '@/components/forms/FormField.vue'
+import CaptchaWidget from '@/components/forms/CaptchaWidget.vue'
 import PageHeader from '@/components/shared/PageHeader.vue'
 import ParentCard from '@/components/shared/ParentCard.vue'
 import { api } from '@/lib/api'
@@ -14,6 +15,9 @@ const sending = ref(false)
 const message = ref('')
 const error = ref('')
 const lastLogId = ref<number | null>(null)
+const captchaKey = ref<string | null>(null)
+const captchaAnswer = ref('')
+const captchaResetKey = ref(0)
 
 const form = ref({
   to: '',
@@ -58,6 +62,10 @@ async function sendMail() {
     const bcc = parseAddresses(form.value.bcc)
     if (cc.length) payload.cc = cc
     if (bcc.length) payload.bcc = bcc
+    if (captchaKey.value) {
+      payload.captcha_key = captchaKey.value
+      payload.captcha = captchaAnswer.value
+    }
 
     const res = await api.post('/admin/send-mail', payload)
     message.value = res.data.message ?? 'Email queued for delivery.'
@@ -66,8 +74,10 @@ async function sendMail() {
     form.value.body = ''
     form.value.cc = ''
     form.value.bcc = ''
+    captchaResetKey.value += 1
   } catch (err) {
     error.value = apiErrorMessage(err, 'Failed to queue email. Check the form and try again.')
+    captchaResetKey.value += 1
   } finally {
     sending.value = false
   }
@@ -166,10 +176,17 @@ onMounted(async () => {
             </FormField>
           </v-col>
         </v-row>
-        <div class="d-flex ga-2 mt-6">
-          <v-btn color="primary" type="submit" :loading="sending" :disabled="loading">
-            Send email
-          </v-btn>
+        <div class="d-flex flex-column ga-4 mt-6">
+          <CaptchaWidget
+            :reset-key="captchaResetKey"
+            @update:key="captchaKey = $event"
+            @update:answer="captchaAnswer = $event"
+          />
+          <div class="d-flex ga-2">
+            <v-btn color="primary" type="submit" :loading="sending" :disabled="loading">
+              Send email
+            </v-btn>
+          </div>
         </div>
       </v-form>
     </ParentCard>

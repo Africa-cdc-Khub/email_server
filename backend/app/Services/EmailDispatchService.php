@@ -8,6 +8,7 @@ use App\Jobs\SendEmailJob;
 use App\Models\EmailLog;
 use App\Models\EmailProvider;
 use App\Models\ExternalIntegration;
+use App\Support\MailHeaderSanitizer;
 use Illuminate\Mail\Message;
 use Illuminate\Support\Facades\Mail;
 use RuntimeException;
@@ -19,6 +20,7 @@ class EmailDispatchService
         private readonly DynamicMailConfigService $mailConfig,
         private readonly EmailBrandingService $branding,
         private readonly PhpMailerSmtpMailer $phpMailerSmtp,
+        private readonly EmailAttachmentService $attachments,
     ) {}
 
     /**
@@ -26,6 +28,7 @@ class EmailDispatchService
      *
      * @param  array<int, string>  $cc
      * @param  array<int, string>  $bcc
+     * @param  list<array{filename: string, content: string, content_type: string, size: int}>  $attachmentPayload
      */
     public function queue(
         string $to,
@@ -38,6 +41,7 @@ class EmailDispatchService
         array $bcc = [],
         ?string $source = null,
         ?string $senderIp = null,
+        array $attachmentPayload = [],
     ): EmailLog {
         $provider = $this->mailConfig->resolveProvider($providerId);
 
@@ -60,15 +64,22 @@ class EmailDispatchService
             'email_provider_id' => $provider->id,
             'external_integration_id' => $integration?->id,
             'to' => $to,
-            'subject' => $subject,
+            'subject' => MailHeaderSanitizer::line($subject, 500),
             'status' => 'pending',
             'driver' => $provider->driver->value,
             'meta' => $meta,
         ]);
 
+        if ($attachmentPayload !== []) {
+            $stored = $this->attachments->store($attachmentPayload, $log->id);
+            $meta['attachments'] = $stored;
+            $meta['attachment_count'] = count($stored);
+            $log->update(['meta' => $meta]);
+        }
+
         SendEmailJob::dispatch($log->id);
 
-        return $log;
+        return $log->fresh() ?? $log;
     }
 
     /**
@@ -87,6 +98,7 @@ class EmailDispatchService
         $isHtml = (bool) ($meta['is_html'] ?? true);
         $cc = $meta['cc'] ?? [];
         $bcc = $meta['bcc'] ?? [];
+        $attachmentMeta = is_array($meta['attachments'] ?? null) ? $meta['attachments'] : [];
 
         if ($body === '') {
             $log->update([
@@ -105,6 +117,10 @@ class EmailDispatchService
             $body = $this->branding->wrapPlainText($body, $log->externalIntegration);
         }
 
+        $loadedAttachments = $attachmentMeta === []
+            ? []
+            : $this->attachments->load($attachmentMeta);
+
         return $this->transmit(
             log: $log,
             to: $log->to,
@@ -121,6 +137,8 @@ class EmailDispatchService
                 )['name'],
             ),
             markFailedOnError: false,
+            attachmentPayload: $loadedAttachments,
+            cleanupAttachmentMeta: $attachmentMeta,
         );
     }
 
@@ -129,6 +147,7 @@ class EmailDispatchService
      *
      * @param  array<int, string>  $cc
      * @param  array<int, string>  $bcc
+     * @param  list<array{filename: string, content: string, content_type: string, size: int}>  $attachmentPayload
      */
     public function send(
         string $to,
@@ -141,6 +160,7 @@ class EmailDispatchService
         array $bcc = [],
         ?string $source = null,
         ?string $senderIp = null,
+        array $attachmentPayload = [],
     ): EmailLog {
         $provider = $this->mailConfig->resolveProvider($providerId);
 
@@ -163,11 +183,19 @@ class EmailDispatchService
             'email_provider_id' => $provider->id,
             'external_integration_id' => $integration?->id,
             'to' => $to,
-            'subject' => $subject,
+            'subject' => MailHeaderSanitizer::line($subject, 500),
             'status' => 'pending',
             'driver' => $provider->driver->value,
             'meta' => $meta,
         ]);
+
+        $stored = [];
+        if ($attachmentPayload !== []) {
+            $stored = $this->attachments->store($attachmentPayload, $log->id);
+            $meta['attachments'] = $stored;
+            $meta['attachment_count'] = count($stored);
+            $log->update(['meta' => $meta]);
+        }
 
         return $this->transmit(
             log: $log,
@@ -184,6 +212,8 @@ class EmailDispatchService
                 $integration,
                 $this->mailConfig->resolveFromIdentity($provider)['name'],
             ),
+            attachmentPayload: $attachmentPayload,
+            cleanupAttachmentMeta: $stored,
         );
     }
 
@@ -275,6 +305,8 @@ class EmailDispatchService
     /**
      * @param  array<int, string>  $cc
      * @param  array<int, string>  $bcc
+     * @param  list<array{filename: string, content: string, content_type: string, size?: int}>  $attachmentPayload
+     * @param  list<array{path?: string}>  $cleanupAttachmentMeta
      */
     private function transmit(
         EmailLog $log,
@@ -287,10 +319,14 @@ class EmailDispatchService
         array $bcc,
         ?string $fromName = null,
         bool $markFailedOnError = true,
+        array $attachmentPayload = [],
+        array $cleanupAttachmentMeta = [],
     ): EmailLog {
         $provider = $this->mailConfig->resolveProvider($providerId);
         $this->mailConfig->purgeExchangeClient();
         $from = $this->mailConfig->resolveFromIdentity($provider);
+        $subject = MailHeaderSanitizer::line($subject, 500);
+        $fromName = MailHeaderSanitizer::line((string) ($fromName ?: ($from['name'] ?? '')), 255);
 
         try {
             if ($provider->driver === EmailDriver::Smtp) {
@@ -301,14 +337,15 @@ class EmailDispatchService
                     body: $body,
                     isHtml: $isHtml,
                     fromAddress: (string) ($from['address'] ?? ''),
-                    fromName: $fromName ?: (string) ($from['name'] ?? ''),
+                    fromName: $fromName,
                     cc: $cc,
                     bcc: $bcc,
+                    attachments: $attachmentPayload,
                 );
             } else {
                 $mailer = $this->mailConfig->applyProvider($provider);
 
-                Mail::mailer($mailer)->send([], [], function (Message $message) use ($to, $subject, $body, $isHtml, $from, $cc, $bcc, $fromName) {
+                Mail::mailer($mailer)->send([], [], function (Message $message) use ($to, $subject, $body, $isHtml, $from, $cc, $bcc, $fromName, $attachmentPayload) {
                     $message->to($to)->subject($subject);
 
                     if (! empty($from['address'])) {
@@ -328,10 +365,27 @@ class EmailDispatchService
                     } else {
                         $message->text($body);
                     }
+
+                    foreach ($attachmentPayload as $attachment) {
+                        $message->attachData(
+                            $attachment['content'],
+                            $attachment['filename'],
+                            ['mime' => $attachment['content_type'] ?? 'application/octet-stream'],
+                        );
+                    }
                 });
             }
 
             $log->update(['status' => 'sent', 'error_message' => null]);
+
+            if ($cleanupAttachmentMeta !== []) {
+                $this->attachments->deleteStored($cleanupAttachmentMeta);
+                $meta = $log->meta ?? [];
+                unset($meta['attachments']);
+                $meta['attachment_count'] = count($cleanupAttachmentMeta);
+                $meta['attachments_delivered'] = true;
+                $log->update(['meta' => $meta]);
+            }
         } catch (Throwable $e) {
             if ($markFailedOnError) {
                 $log->update([

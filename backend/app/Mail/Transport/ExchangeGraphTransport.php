@@ -6,6 +6,7 @@ use App\Services\ExchangeGraphMailClient;
 use Symfony\Component\Mailer\SentMessage;
 use Symfony\Component\Mailer\Transport\AbstractTransport;
 use Symfony\Component\Mime\MessageConverter;
+use Symfony\Component\Mime\Part\DataPart;
 
 class ExchangeGraphTransport extends AbstractTransport
 {
@@ -49,6 +50,28 @@ class ExchangeGraphTransport extends AbstractTransport
 
         $from = $email->getFrom()[0] ?? null;
 
+        $attachments = [];
+        foreach ($email->getAttachments() as $part) {
+            if (! $part instanceof DataPart) {
+                continue;
+            }
+
+            $body = $part->getBody();
+            if (is_resource($body)) {
+                $body = stream_get_contents($body) ?: '';
+            }
+
+            $filename = $part->getName()
+                ?: $part->getPreparedHeaders()->getHeaderParameter('Content-Disposition', 'filename')
+                ?: 'attachment.bin';
+
+            $attachments[] = [
+                'name' => $filename,
+                'content' => (string) $body,
+                'content_type' => $part->getMediaType().'/'.$part->getMediaSubtype(),
+            ];
+        }
+
         $this->client->send(
             count($to) === 1 ? $to[0] : $to,
             $email->getSubject() ?? '(no subject)',
@@ -57,6 +80,7 @@ class ExchangeGraphTransport extends AbstractTransport
             $from?->getName(),
             $cc,
             $bcc,
+            $attachments,
         );
     }
 

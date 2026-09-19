@@ -331,10 +331,12 @@ class AdminTwoFactorService
     private function emailCodeBody(string $appName, string $code): string
     {
         $minutes = self::EMAIL_CODE_MINUTES;
+        $safeApp = e($appName);
+        $safeCode = e($code);
 
         return <<<HTML
-<p>Your <strong>{$appName}</strong> sign-in verification code is:</p>
-<p style="font-size: 28px; font-weight: bold; letter-spacing: 4px;">{$code}</p>
+<p>Your <strong>{$safeApp}</strong> sign-in verification code is:</p>
+<p style="font-size: 28px; font-weight: bold; letter-spacing: 4px;">{$safeCode}</p>
 <p>This code expires in {$minutes} minutes.</p>
 <p>If you did not attempt to sign in, change your password and contact an administrator.</p>
 HTML;

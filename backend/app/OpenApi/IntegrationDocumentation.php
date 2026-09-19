@@ -104,7 +104,19 @@ class IntegrationDocumentation
      *                 @OA\Property(property="is_html", type="boolean", default=true, example=true, description="Set to true if body contains HTML (default). Set to false for plain text."),
      *                 @OA\Property(property="provider_id", type="integer", nullable=true, description="Optional. Leave empty in most cases. Internal numeric ID of a specific email provider (Exchange, SMTP, etc.) configured in the admin panel. When omitted, the server uses the provider linked to your integration, or the system default provider."),
      *                 @OA\Property(property="cc", type="array", description="Optional additional copy recipients", @OA\Items(type="string", format="email")),
-     *                 @OA\Property(property="bcc", type="array", description="Optional blind-copy recipients", @OA\Items(type="string", format="email"))
+     *                 @OA\Property(property="bcc", type="array", description="Optional blind-copy recipients", @OA\Items(type="string", format="email")),
+     *                 @OA\Property(
+     *                     property="attachments",
+     *                     type="array",
+     *                     description="Optional file attachments. Each item needs a filename and base64-encoded content. Max 10 files, 5 MB each, 15 MB total.",
+     *                     @OA\Items(
+     *                         type="object",
+     *                         required={"filename","content"},
+     *                         @OA\Property(property="filename", type="string", example="invoice.pdf"),
+     *                         @OA\Property(property="content", type="string", description="Base64-encoded file bytes (data-URI prefix allowed)"),
+     *                         @OA\Property(property="content_type", type="string", example="application/pdf", description="Optional MIME type; guessed from filename when omitted")
+     *                     )
+     *                 )
      *             )
      *         )
      *     ),
@@ -117,7 +129,8 @@ class IntegrationDocumentation
      *
      *             @OA\Property(property="message", type="string"),
      *             @OA\Property(property="log_id", type="integer"),
-     *             @OA\Property(property="status", type="string", example="pending")
+     *             @OA\Property(property="status", type="string", example="pending"),
+     *             @OA\Property(property="attachment_count", type="integer", example=1)
      *         )
      *     ),
      *

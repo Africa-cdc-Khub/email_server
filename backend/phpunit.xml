@@ -33,5 +33,6 @@
         <env name="TELESCOPE_ENABLED" value="false"/>
         <env name="NIGHTWATCH_ENABLED" value="false"/>
         <env name="JWT_SECRET" value="testing-jwt-secret-key-with-at-least-sixty-four-characters-long!!"/>
+        <env name="CAPTCHA_ENABLED" value="false" force="true"/>
     </php>
 </phpunit>

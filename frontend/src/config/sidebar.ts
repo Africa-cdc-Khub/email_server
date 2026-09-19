@@ -16,5 +16,6 @@ export const sidebarItems: SidebarItem[] = [
   { title: 'Security', icon: 'mdi-shield-key-outline', to: { name: 'security' } },
   { header: 'Administration' },
   { title: 'Users', icon: 'mdi-account-group-outline', to: { name: 'users' }, adminOnly: true },
+  { title: 'Audit logs', icon: 'mdi-clipboard-text-clock-outline', to: { name: 'audit-logs' }, adminOnly: true },
   { title: 'Branding', icon: 'mdi-palette-outline', to: { name: 'branding' }, adminOnly: true },
 ]

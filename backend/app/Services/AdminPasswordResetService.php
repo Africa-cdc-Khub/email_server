@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\User;
+use App\Support\TrustedFrontendUrl;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
@@ -87,7 +88,7 @@ class AdminPasswordResetService
 
     private function resetUrl(string $email, string $token): string
     {
-        $base = rtrim((string) config('app.frontend_url'), '/');
+        $base = TrustedFrontendUrl::base();
 
         return $base.'/reset-password?'.http_build_query([
             'email' => $email,
@@ -98,10 +99,13 @@ class AdminPasswordResetService
     private function resetEmailBody(string $appName, string $resetUrl, int $expiryMinutes): string
     {
         $safeUrl = e($resetUrl);
+        $safeApp = e($appName);
+        $safeHost = e((string) (parse_url($resetUrl, PHP_URL_HOST) ?: ''));
 
         return <<<HTML
-<p>You requested a password reset for your <strong>{$appName}</strong> admin account.</p>
+<p>You requested a password reset for your <strong>{$safeApp}</strong> admin account.</p>
 <p><a href="{$safeUrl}">Reset your password</a></p>
+<p>This link opens only on <strong>{$safeHost}</strong>. If the address looks unfamiliar, ignore this email.</p>
 <p>This link expires in {$expiryMinutes} minutes and can only be used once.</p>
 <p>If you did not request this, you can ignore this email. Your password will not change.</p>
 HTML;

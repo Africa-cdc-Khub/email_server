@@ -2,6 +2,7 @@
 
 namespace App\Http\Requests\Api\V1\Admin;
 
+use App\Rules\SafeMailHeader;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
 
@@ -17,7 +18,7 @@ class UpdateExternalIntegrationRequest extends FormRequest
         $integrationId = $this->route('external_integration')?->id;
 
         return [
-            'name' => ['sometimes', 'string', 'max:255'],
+            'name' => ['sometimes', 'string', 'max:255', new SafeMailHeader],
             'slug' => ['sometimes', 'string', 'max:64', 'alpha_dash', Rule::unique('external_integrations', 'slug')->ignore($integrationId)],
             'client_secret' => ['required_without:generate_secret', 'nullable', 'string', 'min:16', 'max:255'],
             'generate_secret' => ['sometimes', 'boolean'],

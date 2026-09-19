@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import FormField from '@/components/forms/FormField.vue'
+import CaptchaWidget from '@/components/forms/CaptchaWidget.vue'
 import PageHeader from '@/components/shared/PageHeader.vue'
 import ParentCard from '@/components/shared/ParentCard.vue'
 import { api } from '@/lib/api'
@@ -32,6 +33,9 @@ const testTo = ref('')
 const testing = ref(false)
 const message = ref('')
 const error = ref('')
+const captchaKey = ref<string | null>(null)
+const captchaAnswer = ref('')
+const captchaResetKey = ref(0)
 /** Which secret fields already exist server-side (never returned in cleartext). */
 const storedSecrets = ref<Record<string, boolean>>({})
 /** True when server ciphertext cannot be decrypted (usually after APP_KEY rotation). */
@@ -162,10 +166,17 @@ async function sendTest() {
   message.value = ''
   error.value = ''
   try {
-    await api.post(`/admin/email-providers/${id.value}/test`, { to: testTo.value })
+    const payload: Record<string, unknown> = { to: testTo.value }
+    if (captchaKey.value) {
+      payload.captcha_key = captchaKey.value
+      payload.captcha = captchaAnswer.value
+    }
+    await api.post(`/admin/email-providers/${id.value}/test`, payload)
     message.value = `Test email sent to ${testTo.value}`
+    captchaResetKey.value += 1
   } catch (err) {
     error.value = apiErrorMessage(err, 'Test email failed.')
+    captchaResetKey.value += 1
   } finally {
     testing.value = false
   }
@@ -274,8 +285,15 @@ onMounted(async () => {
               <v-text-field v-model="testTo" type="email" variant="outlined" hide-details />
             </FormField>
           </v-col>
-          <v-col cols="12" md="6" class="d-flex align-end pb-4">
-            <v-btn color="secondary" :loading="testing" @click="sendTest">Send test email</v-btn>
+          <v-col cols="12" md="6" class="d-flex flex-column ga-3 pb-4">
+            <CaptchaWidget
+              :reset-key="captchaResetKey"
+              @update:key="captchaKey = $event"
+              @update:answer="captchaAnswer = $event"
+            />
+            <v-btn color="secondary" :loading="testing" class="align-self-start" @click="sendTest">
+              Send test email
+            </v-btn>
           </v-col>
         </v-row>
       </template>

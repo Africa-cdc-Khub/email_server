@@ -161,6 +161,14 @@ export const useAuthStore = defineStore('auth', {
       const { data } = await api.post<{ message: string }>('/admin/auth/reset-password', payload)
       return data.message
     },
+    async changePassword(payload: {
+      current_password: string
+      password: string
+      password_confirmation: string
+    }) {
+      const { data } = await api.post<{ message: string }>('/admin/auth/change-password', payload)
+      return data.message
+    },
     async bootstrap() {
       if (!getToken()) {
         this.bootstrapped = true

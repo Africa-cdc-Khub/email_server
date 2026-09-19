@@ -88,6 +88,7 @@ class EmailLog extends Model
                 ? $meta['sender_ip']
                 : null,
             'can_retry' => $canRetry,
+            'attachment_count' => (int) ($meta['attachment_count'] ?? (is_array($meta['attachments'] ?? null) ? count($meta['attachments']) : 0)),
             'email_provider' => $this->emailProvider ? [
                 'id' => $this->emailProvider->id,
                 'name' => $this->emailProvider->name,

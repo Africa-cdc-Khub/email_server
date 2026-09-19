@@ -3,12 +3,14 @@
 namespace App\Http\Controllers\Api\V1\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Http\Requests\Api\V1\Admin\ChangePasswordRequest;
 use App\Http\Requests\Api\V1\Admin\ForgotPasswordRequest;
 use App\Http\Requests\Api\V1\Admin\LoginRequest;
 use App\Http\Requests\Api\V1\Admin\ResetPasswordRequest;
 use App\Models\User;
 use App\Services\AdminPasswordResetService;
 use App\Services\AdminTwoFactorService;
+use App\Services\AuditLogService;
 use App\Support\ApiDocsAuthCookie;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -20,6 +22,7 @@ class AuthController extends Controller
     public function login(
         LoginRequest $request,
         AdminTwoFactorService $twoFactor,
+        AuditLogService $audit,
     ): JsonResponse {
         try {
             $user = User::query()->where('email', $request->validated('email'))->first();
@@ -32,6 +35,13 @@ class AuthController extends Controller
         }
 
         if ($user === null || ! Hash::check($request->validated('password'), $user->password)) {
+            $audit->log('Failed login attempt', [
+                'event_type' => 'auth_failed',
+                'http_method' => 'POST',
+                'request_uri' => $request->path(),
+                'new_values' => ['email' => $request->validated('email')],
+            ]);
+
             throw ValidationException::withMessages([
                 'email' => ['The provided credentials are incorrect.'],
             ]);
@@ -49,6 +59,15 @@ class AuthController extends Controller
 
         $token = $user->createToken('admin-panel')->plainTextToken;
 
+        $audit->log('User logged in', [
+            'event_type' => 'auth_login',
+            'user' => $user,
+            'http_method' => 'POST',
+            'request_uri' => $request->path(),
+            'target_table' => 'users',
+            'target_id' => $user->id,
+        ]);
+
         return ApiDocsAuthCookie::attach(response()->json([
             'token' => $token,
             'user' => $this->transformUser($user),
@@ -60,11 +79,42 @@ class AuthController extends Controller
         return response()->json($this->transformUser($request->user()));
     }
 
-    public function logout(Request $request): JsonResponse
+    public function logout(Request $request, AuditLogService $audit): JsonResponse
     {
-        $request->user()->currentAccessToken()?->delete();
+        $user = $request->user();
+        $audit->log('User logged out', [
+            'event_type' => 'auth_logout',
+            'user' => $user,
+            'http_method' => 'POST',
+            'request_uri' => $request->path(),
+            'target_table' => 'users',
+            'target_id' => $user?->id,
+        ]);
+
+        $user?->currentAccessToken()?->delete();
 
         return ApiDocsAuthCookie::clear(response()->json(['message' => 'Logged out.']));
+    }
+
+    public function changePassword(ChangePasswordRequest $request, AuditLogService $audit): JsonResponse
+    {
+        /** @var User $user */
+        $user = $request->user();
+        $user->password = $request->validated('password');
+        $user->save();
+        $user->tokens()->where('id', '!=', $user->currentAccessToken()?->id)->delete();
+
+        $audit->log('User changed password', [
+            'event_type' => 'auth_password_change',
+            'target_table' => 'users',
+            'target_id' => $user->id,
+            'http_method' => 'POST',
+            'request_uri' => $request->path(),
+        ]);
+
+        return response()->json([
+            'message' => 'Password updated successfully.',
+        ]);
     }
 
     public function forgotPassword(ForgotPasswordRequest $request, AdminPasswordResetService $passwordReset): JsonResponse
@@ -76,13 +126,23 @@ class AuthController extends Controller
         ]);
     }
 
-    public function resetPassword(ResetPasswordRequest $request, AdminPasswordResetService $passwordReset): JsonResponse
+    public function resetPassword(ResetPasswordRequest $request, AdminPasswordResetService $passwordReset, AuditLogService $audit): JsonResponse
     {
         $passwordReset->resetPassword(
             $request->validated('email'),
             $request->validated('token'),
             $request->validated('password'),
         );
+
+        $user = User::query()->where('email', $request->validated('email'))->first();
+        $audit->log('Password reset via email link', [
+            'event_type' => 'auth_password_reset',
+            'user' => $user,
+            'target_table' => 'users',
+            'target_id' => $user?->id,
+            'http_method' => 'POST',
+            'request_uri' => $request->path(),
+        ]);
 
         return response()->json([
             'message' => 'Password updated. You can sign in with your new password.',

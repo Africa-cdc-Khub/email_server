@@ -1,8 +1,10 @@
 <?php
 
+use App\Http\Controllers\Api\V1\Admin\AuditLogController;
 use App\Http\Controllers\Api\V1\Admin\MailController;
 use App\Http\Controllers\Api\V1\Admin\AuthController;
 use App\Http\Controllers\Api\V1\Admin\BrandingController as AdminBrandingController;
+use App\Http\Controllers\Api\V1\Admin\CaptchaController;
 use App\Http\Controllers\Api\V1\Admin\DashboardController;
 use App\Http\Controllers\Api\V1\Admin\EmailLogController;
 use App\Http\Controllers\Api\V1\Admin\EmailProviderController;
@@ -16,6 +18,7 @@ use App\Http\Controllers\HealthController;
 use App\Http\Middleware\AuthenticateIntegrationJwt;
 use App\Http\Middleware\EnsureUserIsActive;
 use App\Http\Middleware\EnsureUserIsAdmin;
+use App\Http\Middleware\LogAdminAccess;
 use Illuminate\Support\Facades\Route;
 
 Route::prefix('v1')->group(function () {
@@ -36,9 +39,11 @@ Route::prefix('v1')->group(function () {
         Route::post('/auth/reset-password', [AuthController::class, 'resetPassword'])
             ->middleware('throttle:10,1');
 
-        Route::middleware(['auth:sanctum', EnsureUserIsActive::class])->group(function () {
+        Route::middleware(['auth:sanctum', EnsureUserIsActive::class, LogAdminAccess::class])->group(function () {
             Route::get('/auth/me', [AuthController::class, 'me']);
             Route::post('/auth/logout', [AuthController::class, 'logout']);
+            Route::post('/auth/change-password', [AuthController::class, 'changePassword'])
+                ->middleware('throttle:10,1');
             Route::get('/auth/2fa/status', [TwoFactorController::class, 'status']);
             Route::post('/auth/2fa/email/enable', [TwoFactorController::class, 'enableEmail']);
             Route::post('/auth/2fa/email/disable', [TwoFactorController::class, 'disableEmail']);
@@ -56,6 +61,8 @@ Route::prefix('v1')->group(function () {
                     ->middleware('throttle:30,1');
 
                 Route::apiResource('users', UserController::class);
+                Route::get('/captcha', CaptchaController::class);
+                Route::get('/audit-logs', [AuditLogController::class, 'index']);
                 Route::post('/send-mail', [MailController::class, 'send'])
                     ->middleware('throttle:30,1');
 

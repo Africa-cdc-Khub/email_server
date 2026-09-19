@@ -23,7 +23,7 @@ class SecurityHeaders
             'Permissions-Policy',
             'accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()',
         );
-        $this->setMissing($response, 'Cross-Origin-Opener-Policy', 'same-origin');
+        $this->setMissing($response, 'Cross-Origin-Opener-Policy', 'same-origin-allow-popups');
         $this->setMissing($response, 'Cross-Origin-Resource-Policy', 'same-site');
         $response->headers->remove('X-Powered-By');
 

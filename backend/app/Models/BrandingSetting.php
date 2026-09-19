@@ -74,7 +74,9 @@ class BrandingSetting extends Model
         }
 
         if (str_starts_with($path, 'http://') || str_starts_with($path, 'https://')) {
-            return $path;
+            // Never emit absolute third-party URLs on the public login/branding
+            // surface — those can be used to dress a phishing page with trusted logos.
+            return null;
         }
 
         $normalized = ltrim(str_replace('\\', '/', $path), '/');

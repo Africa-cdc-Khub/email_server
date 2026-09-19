@@ -1,13 +1,15 @@
 <script setup lang="ts">
 import { ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import FormField from '@/components/forms/FormField.vue'
+import { safeInternalRedirect } from '@/lib/safeRedirect'
 import { useAuthStore } from '@/stores/auth'
 import { useBrandingStore } from '@/stores/branding'
 
 const auth = useAuthStore()
 const branding = useBrandingStore()
 const router = useRouter()
+const route = useRoute()
 const email = ref('')
 const password = ref('')
 const loading = ref(false)
@@ -18,7 +20,15 @@ async function submit() {
   error.value = ''
   try {
     const result = await auth.login(email.value, password.value)
-    await router.push({ name: result.requires2fa ? 'verify-2fa' : 'dashboard' })
+    if (result.requires2fa) {
+      await router.push({ name: 'verify-2fa' })
+      return
+    }
+
+    const redirect = safeInternalRedirect(
+      typeof route.query.redirect === 'string' ? route.query.redirect : null,
+    )
+    await router.push(redirect ?? { name: 'dashboard' })
   } catch (e: unknown) {
     const axiosErr = e as {
       response?: { status?: number; data?: { message?: string; errors?: Record<string, string[]> } }

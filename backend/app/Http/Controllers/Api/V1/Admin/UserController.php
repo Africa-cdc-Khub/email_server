@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\Api\V1\Admin\StoreUserRequest;
 use App\Http\Requests\Api\V1\Admin\UpdateUserRequest;
 use App\Models\User;
+use App\Services\AuditLogService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -22,7 +23,7 @@ class UserController extends Controller
         return response()->json(['data' => $users]);
     }
 
-    public function store(StoreUserRequest $request): JsonResponse
+    public function store(StoreUserRequest $request, AuditLogService $audit): JsonResponse
     {
         $data = $request->validated();
 
@@ -36,6 +37,13 @@ class UserController extends Controller
 
         $this->syncIntegrations($user, $data);
 
+        $audit->logRecordChange('created', 'users', $user->id, null, [
+            'name' => $user->name,
+            'email' => $user->email,
+            'is_admin' => $user->is_admin,
+            'is_active' => $user->is_active,
+        ]);
+
         return response()->json([
             'data' => $this->transform($user->fresh()->load(['externalIntegrations:id,name,slug'])),
         ], 201);
@@ -48,9 +56,15 @@ class UserController extends Controller
         return response()->json(['data' => $this->transform($user)]);
     }
 
-    public function update(UpdateUserRequest $request, User $user): JsonResponse
+    public function update(UpdateUserRequest $request, User $user, AuditLogService $audit): JsonResponse
     {
         $data = $request->validated();
+        $before = [
+            'name' => $user->name,
+            'email' => $user->email,
+            'is_admin' => $user->is_admin,
+            'is_active' => $user->is_active,
+        ];
 
         if (array_key_exists('password', $data) && ($data['password'] === null || $data['password'] === '')) {
             unset($data['password']);
@@ -75,12 +89,21 @@ class UserController extends Controller
             $user->tokens()->delete();
         }
 
+        $user->refresh();
+        $audit->logRecordChange('updated', 'users', $user->id, $before, [
+            'name' => $user->name,
+            'email' => $user->email,
+            'is_admin' => $user->is_admin,
+            'is_active' => $user->is_active,
+            'password_changed' => array_key_exists('password', $data),
+        ]);
+
         return response()->json([
             'data' => $this->transform($user->fresh()->load(['externalIntegrations:id,name,slug'])),
         ]);
     }
 
-    public function destroy(Request $request, User $user): JsonResponse
+    public function destroy(Request $request, User $user, AuditLogService $audit): JsonResponse
     {
         if ($request->user()->id === $user->id) {
             return response()->json(['message' => 'You cannot delete your own account.'], 422);
@@ -90,8 +113,18 @@ class UserController extends Controller
             return response()->json(['message' => 'Cannot delete the last active admin.'], 422);
         }
 
+        $snapshot = [
+            'name' => $user->name,
+            'email' => $user->email,
+            'is_admin' => $user->is_admin,
+            'is_active' => $user->is_active,
+        ];
+        $id = $user->id;
+
         $user->tokens()->delete();
         $user->delete();
+
+        $audit->logRecordChange('deleted', 'users', $id, $snapshot, null);
 
         return response()->json(['message' => 'User deleted.']);
     }

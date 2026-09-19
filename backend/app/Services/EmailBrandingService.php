@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\BrandingSetting;
 use App\Models\ExternalIntegration;
+use App\Support\MailHeaderSanitizer;
 
 class EmailBrandingService
 {
@@ -11,16 +12,19 @@ class EmailBrandingService
     {
         $branding = BrandingSetting::current();
 
-        return $branding->app_name ?: (string) config('app.name', 'Email Server');
+        return MailHeaderSanitizer::line(
+            $branding->app_name ?: (string) config('app.name', 'Email Server'),
+            255,
+        );
     }
 
     public function resolveFromName(?ExternalIntegration $integration = null, ?string $providerFromName = null): string
     {
         if ($integration !== null) {
-            return $integration->name;
+            return MailHeaderSanitizer::line($integration->name, 255);
         }
 
-        return $providerFromName ?: $this->appName();
+        return MailHeaderSanitizer::line($providerFromName ?: $this->appName(), 255);
     }
 
     public function wrapHtml(string $body, ?ExternalIntegration $integration = null): string

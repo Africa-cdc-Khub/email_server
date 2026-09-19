@@ -17,6 +17,12 @@ class AdminPasswordResetTest extends TestCase
 {
     use RefreshDatabase;
 
+    protected function setUp(): void
+    {
+        parent::setUp();
+        $this->withoutMiddleware(\Illuminate\Routing\Middleware\ThrottleRequests::class);
+    }
+
     public function test_forgot_password_returns_generic_message_and_queues_email_for_active_user(): void
     {
         EmailProvider::query()->create([
@@ -57,6 +63,43 @@ class AdminPasswordResetTest extends TestCase
         Queue::assertNothingPushed();
     }
 
+    public function test_forgot_password_reset_link_uses_trusted_frontend_host(): void
+    {
+        config([
+            'app.url' => 'https://notifications.africacdc.org',
+            'app.frontend_url' => 'https://attacker.example',
+        ]);
+
+        EmailProvider::query()->create([
+            'name' => 'Log',
+            'slug' => 'log',
+            'driver' => EmailDriver::Log,
+            'config' => [],
+            'is_default' => true,
+            'is_active' => true,
+        ]);
+
+        User::factory()->create([
+            'email' => 'andrewa@africacdcorg',
+            'is_admin' => true,
+            'is_active' => true,
+        ]);
+
+        Queue::fake();
+
+        $this->postJson('/api/v1/admin/auth/forgot-password', [
+            'email' => 'andrewa@africacdcorg',
+        ])->assertOk();
+
+        Queue::assertPushed(SendEmailJob::class, function (SendEmailJob $job): bool {
+            $log = \App\Models\EmailLog::query()->find($job->emailLogId);
+            $body = (string) ($log?->meta['body'] ?? '');
+
+            return str_contains($body, 'https://notifications.africacdc.org/reset-password')
+                && ! str_contains($body, 'attacker.example');
+        });
+    }
+
     public function test_reset_password_updates_password_and_revokes_tokens(): void
     {
         $user = User::factory()->create([
@@ -73,7 +116,7 @@ class AdminPasswordResetTest extends TestCase
             'created_at' => now(),
         ]);
 
-        $token = $user->createToken('admin-panel')->plainTextToken;
+        $user->createToken('admin-panel')->plainTextToken;
 
         $this->postJson('/api/v1/admin/auth/reset-password', [
             'email' => $user->email,

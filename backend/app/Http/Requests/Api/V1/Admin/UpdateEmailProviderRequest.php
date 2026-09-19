@@ -3,6 +3,7 @@
 namespace App\Http\Requests\Api\V1\Admin;
 
 use App\Enums\EmailDriver;
+use App\Rules\SafeMailHeader;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
 
@@ -23,7 +24,7 @@ class UpdateEmailProviderRequest extends FormRequest
             'driver' => ['sometimes', Rule::in(EmailDriver::values())],
             'config' => ['sometimes', 'array'],
             'from_address' => ['sometimes', 'nullable', 'email', 'max:255'],
-            'from_name' => ['sometimes', 'nullable', 'string', 'max:255'],
+            'from_name' => ['sometimes', 'nullable', 'string', 'max:255', new SafeMailHeader],
             'is_default' => ['sometimes', 'boolean'],
             'is_active' => ['sometimes', 'boolean'],
             'priority' => ['sometimes', 'integer', 'min:0', 'max:9999'],

@@ -15,6 +15,7 @@ class PhpMailerSmtpMailer
      *
      * @param  array<int, string>  $cc
      * @param  array<int, string>  $bcc
+     * @param  list<array{filename: string, content: string, content_type?: string}>  $attachments
      *
      * @throws RuntimeException
      */
@@ -28,6 +29,7 @@ class PhpMailerSmtpMailer
         string $fromName,
         array $cc = [],
         array $bcc = [],
+        array $attachments = [],
     ): void {
         if ($provider->driver !== EmailDriver::Smtp) {
             throw new RuntimeException('PHPMailer SMTP transport requires an SMTP provider.');
@@ -104,6 +106,15 @@ class PhpMailerSmtpMailer
             } else {
                 $mail->isHTML(false);
                 $mail->Body = $body;
+            }
+
+            foreach ($attachments as $attachment) {
+                $mail->addStringAttachment(
+                    $attachment['content'],
+                    $attachment['filename'],
+                    PHPMailer::ENCODING_BASE64,
+                    $attachment['content_type'] ?? 'application/octet-stream',
+                );
             }
 
             if (! $mail->send()) {

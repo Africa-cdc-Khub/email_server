@@ -3,6 +3,7 @@ import { onMounted, ref } from 'vue'
 import FormField from '@/components/forms/FormField.vue'
 import PageHeader from '@/components/shared/PageHeader.vue'
 import ParentCard from '@/components/shared/ParentCard.vue'
+import { apiErrorMessage } from '@/lib/apiError'
 import { useAuthStore, type TwoFactorStatus } from '@/stores/auth'
 
 const auth = useAuthStore()
@@ -25,12 +26,37 @@ const qrDataUrl = ref('')
 const emailBusy = ref(false)
 const totpBusy = ref(false)
 
+const currentPassword = ref('')
+const newPassword = ref('')
+const newPasswordConfirmation = ref('')
+const passwordBusy = ref(false)
+
 async function loadStatus() {
   loading.value = true
   try {
     status.value = await auth.fetch2faStatus()
   } finally {
     loading.value = false
+  }
+}
+
+async function changePassword() {
+  passwordBusy.value = true
+  error.value = ''
+  message.value = ''
+  try {
+    message.value = await auth.changePassword({
+      current_password: currentPassword.value,
+      password: newPassword.value,
+      password_confirmation: newPasswordConfirmation.value,
+    })
+    currentPassword.value = ''
+    newPassword.value = ''
+    newPasswordConfirmation.value = ''
+  } catch (err) {
+    error.value = apiErrorMessage(err, 'Could not change password. Check your current password and try again.')
+  } finally {
+    passwordBusy.value = false
   }
 }
 
@@ -129,11 +155,55 @@ onMounted(loadStatus)
   <div>
     <PageHeader
       title="Security"
-      subtitle="Optional two-factor sign-in using email codes or an authenticator app"
+      subtitle="Change your password and manage optional two-factor sign-in"
     />
 
     <v-alert v-if="message" type="success" variant="tonal" class="mb-4">{{ message }}</v-alert>
     <v-alert v-if="error" type="error" variant="tonal" class="mb-4">{{ error }}</v-alert>
+
+    <ParentCard title="Change password" class="mb-4">
+      <p class="text-body-2 text-medium-emphasis mb-4">
+        Update the password you use to sign in. Other sessions will be signed out.
+      </p>
+      <v-row>
+        <v-col cols="12" md="4">
+          <FormField label="Current password" required>
+            <v-text-field
+              v-model="currentPassword"
+              type="password"
+              variant="outlined"
+              hide-details
+              autocomplete="current-password"
+            />
+          </FormField>
+        </v-col>
+        <v-col cols="12" md="4">
+          <FormField label="New password" required>
+            <v-text-field
+              v-model="newPassword"
+              type="password"
+              variant="outlined"
+              hide-details
+              autocomplete="new-password"
+            />
+          </FormField>
+        </v-col>
+        <v-col cols="12" md="4">
+          <FormField label="Confirm new password" required>
+            <v-text-field
+              v-model="newPasswordConfirmation"
+              type="password"
+              variant="outlined"
+              hide-details
+              autocomplete="new-password"
+            />
+          </FormField>
+        </v-col>
+      </v-row>
+      <v-btn color="primary" class="mt-4" :loading="passwordBusy" @click="changePassword">
+        Update password
+      </v-btn>
+    </ParentCard>
 
     <v-row v-if="loading">
       <v-col cols="12"><v-skeleton-loader type="card" /></v-col>
