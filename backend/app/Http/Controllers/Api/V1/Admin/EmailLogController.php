@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api\V1\Admin;
 
+use App\Enums\EmailDriver;
 use App\Http\Controllers\Controller;
 use App\Models\EmailLog;
 use App\Models\ExternalIntegration;
@@ -10,6 +11,7 @@ use App\Services\EmailDispatchService;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Validation\Rule;
 use RuntimeException;
 use Throwable;
 
@@ -17,6 +19,14 @@ class EmailLogController extends Controller
 {
     public function index(Request $request): JsonResponse
     {
+        $request->validate([
+            'status' => ['sometimes', 'nullable', Rule::in(['pending', 'sent', 'failed'])],
+            'driver' => ['sometimes', 'nullable', Rule::in(EmailDriver::values())],
+            'external_integration_id' => ['sometimes', 'nullable'],
+            'q' => ['sometimes', 'nullable', 'string', 'max:255'],
+            'per_page' => ['sometimes', 'nullable', 'integer', 'min:1', 'max:100'],
+        ]);
+
         /** @var User $user */
         $user = $request->user();
         $allowedIds = $user->allowedExternalIntegrationIds();
@@ -27,6 +37,10 @@ class EmailLogController extends Controller
             ->when(
                 $request->filled('status'),
                 fn ($q) => $q->where('status', $request->query('status'))
+            )
+            ->when(
+                $request->filled('driver'),
+                fn ($q) => $q->where('driver', $request->query('driver'))
             )
             ->when(
                 $request->filled('external_integration_id'),
@@ -94,6 +108,11 @@ class EmailLogController extends Controller
             ])
             ->values();
 
+        $drivers = collect(EmailDriver::cases())->map(fn (EmailDriver $driver) => [
+            'value' => $driver->value,
+            'label' => $driver->label(),
+        ])->values();
+
         return response()->json([
             'data' => [
                 'statuses' => [
@@ -101,6 +120,7 @@ class EmailLogController extends Controller
                     ['value' => 'sent', 'label' => 'Sent'],
                     ['value' => 'failed', 'label' => 'Failed'],
                 ],
+                'drivers' => $drivers,
                 'clients' => $clients,
                 'can_view_internal' => $allowedIds === null,
             ],

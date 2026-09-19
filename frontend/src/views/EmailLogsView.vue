@@ -40,6 +40,7 @@ const detailsOpen = ref(false)
 const selectedLog = ref<EmailLog | null>(null)
 
 const statusFilter = ref<string | null>(null)
+const driverFilter = ref<string | null>(null)
 const clientFilter = ref<string | null>(null)
 const search = ref('')
 const auth = useAuthStore()
@@ -49,6 +50,12 @@ const statuses = ref<FilterOption[]>([
   { value: 'pending', label: 'Pending' },
   { value: 'sent', label: 'Sent' },
   { value: 'failed', label: 'Failed' },
+])
+const drivers = ref<FilterOption[]>([
+  { value: 'exchange', label: 'Microsoft Exchange (Graph API)' },
+  { value: 'smtp', label: 'SMTP' },
+  { value: 'ses', label: 'Amazon SES' },
+  { value: 'log', label: 'Log (development)' },
 ])
 const clients = ref<ClientOption[]>([])
 const canViewInternal = ref(true)
@@ -62,13 +69,14 @@ async function loadFilters() {
   try {
     const res = await api.get('/admin/email-logs/filter-options')
     statuses.value = res.data.data.statuses ?? statuses.value
+    drivers.value = res.data.data.drivers ?? drivers.value
     clients.value = res.data.data.clients ?? []
     canViewInternal.value = res.data.data.can_view_internal !== false
     if (!canViewInternal.value && clientFilter.value === 'none') {
       clientFilter.value = null
     }
   } catch {
-    // Keep built-in status options
+    // Keep built-in status / driver options
   }
 }
 
@@ -80,6 +88,7 @@ async function load() {
       params: {
         page: page.value,
         status: statusFilter.value || undefined,
+        driver: driverFilter.value || undefined,
         external_integration_id: clientFilter.value || undefined,
         q: search.value.trim() || undefined,
       },
@@ -102,6 +111,7 @@ function applyFilters() {
 
 function clearFilters() {
   statusFilter.value = null
+  driverFilter.value = null
   clientFilter.value = null
   search.value = ''
   page.value = 1
@@ -156,7 +166,7 @@ async function retryAllFailed() {
   }
 }
 
-watch([statusFilter, clientFilter], () => {
+watch([statusFilter, driverFilter, clientFilter], () => {
   page.value = 1
   load()
 })
@@ -171,7 +181,7 @@ onMounted(async () => {
   <div>
     <PageHeader
       title="Email logs"
-      subtitle="Delivery history — filter by client or status, resend failed emails"
+      subtitle="Delivery history — filter by client, status, or sending driver"
     >
       <template #actions>
         <v-btn
@@ -196,7 +206,7 @@ onMounted(async () => {
 
     <ParentCard title="Filters">
       <v-row dense>
-        <v-col cols="12" md="3">
+        <v-col cols="12" md="2">
           <v-select
             v-model="statusFilter"
             :items="statuses"
@@ -211,6 +221,19 @@ onMounted(async () => {
         </v-col>
         <v-col cols="12" md="3">
           <v-select
+            v-model="driverFilter"
+            :items="drivers"
+            item-title="label"
+            item-value="value"
+            label="Sending driver"
+            clearable
+            variant="outlined"
+            hide-details
+            density="comfortable"
+          />
+        </v-col>
+        <v-col cols="12" md="2">
+          <v-select
             v-model="clientFilter"
             :items="clientItems"
             item-title="title"
@@ -222,7 +245,7 @@ onMounted(async () => {
             density="comfortable"
           />
         </v-col>
-        <v-col cols="12" md="4">
+        <v-col cols="12" md="3">
           <v-text-field
             v-model="search"
             label="Search to / subject / IP"

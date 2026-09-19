@@ -4,10 +4,13 @@ namespace Tests\Feature;
 
 use App\Enums\EmailDriver;
 use App\Enums\UserApprovalStatus;
+use App\Enums\UserRegistrationSource;
+use App\Jobs\SendEmailJob;
+use App\Models\EmailLog;
 use App\Models\EmailProvider;
-use App\Models\ExternalIntegration;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Queue;
 use Tests\TestCase;
 
 class AccountRegistrationTest extends TestCase
@@ -23,6 +26,23 @@ class AccountRegistrationTest extends TestCase
 
     public function test_visitor_can_register_pending_account(): void
     {
+        EmailProvider::query()->create([
+            'name' => 'Log',
+            'slug' => 'log',
+            'driver' => EmailDriver::Log,
+            'config' => [],
+            'is_default' => true,
+            'is_active' => true,
+        ]);
+
+        User::factory()->create([
+            'email' => 'admin@example.com',
+            'is_admin' => true,
+            'is_active' => true,
+        ]);
+
+        Queue::fake();
+
         $this->postJson('/api/v1/admin/auth/register', [
             'name' => 'Partner User',
             'email' => 'partner@example.com',
@@ -36,11 +56,59 @@ class AccountRegistrationTest extends TestCase
         $this->assertDatabaseHas('users', [
             'email' => 'partner@example.com',
             'approval_status' => 'pending',
+            'registration_source' => 'public',
             'is_admin' => 0,
             'is_active' => 0,
             'organisation' => 'Partner Org',
             'phone' => '+256700000000',
         ]);
+
+        Queue::assertPushed(SendEmailJob::class);
+        $this->assertDatabaseHas('email_logs', [
+            'to' => 'admin@example.com',
+        ]);
+        $log = EmailLog::query()->where('to', 'admin@example.com')->first();
+        $this->assertSame('registration_pending', $log?->meta['source'] ?? null);
+        $this->assertStringContainsString('/users?tab=pending', (string) ($log?->meta['body'] ?? ''));
+    }
+
+    public function test_admin_user_index_filters_and_meta_counts(): void
+    {
+        $admin = User::factory()->create(['is_admin' => true, 'is_active' => true]);
+        User::factory()->create([
+            'approval_status' => UserApprovalStatus::Pending,
+            'registration_source' => UserRegistrationSource::Public,
+            'is_active' => false,
+            'is_admin' => false,
+        ]);
+        User::factory()->create([
+            'approval_status' => UserApprovalStatus::Approved,
+            'registration_source' => UserRegistrationSource::System,
+            'is_active' => true,
+            'is_admin' => false,
+        ]);
+
+        $token = $admin->createToken('admin-panel')->plainTextToken;
+
+        $this->withToken($token)
+            ->getJson('/api/v1/admin/users')
+            ->assertOk()
+            ->assertJsonPath('meta.pending_count', 1)
+            ->assertJsonPath('meta.public_count', 1)
+            ->assertJsonPath('meta.system_count', 2)
+            ->assertJsonPath('meta.total_count', 3);
+
+        $this->withToken($token)
+            ->getJson('/api/v1/admin/users?approval_status=pending')
+            ->assertOk()
+            ->assertJsonCount(1, 'data')
+            ->assertJsonPath('data.0.approval_status', 'pending');
+
+        $this->withToken($token)
+            ->getJson('/api/v1/admin/users?registration_source=public')
+            ->assertOk()
+            ->assertJsonCount(1, 'data')
+            ->assertJsonPath('data.0.registration_source', 'public');
     }
 
     public function test_pending_user_cannot_login(): void

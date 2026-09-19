@@ -33,6 +33,7 @@ class UserFactory extends Factory
             'is_admin' => false,
             'is_active' => true,
             'approval_status' => \App\Enums\UserApprovalStatus::Approved,
+            'registration_source' => \App\Enums\UserRegistrationSource::System,
             'two_factor_email_enabled' => false,
             'two_factor_totp_enabled' => false,
             'totp_required' => false,

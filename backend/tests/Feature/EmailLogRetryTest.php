@@ -63,6 +63,24 @@ class EmailLogRetryTest extends TestCase
             ->assertJsonPath('data.0.can_retry', true);
 
         $this->withToken($token)
+            ->getJson('/api/v1/admin/email-logs?driver='.$provider->driver->value)
+            ->assertOk()
+            ->assertJsonPath('total', 2);
+
+        $this->withToken($token)
+            ->getJson('/api/v1/admin/email-logs/filter-options')
+            ->assertOk()
+            ->assertJsonFragment(['value' => $provider->driver->value])
+            ->assertJsonStructure([
+                'data' => [
+                    'statuses',
+                    'drivers',
+                    'clients',
+                    'can_view_internal',
+                ],
+            ]);
+
+        $this->withToken($token)
             ->postJson('/api/v1/admin/email-logs/'.$failed->id.'/retry')
             ->assertOk()
             ->assertJsonPath('data.status', 'pending');

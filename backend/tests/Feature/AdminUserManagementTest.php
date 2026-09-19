@@ -33,9 +33,13 @@ class AdminUserManagementTest extends TestCase
 
         $response->assertCreated()
             ->assertJsonPath('data.email', 'ops@emailserver.local')
+            ->assertJsonPath('data.registration_source', 'system')
             ->assertJsonPath('data.external_integration_ids', []);
 
-        $this->assertDatabaseHas('users', ['email' => 'ops@emailserver.local']);
+        $this->assertDatabaseHas('users', [
+            'email' => 'ops@emailserver.local',
+            'registration_source' => 'system',
+        ]);
     }
 
     public function test_admin_can_update_user(): void

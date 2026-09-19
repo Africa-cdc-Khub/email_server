@@ -9,11 +9,13 @@ use App\Http\Requests\Api\V1\Admin\LoginRequest;
 use App\Http\Requests\Api\V1\Admin\RegisterAccountRequest;
 use App\Http\Requests\Api\V1\Admin\ResetPasswordRequest;
 use App\Enums\UserApprovalStatus;
+use App\Enums\UserRegistrationSource;
 use App\Models\User;
 use App\Services\AdminPasswordResetService;
 use App\Services\AdminTwoFactorService;
 use App\Services\AuditLogService;
 use App\Services\BlockedEmailService;
+use App\Services\PendingRegistrationNotifier;
 use App\Support\ApiDocsAuthCookie;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -22,8 +24,11 @@ use Illuminate\Validation\ValidationException;
 
 class AuthController extends Controller
 {
-    public function register(RegisterAccountRequest $request, AuditLogService $audit): JsonResponse
-    {
+    public function register(
+        RegisterAccountRequest $request,
+        AuditLogService $audit,
+        PendingRegistrationNotifier $notifier,
+    ): JsonResponse {
         $data = $request->validated();
 
         $user = User::query()->create([
@@ -32,6 +37,7 @@ class AuthController extends Controller
             'password' => $data['password'],
             'phone' => $data['phone'],
             'organisation' => $data['organisation'],
+            'registration_source' => UserRegistrationSource::Public,
             'is_admin' => false,
             'is_active' => false,
             'approval_status' => UserApprovalStatus::Pending,
@@ -49,9 +55,12 @@ class AuthController extends Controller
             'new_values' => [
                 'email' => $user->email,
                 'organisation' => $user->organisation,
+                'registration_source' => UserRegistrationSource::Public->value,
                 'approval_status' => UserApprovalStatus::Pending->value,
             ],
         ]);
+
+        $notifier->notifyAdmins($user);
 
         return response()->json([
             'message' => 'Registration received. An administrator must approve your account before you can sign in.',

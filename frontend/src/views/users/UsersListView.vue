@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import PageHeader from '@/components/shared/PageHeader.vue'
 import ParentCard from '@/components/shared/ParentCard.vue'
 import { api } from '@/lib/api'
@@ -14,6 +14,7 @@ type UserRow = {
   email: string
   phone?: string | null
   organisation?: string | null
+  registration_source?: string
   is_admin: boolean
   is_active: boolean
   approval_status?: string
@@ -23,24 +24,55 @@ type UserRow = {
   external_integrations: IntegrationSummary[]
 }
 
+type UsersMeta = {
+  pending_count: number
+  approved_count: number
+  rejected_count: number
+  public_count: number
+  system_count: number
+  total_count: number
+}
+
+type StatusTab = 'all' | 'pending' | 'approved' | 'rejected'
+type SourceFilter = '' | 'public' | 'system' | null
+
 const items = ref<UserRow[]>([])
+const meta = ref<UsersMeta>({
+  pending_count: 0,
+  approved_count: 0,
+  rejected_count: 0,
+  public_count: 0,
+  system_count: 0,
+  total_count: 0,
+})
 const loading = ref(true)
 const actingId = ref<number | null>(null)
 const message = ref('')
 const error = ref('')
-const statusFilter = ref<string | null>('pending')
+const route = useRoute()
 const router = useRouter()
 
-const statusOptions = [
-  { value: null, title: 'All' },
-  { value: 'pending', title: 'Pending' },
-  { value: 'approved', title: 'Approved' },
-  { value: 'rejected', title: 'Rejected' },
+const initialTab = ((): StatusTab => {
+  const raw = typeof route.query.tab === 'string' ? route.query.tab : 'all'
+  if (raw === 'pending' || raw === 'approved' || raw === 'rejected') return raw
+  return 'all'
+})()
+
+const statusTab = ref<StatusTab>(initialTab)
+const sourceFilter = ref<SourceFilter>('')
+
+const sourceOptions = [
+  { value: '', title: 'All sources' },
+  { value: 'public', title: 'Public registration' },
+  { value: 'system', title: 'System users' },
 ]
 
-const pendingCount = computed(
-  () => items.value.filter((u) => u.approval_status === 'pending').length,
-)
+const cardTitle = computed(() => {
+  if (statusTab.value === 'pending') return 'Pending approval'
+  if (statusTab.value === 'approved') return 'Approved users'
+  if (statusTab.value === 'rejected') return 'Rejected users'
+  return 'All users'
+})
 
 async function load() {
   loading.value = true
@@ -48,10 +80,19 @@ async function load() {
   try {
     const res = await api.get('/admin/users', {
       params: {
-        approval_status: statusFilter.value || undefined,
+        approval_status: statusTab.value === 'all' ? undefined : statusTab.value,
+        registration_source: sourceFilter.value || undefined,
       },
     })
     items.value = res.data.data
+    meta.value = {
+      pending_count: res.data.meta?.pending_count ?? 0,
+      approved_count: res.data.meta?.approved_count ?? 0,
+      rejected_count: res.data.meta?.rejected_count ?? 0,
+      public_count: res.data.meta?.public_count ?? 0,
+      system_count: res.data.meta?.system_count ?? 0,
+      total_count: res.data.meta?.total_count ?? items.value.length,
+    }
   } catch (err) {
     items.value = []
     error.value = apiErrorMessage(err, 'Could not load users.')
@@ -100,7 +141,22 @@ async function remove(item: UserRow) {
   await load()
 }
 
-watch(statusFilter, () => {
+function syncTabQuery(tab: StatusTab) {
+  const nextQuery = { ...route.query }
+  if (tab === 'all') {
+    delete nextQuery.tab
+  } else {
+    nextQuery.tab = tab
+  }
+  router.replace({ query: nextQuery })
+}
+
+watch(statusTab, (tab) => {
+  syncTabQuery(tab)
+  load()
+})
+
+watch(sourceFilter, () => {
   load()
 })
 
@@ -122,22 +178,54 @@ onMounted(load)
       {{ error }}
     </v-alert>
 
-    <ParentCard title="Users">
+    <v-alert
+      v-if="meta.pending_count > 0 && statusTab !== 'pending'"
+      type="warning"
+      variant="tonal"
+      class="mb-4"
+      border="start"
+    >
+      {{ meta.pending_count }} account{{ meta.pending_count === 1 ? '' : 's' }} awaiting approval.
+      <v-btn class="ms-2" size="small" variant="tonal" color="warning" @click="statusTab = 'pending'">
+        Review pending
+      </v-btn>
+    </v-alert>
+
+    <v-tabs v-model="statusTab" color="primary" class="mb-4">
+      <v-tab value="all">All ({{ meta.total_count }})</v-tab>
+      <v-tab value="pending">
+        Pending
+        <v-badge
+          v-if="meta.pending_count > 0"
+          :content="meta.pending_count"
+          color="warning"
+          inline
+          class="ms-1"
+        />
+      </v-tab>
+      <v-tab value="approved">Approved ({{ meta.approved_count }})</v-tab>
+      <v-tab value="rejected">Rejected ({{ meta.rejected_count }})</v-tab>
+    </v-tabs>
+
+    <ParentCard :title="cardTitle">
       <div class="d-flex flex-wrap ga-3 align-center mb-4">
         <v-select
-          v-model="statusFilter"
-          :items="statusOptions"
+          v-model="sourceFilter"
+          :items="sourceOptions"
           item-title="title"
           item-value="value"
-          label="Approval status"
+          label="Registration source"
           variant="outlined"
           density="comfortable"
           hide-details
           clearable
-          style="max-width: 220px"
+          style="max-width: 260px"
         />
-        <v-chip v-if="statusFilter === 'pending' || pendingCount" size="small" color="warning" variant="tonal">
-          Pending in view: {{ items.filter((u) => u.approval_status === 'pending').length }}
+        <v-chip size="small" variant="tonal">
+          Public: {{ meta.public_count }}
+        </v-chip>
+        <v-chip size="small" variant="tonal">
+          System: {{ meta.system_count }}
         </v-chip>
       </div>
 
@@ -149,6 +237,7 @@ onMounted(load)
           { title: 'Email', key: 'email' },
           { title: 'Organisation', key: 'organisation' },
           { title: 'Phone', key: 'phone' },
+          { title: 'Source', key: 'registration_source' },
           { title: 'Approval', key: 'approval_status' },
           { title: 'Role', key: 'is_admin' },
           { title: 'Authenticator', key: 'authenticator' },
@@ -162,6 +251,15 @@ onMounted(load)
         </template>
         <template #item.phone="{ item }">
           {{ item.phone || '—' }}
+        </template>
+        <template #item.registration_source="{ item }">
+          <v-chip
+            size="small"
+            variant="tonal"
+            :color="item.registration_source === 'public' ? 'info' : 'default'"
+          >
+            {{ item.registration_source === 'public' ? 'Public' : 'System' }}
+          </v-chip>
         </template>
         <template #item.approval_status="{ item }">
           <v-chip

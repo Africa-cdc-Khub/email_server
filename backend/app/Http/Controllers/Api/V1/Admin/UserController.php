@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api\V1\Admin;
 
 use App\Enums\UserApprovalStatus;
+use App\Enums\UserRegistrationSource;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Api\V1\Admin\StoreUserRequest;
 use App\Http\Requests\Api\V1\Admin\UpdateUserRequest;
@@ -10,22 +11,43 @@ use App\Models\User;
 use App\Services\AuditLogService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Validation\Rule;
 
 class UserController extends Controller
 {
     public function index(Request $request): JsonResponse
     {
+        $request->validate([
+            'approval_status' => ['sometimes', 'nullable', Rule::in(UserApprovalStatus::values())],
+            'registration_source' => ['sometimes', 'nullable', Rule::in(UserRegistrationSource::values())],
+        ]);
+
         $users = User::query()
             ->with(['externalIntegrations:id,name,slug'])
             ->when(
                 $request->filled('approval_status'),
                 fn ($q) => $q->where('approval_status', $request->query('approval_status'))
             )
+            ->when(
+                $request->filled('registration_source'),
+                fn ($q) => $q->where('registration_source', $request->query('registration_source'))
+            )
+            ->orderByRaw("CASE approval_status WHEN 'pending' THEN 0 WHEN 'approved' THEN 1 ELSE 2 END")
             ->orderBy('name')
             ->get()
             ->map(fn (User $user) => $this->transform($user));
 
-        return response()->json(['data' => $users]);
+        return response()->json([
+            'data' => $users,
+            'meta' => [
+                'pending_count' => User::query()->where('approval_status', UserApprovalStatus::Pending)->count(),
+                'approved_count' => User::query()->where('approval_status', UserApprovalStatus::Approved)->count(),
+                'rejected_count' => User::query()->where('approval_status', UserApprovalStatus::Rejected)->count(),
+                'public_count' => User::query()->where('registration_source', UserRegistrationSource::Public)->count(),
+                'system_count' => User::query()->where('registration_source', UserRegistrationSource::System)->count(),
+                'total_count' => User::query()->count(),
+            ],
+        ]);
     }
 
     public function store(StoreUserRequest $request, AuditLogService $audit): JsonResponse
@@ -38,11 +60,13 @@ class UserController extends Controller
             'password' => $data['password'],
             'phone' => $data['phone'] ?? null,
             'organisation' => $data['organisation'] ?? null,
+            'registration_source' => UserRegistrationSource::System,
             'is_admin' => $data['is_admin'] ?? false,
             'is_active' => $data['is_active'] ?? true,
             'approval_status' => UserApprovalStatus::Approved,
             'approved_at' => now(),
             'approved_by' => $request->user()?->id,
+            'created_by' => $request->user()?->id,
             // Admin-created accounts must enroll an authenticator on first sign-in.
             'totp_required' => true,
         ]);
@@ -55,6 +79,7 @@ class UserController extends Controller
             'is_admin' => $user->is_admin,
             'is_active' => $user->is_active,
             'approval_status' => UserApprovalStatus::Approved->value,
+            'registration_source' => UserRegistrationSource::System->value,
         ]);
 
         return response()->json([
@@ -270,6 +295,9 @@ class UserController extends Controller
             'email' => $user->email,
             'phone' => $user->phone,
             'organisation' => $user->organisation,
+            'registration_source' => $user->registration_source instanceof UserRegistrationSource
+                ? $user->registration_source->value
+                : (string) ($user->registration_source ?? UserRegistrationSource::System->value),
             'is_admin' => (bool) $user->is_admin,
             'is_active' => (bool) $user->is_active,
             'approval_status' => $user->approval_status instanceof UserApprovalStatus
