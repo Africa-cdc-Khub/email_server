@@ -20,7 +20,9 @@ type EmailLog = {
   can_retry?: boolean
   attachment_count?: number
   external_integration_id: number | null
+  email_provider?: { id: number; name: string } | null
   created_at: string
+  updated_at?: string | null
 }
 
 type FilterOption = { value: string; label: string }
@@ -34,6 +36,8 @@ const error = ref('')
 const message = ref('')
 const retryingId = ref<number | null>(null)
 const retryingAll = ref(false)
+const detailsOpen = ref(false)
+const selectedLog = ref<EmailLog | null>(null)
 
 const statusFilter = ref<string | null>(null)
 const clientFilter = ref<string | null>(null)
@@ -104,6 +108,11 @@ function clearFilters() {
   load()
 }
 
+function openDetails(item: EmailLog) {
+  selectedLog.value = item
+  detailsOpen.value = true
+}
+
 async function retry(item: EmailLog) {
   if (!item.can_retry) return
   retryingId.value = item.id
@@ -112,6 +121,7 @@ async function retry(item: EmailLog) {
   try {
     const res = await api.post(`/admin/email-logs/${item.id}/retry`)
     message.value = res.data.message || 'Email queued for resend.'
+    detailsOpen.value = false
     await load()
   } catch (err) {
     error.value = apiErrorMessage(err, 'Could not resend email.')
@@ -241,11 +251,9 @@ onMounted(async () => {
         { title: 'IP address', key: 'sender_ip' },
         { title: 'Sending system', key: 'sending_system' },
         { title: 'Status', key: 'status' },
-        { title: 'Attachments', key: 'attachment_count', sortable: false, width: 110 },
         { title: 'Driver', key: 'driver' },
-        { title: 'Error', key: 'error_message' },
         { title: 'When', key: 'created_at' },
-        { title: 'Actions', key: 'actions', sortable: false, width: 120 },
+        { title: 'Actions', key: 'actions', sortable: false, width: 200 },
       ]"
       @update:page="(p: number) => { page = p; load() }"
     >
@@ -275,31 +283,31 @@ onMounted(async () => {
           {{ item.status }}
         </v-chip>
       </template>
-      <template #item.attachment_count="{ item }">
-        <span v-if="(item.attachment_count ?? 0) > 0" class="text-no-wrap">
-          {{ item.attachment_count }}
-        </span>
-        <span v-else class="text-medium-emphasis">—</span>
-      </template>
-      <template #item.error_message="{ item }">
-        <span class="text-caption text-medium-emphasis">{{ item.error_message || '—' }}</span>
-      </template>
       <template #item.created_at="{ item }">
         <span class="text-no-wrap">{{ formatDateTime12h(item.created_at) }}</span>
       </template>
       <template #item.actions="{ item }">
-        <v-btn
-          v-if="canResend && item.can_retry"
-          size="small"
-          color="primary"
-          variant="tonal"
-          prepend-icon="mdi-email-sync"
-          :loading="retryingId === item.id"
-          @click="retry(item)"
-        >
-          Resend
-        </v-btn>
-        <span v-else class="text-medium-emphasis">—</span>
+        <div class="d-flex ga-1 flex-wrap">
+          <v-btn
+            size="small"
+            variant="text"
+            prepend-icon="mdi-eye-outline"
+            @click="openDetails(item)"
+          >
+            Details
+          </v-btn>
+          <v-btn
+            v-if="canResend && item.can_retry"
+            size="small"
+            color="primary"
+            variant="tonal"
+            prepend-icon="mdi-email-sync"
+            :loading="retryingId === item.id"
+            @click="retry(item)"
+          >
+            Resend
+          </v-btn>
+        </div>
       </template>
       <template #no-data>
         <div class="text-medium-emphasis pa-6 text-center">
@@ -307,6 +315,66 @@ onMounted(async () => {
         </div>
       </template>
     </v-data-table-server>
+
+    <v-dialog v-model="detailsOpen" max-width="640">
+      <v-card v-if="selectedLog">
+        <v-card-title>Email log #{{ selectedLog.id }}</v-card-title>
+        <v-card-text class="details-body">
+          <p><strong>To:</strong> {{ selectedLog.to || '—' }}</p>
+          <p><strong>Subject:</strong> {{ selectedLog.subject || '—' }}</p>
+          <p>
+            <strong>Status:</strong>
+            <v-chip
+              size="small"
+              class="text-capitalize ml-1"
+              :color="
+                selectedLog.status === 'sent'
+                  ? 'success'
+                  : selectedLog.status === 'failed'
+                    ? 'error'
+                    : 'warning'
+              "
+            >
+              {{ selectedLog.status }}
+            </v-chip>
+          </p>
+          <p><strong>Client:</strong> {{ selectedLog.source || '—' }}</p>
+          <p><strong>Sending system:</strong> {{ selectedLog.sending_system || '—' }}</p>
+          <p><strong>Driver:</strong> {{ selectedLog.driver || '—' }}</p>
+          <p><strong>Provider:</strong> {{ selectedLog.email_provider?.name || '—' }}</p>
+          <p><strong>IP address:</strong> {{ selectedLog.sender_ip || '—' }}</p>
+          <p>
+            <strong>Attachments:</strong>
+            {{
+              (selectedLog.attachment_count ?? 0) > 0
+                ? selectedLog.attachment_count
+                : 'None'
+            }}
+          </p>
+          <p><strong>When:</strong> {{ formatDateTime12h(selectedLog.created_at) }}</p>
+          <p v-if="selectedLog.updated_at">
+            <strong>Updated:</strong> {{ formatDateTime12h(selectedLog.updated_at) }}
+          </p>
+          <div class="mt-3">
+            <strong>Error</strong>
+            <pre class="error-block">{{ selectedLog.error_message || '—' }}</pre>
+          </div>
+        </v-card-text>
+        <v-card-actions>
+          <v-spacer />
+          <v-btn
+            v-if="canResend && selectedLog.can_retry"
+            color="primary"
+            variant="tonal"
+            :loading="retryingId === selectedLog.id"
+            @click="retry(selectedLog)"
+          >
+            Resend
+          </v-btn>
+          <v-btn variant="text" @click="detailsOpen = false">Close</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
   </div>
 </template>
 
@@ -330,5 +398,21 @@ onMounted(async () => {
   color: rgba(var(--v-theme-on-surface), 0.62);
   font-size: 0.8125rem;
   word-break: break-word;
+}
+
+.details-body p {
+  margin-bottom: 0.5rem;
+}
+
+.error-block {
+  margin: 0.35rem 0 0;
+  padding: 0.75rem;
+  border-radius: 6px;
+  background: rgba(var(--v-theme-on-surface), 0.04);
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 0.8125rem;
+  max-height: 12rem;
+  overflow: auto;
 }
 </style>
