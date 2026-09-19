@@ -120,9 +120,13 @@ class AdminTwoFactorService
     /**
      * @return array{secret: string, otpauth_url: string}
      */
-    public function beginTotpSetup(User $user, string $password): array
+    public function beginTotpSetup(User $user, ?string $password = null): array
     {
-        $this->assertPassword($user, $password);
+        if ($user->mustSetupTotp()) {
+            // First-login enrollment: password already verified at sign-in.
+        } else {
+            $this->assertPassword($user, (string) $password);
+        }
 
         $secret = $this->google2fa->generateSecretKey();
         $issuer = config('app.name', 'Email Server');
@@ -174,6 +178,12 @@ class AdminTwoFactorService
 
     public function disableTotp(User $user, string $password): void
     {
+        if ($user->requiresTotp()) {
+            throw ValidationException::withMessages([
+                'password' => ['Authenticator app verification is required for this account and cannot be disabled.'],
+            ]);
+        }
+
         $this->assertPassword($user, $password);
 
         $user->forceFill([
@@ -194,6 +204,8 @@ class AdminTwoFactorService
         return [
             'two_factor_email_enabled' => (bool) $user->two_factor_email_enabled,
             'two_factor_totp_enabled' => (bool) $user->two_factor_totp_enabled,
+            'totp_required' => $user->requiresTotp(),
+            'must_setup_totp' => $user->mustSetupTotp(),
             'has_recovery_codes' => is_array($user->two_factor_totp_recovery_codes)
                 && count($user->two_factor_totp_recovery_codes) > 0,
         ];

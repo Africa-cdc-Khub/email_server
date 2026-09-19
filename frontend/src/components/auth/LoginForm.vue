@@ -32,6 +32,10 @@ async function submit() {
       await router.push({ name: 'verify-2fa' })
       return
     }
+    if (result.mustSetupTotp) {
+      await router.push({ name: 'setup-authenticator' })
+      return
+    }
 
     const redirect = safeInternalRedirect(
       typeof route.query.redirect === 'string' ? route.query.redirect : null,

@@ -99,7 +99,7 @@ async function startTotpSetup() {
   recoveryCodes.value = []
   qrDataUrl.value = ''
   try {
-    totpSetup.value = await auth.setupTotp(totpPassword.value)
+    totpSetup.value = await auth.setupTotp(status.value?.must_setup_totp ? undefined : totpPassword.value)
     totpPassword.value = ''
     const QRCode = await import('qrcode')
     qrDataUrl.value = await QRCode.toDataURL(totpSetup.value.otpauth_url, { margin: 1, width: 220 })
@@ -269,9 +269,18 @@ onMounted(loadStatus)
           >
             {{ status?.two_factor_totp_enabled ? 'Enabled' : 'Disabled' }}
           </v-chip>
+          <v-alert
+            v-if="status?.totp_required"
+            type="info"
+            variant="tonal"
+            density="compact"
+            class="mb-4"
+          >
+            Authenticator app is required for this account and cannot be disabled.
+          </v-alert>
 
           <template v-if="!status?.two_factor_totp_enabled && !totpSetup">
-            <FormField label="Confirm password to set up" required>
+            <FormField v-if="!status?.must_setup_totp" label="Confirm password to set up" required>
               <v-text-field
                 v-model="totpPassword"
                 type="password"
@@ -305,7 +314,7 @@ onMounted(loadStatus)
             </v-btn>
           </template>
 
-          <template v-else>
+          <template v-else-if="!status?.totp_required">
             <FormField label="Confirm password to disable" required>
               <v-text-field
                 v-model="disableTotpPassword"

@@ -7,6 +7,12 @@ const router = createRouter({
   routes: [
     { path: '/login', name: 'login', component: () => import('@/views/LoginView.vue'), meta: { guest: true } },
     { path: '/verify-2fa', name: 'verify-2fa', component: () => import('@/views/Verify2FAView.vue'), meta: { guest: true } },
+    {
+      path: '/setup-authenticator',
+      name: 'setup-authenticator',
+      component: () => import('@/views/SetupAuthenticatorView.vue'),
+      meta: { requiresAuth: true, forceTotpSetup: true },
+    },
     { path: '/forgot-password', name: 'forgot-password', component: () => import('@/views/ForgotPasswordView.vue'), meta: { guest: true } },
     { path: '/reset-password', name: 'reset-password', component: () => import('@/views/ResetPasswordView.vue'), meta: { guest: true } },
     {
@@ -79,10 +85,37 @@ router.beforeEach(async (to) => {
   }
 
   if (to.meta.requiresAuth && !authed) return { name: 'login' }
-  if (to.meta.guest && authed) return { name: 'dashboard' }
+  if (to.meta.guest && authed) {
+    if (!auth.user) {
+      try {
+        await auth.fetchMe()
+      } catch {
+        return
+      }
+    }
+    if (auth.mustSetupTotp) return { name: 'setup-authenticator' }
+    return { name: 'dashboard' }
+  }
+
+  if (authed && (!auth.user || auth.bootstrapped === false)) {
+    try {
+      if (!auth.user) await auth.fetchMe()
+    } catch {
+      return { name: 'login' }
+    }
+  }
+
+  if (authed && auth.mustSetupTotp && to.name !== 'setup-authenticator') {
+    return { name: 'setup-authenticator' }
+  }
+
+  if (to.name === 'setup-authenticator') {
+    if (!authed) return { name: 'login' }
+    if (!auth.mustSetupTotp) return { name: 'dashboard' }
+    return
+  }
 
   if (to.meta.requiresAdmin && authed) {
-    const auth = useAuthStore()
     if (!auth.user) {
       try {
         await auth.fetchMe()

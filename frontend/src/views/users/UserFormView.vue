@@ -160,6 +160,9 @@ onMounted(async () => {
               Non-admin users must be bound to at least one app credential to see related email logs.
               Admins have unrestricted access.
             </p>
+            <v-alert v-if="!isEdit" type="info" variant="tonal" density="compact">
+              New users must set up an authenticator app on their first sign-in. It cannot be disabled later.
+            </v-alert>
           </v-col>
         </v-row>
         <div class="d-flex ga-2 mt-6">

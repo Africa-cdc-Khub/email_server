@@ -34,6 +34,7 @@ class UserFactory extends Factory
             'is_active' => true,
             'two_factor_email_enabled' => false,
             'two_factor_totp_enabled' => false,
+            'totp_required' => false,
         ];
     }
 

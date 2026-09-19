@@ -17,6 +17,7 @@ use App\Http\Controllers\Api\V1\BrandingController;
 use App\Http\Controllers\Api\V1\IntegrationMailController;
 use App\Http\Controllers\HealthController;
 use App\Http\Middleware\AuthenticateIntegrationJwt;
+use App\Http\Middleware\EnsureTotpSetupComplete;
 use App\Http\Middleware\EnsureUserIsActive;
 use App\Http\Middleware\EnsureUserIsAdmin;
 use App\Http\Middleware\LogAdminAccess;
@@ -42,7 +43,7 @@ Route::prefix('v1')->group(function () {
         Route::get('/captcha', CaptchaController::class)
             ->middleware('throttle:30,1');
 
-        Route::middleware(['auth:sanctum', EnsureUserIsActive::class, LogAdminAccess::class])->group(function () {
+        Route::middleware(['auth:sanctum', EnsureUserIsActive::class, EnsureTotpSetupComplete::class, LogAdminAccess::class])->group(function () {
             Route::get('/auth/me', [AuthController::class, 'me']);
             Route::post('/auth/logout', [AuthController::class, 'logout']);
             Route::post('/auth/change-password', [AuthController::class, 'changePassword'])
@@ -65,8 +66,13 @@ Route::prefix('v1')->group(function () {
 
                 Route::apiResource('users', UserController::class);
                 Route::get('/audit-logs/filter-options', [AuditLogController::class, 'filterOptions']);
+                Route::get('/audit-logs/stats', [AuditLogController::class, 'stats']);
                 Route::get('/audit-logs/export', [AuditLogController::class, 'export'])
                     ->middleware('throttle:10,1');
+                Route::post('/audit-logs/resolve-suspicious', [AuditLogController::class, 'resolveOpenSuspicious'])
+                    ->middleware('throttle:10,1');
+                Route::post('/audit-logs/{audit_log}/resolve', [AuditLogController::class, 'resolve'])
+                    ->middleware('throttle:30,1');
                 Route::get('/audit-logs', [AuditLogController::class, 'index']);
 
                 Route::get('/blocked-ips', [BlockedIpController::class, 'index']);

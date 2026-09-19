@@ -9,6 +9,8 @@ export type AdminUser = {
   is_active: boolean
   two_factor_email_enabled: boolean
   two_factor_totp_enabled: boolean
+  totp_required: boolean
+  must_setup_totp: boolean
 }
 
 export type TwoFactorChallenge = {
@@ -20,10 +22,12 @@ export type TwoFactorChallenge = {
 export type TwoFactorStatus = {
   two_factor_email_enabled: boolean
   two_factor_totp_enabled: boolean
+  totp_required: boolean
+  must_setup_totp: boolean
   has_recovery_codes: boolean
 }
 
-type LoginResult = { requires2fa: boolean }
+type LoginResult = { requires2fa: boolean; mustSetupTotp: boolean }
 
 export const useAuthStore = defineStore('auth', {
   state: () => ({
@@ -34,8 +38,18 @@ export const useAuthStore = defineStore('auth', {
   getters: {
     isAuthenticated: (s) => s.user !== null,
     isAdmin: (s) => s.user?.is_admin === true,
+    mustSetupTotp: (s) => s.user?.must_setup_totp === true,
   },
   actions: {
+    normalizeUser(user: AdminUser): AdminUser {
+      return {
+        ...user,
+        totp_required: Boolean(user.totp_required),
+        must_setup_totp: Boolean(user.must_setup_totp),
+        two_factor_email_enabled: Boolean(user.two_factor_email_enabled),
+        two_factor_totp_enabled: Boolean(user.two_factor_totp_enabled),
+      }
+    },
     async login(
       email: string,
       password: string,
@@ -56,16 +70,16 @@ export const useAuthStore = defineStore('auth', {
           email: data.email,
         }
 
-        return { requires2fa: true }
+        return { requires2fa: true, mustSetupTotp: false }
       }
 
       setToken(data.token)
-      this.user = data.user
+      this.user = this.normalizeUser(data.user)
       this.pending2fa = null
 
-      return { requires2fa: false }
+      return { requires2fa: false, mustSetupTotp: this.user.must_setup_totp }
     },
-    async verify2fa(method: 'email' | 'totp', code: string) {
+    async verify2fa(method: 'email' | 'totp', code: string): Promise<LoginResult> {
       if (!this.pending2fa) {
         throw new Error('No pending verification session.')
       }
@@ -77,8 +91,10 @@ export const useAuthStore = defineStore('auth', {
       })
 
       setToken(data.token)
-      this.user = data.user
+      this.user = this.normalizeUser(data.user)
       this.pending2fa = null
+
+      return { requires2fa: false, mustSetupTotp: this.user.must_setup_totp }
     },
     async resend2faEmail() {
       if (!this.pending2fa) {
@@ -96,7 +112,7 @@ export const useAuthStore = defineStore('auth', {
     },
     async fetchMe() {
       const { data } = await api.get<AdminUser>('/admin/auth/me')
-      this.user = data
+      this.user = this.normalizeUser(data)
     },
     async fetch2faStatus() {
       const { data } = await api.get<{ data: TwoFactorStatus }>('/admin/auth/2fa/status')
@@ -122,10 +138,10 @@ export const useAuthStore = defineStore('auth', {
       }
       return data
     },
-    async setupTotp(password: string) {
+    async setupTotp(password?: string) {
       const { data } = await api.post<{ data: { secret: string; otpauth_url: string } }>(
         '/admin/auth/2fa/totp/setup',
-        { password },
+        password ? { password } : {},
       )
       return data.data
     },
@@ -136,6 +152,8 @@ export const useAuthStore = defineStore('auth', {
       }>('/admin/auth/2fa/totp/confirm', { code })
       if (this.user) {
         this.user.two_factor_totp_enabled = data.data.two_factor_totp_enabled
+        this.user.must_setup_totp = data.data.must_setup_totp
+        this.user.totp_required = data.data.totp_required
       }
       return data
     },

@@ -33,6 +33,8 @@ class UserController extends Controller
             'password' => $data['password'],
             'is_admin' => $data['is_admin'] ?? false,
             'is_active' => $data['is_active'] ?? true,
+            // Admin-created accounts must enroll an authenticator on first sign-in.
+            'totp_required' => true,
         ]);
 
         $this->syncIntegrations($user, $data);
@@ -169,6 +171,9 @@ class UserController extends Controller
             'email' => $user->email,
             'is_admin' => (bool) $user->is_admin,
             'is_active' => (bool) $user->is_active,
+            'totp_required' => (bool) $user->totp_required,
+            'two_factor_totp_enabled' => (bool) $user->two_factor_totp_enabled,
+            'must_setup_totp' => $user->mustSetupTotp(),
             'external_integration_ids' => $integrations->pluck('id')->map(fn ($id) => (int) $id)->values()->all(),
             'external_integrations' => $integrations->map(fn ($i) => [
                 'id' => (int) $i->id,

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import StatCard from '@/components/dashboard/StatCard.vue'
 import PageHeader from '@/components/shared/PageHeader.vue'
 import ParentCard from '@/components/shared/ParentCard.vue'
 import { api } from '@/lib/api'
@@ -27,6 +28,11 @@ type AuditLogRow = {
   user_agent: string | null
   is_suspicious: boolean
   suspicious_reasons: string | null
+  suspicious_resolved: boolean
+  suspicious_open: boolean
+  suspicious_resolved_at: string | null
+  suspicious_resolution_note: string | null
+  suspicious_resolved_by: { id: number; name: string; email: string } | null
   created_at: string | null
 }
 
@@ -40,9 +46,20 @@ type Filters = {
   target_table: string | null
   actor_type: string | null
   suspicious: string | null
+  resolved: string | null
   date_from: string
   date_to: string
   per_page: number
+}
+
+type StatsCard = {
+  key: string
+  title: string
+  value: number
+  subtitle?: string
+  icon: string
+  color: string
+  filters: Record<string, string>
 }
 
 type BlockDialogMode = 'single' | 'all_suspicious'
@@ -59,7 +76,8 @@ function logEmail(row: AuditLogRow | null | undefined): string {
 }
 
 function canBlockLog(row: AuditLogRow): boolean {
-  return Boolean(row.ip_address) || Boolean(logEmail(row))
+  // Block actions only for suspicious audit events that have an IP and/or email.
+  return Boolean(row.is_suspicious) && (Boolean(row.ip_address) || Boolean(logEmail(row)))
 }
 
 function defaultFilters(): Filters {
@@ -73,6 +91,7 @@ function defaultFilters(): Filters {
     target_table: null,
     actor_type: null,
     suspicious: null,
+    resolved: null,
     date_from: '',
     date_to: '',
     per_page: 50,
@@ -81,6 +100,7 @@ function defaultFilters(): Filters {
 
 const loading = ref(false)
 const exporting = ref(false)
+const resolving = ref(false)
 const error = ref('')
 const message = ref('')
 const rows = ref<AuditLogRow[]>([])
@@ -91,6 +111,14 @@ const total = ref(0)
 const perPage = ref(50)
 const detailsOpen = ref(false)
 const selectedLog = ref<AuditLogRow | null>(null)
+const statsCards = ref<StatsCard[]>([])
+const statsLoading = ref(false)
+const activeStatKey = ref<string | null>(null)
+
+const resolveOpen = ref(false)
+const resolveMode = ref<'single' | 'all'>('single')
+const resolveTargetId = ref<number | null>(null)
+const resolveNote = ref('')
 
 const blockOpen = ref(false)
 const blockMode = ref<BlockDialogMode>('single')
@@ -125,14 +153,24 @@ const activeFilterCount = computed(() => {
     f.target_table,
     f.actor_type,
     f.suspicious,
+    f.resolved,
     f.date_from,
     f.date_to,
   ].filter((v) => v != null && String(v).trim() !== '').length
 })
 
+const openSuspiciousCount = computed(
+  () => statsCards.value.find((c) => c.key === 'suspicious_open')?.value ?? 0,
+)
+
 const suspiciousFilterItems = [
   { title: 'Suspicious only', value: '1' },
   { title: 'Not suspicious', value: '0' },
+]
+
+const resolutionFilterItems = [
+  { title: 'Open (needs review)', value: '0' },
+  { title: 'Resolved', value: '1' },
 ]
 
 const ACTOR_LABELS: Record<string, string> = {
@@ -193,6 +231,18 @@ async function loadFilterOptions() {
   }
 }
 
+async function loadStats() {
+  statsLoading.value = true
+  try {
+    const res = await api.get('/admin/audit-logs/stats')
+    statsCards.value = Array.isArray(res.data.data?.cards) ? res.data.data.cards : []
+  } catch {
+    statsCards.value = []
+  } finally {
+    statsLoading.value = false
+  }
+}
+
 async function load() {
   loading.value = true
   error.value = ''
@@ -226,6 +276,7 @@ function listParams(includePage = true): Record<string, string | number | undefi
     target_table: filters.value.target_table || undefined,
     actor_type: filters.value.actor_type || undefined,
     suspicious: filters.value.suspicious || undefined,
+    resolved: filters.value.resolved || undefined,
     date_from: filters.value.date_from || undefined,
     date_to: filters.value.date_to || undefined,
     ...(includePage
@@ -234,6 +285,68 @@ function listParams(includePage = true): Record<string, string | number | undefi
           per_page: filters.value.per_page,
         }
       : {}),
+  }
+}
+
+async function drillDown(card: StatsCard) {
+  const next = defaultFilters()
+  next.per_page = filters.value.per_page
+  const incoming = card.filters || {}
+  if (incoming.search) next.search = incoming.search
+  if (incoming.name) next.name = incoming.name
+  if (incoming.email) next.email = incoming.email
+  if (incoming.ip_address) next.ip_address = incoming.ip_address
+  if (incoming.http_method) next.http_method = incoming.http_method
+  if (incoming.event_type) next.event_type = incoming.event_type
+  if (incoming.target_table) next.target_table = incoming.target_table
+  if (incoming.actor_type) next.actor_type = incoming.actor_type
+  if (incoming.suspicious) next.suspicious = incoming.suspicious
+  if (incoming.resolved) next.resolved = incoming.resolved
+  if (incoming.date_from) next.date_from = incoming.date_from
+  if (incoming.date_to) next.date_to = incoming.date_to
+  filters.value = next
+  activeStatKey.value = card.key
+  page.value = 1
+  await load()
+}
+
+function openResolveOne(row: AuditLogRow) {
+  resolveMode.value = 'single'
+  resolveTargetId.value = row.id
+  resolveNote.value = ''
+  resolveOpen.value = true
+}
+
+function openResolveAll() {
+  resolveMode.value = 'all'
+  resolveTargetId.value = null
+  resolveNote.value = ''
+  resolveOpen.value = true
+}
+
+async function submitResolve() {
+  resolving.value = true
+  error.value = ''
+  try {
+    if (resolveMode.value === 'single' && resolveTargetId.value != null) {
+      const res = await api.post(`/admin/audit-logs/${resolveTargetId.value}/resolve`, {
+        note: resolveNote.value.trim() || undefined,
+      })
+      message.value = res.data.message || 'Suspicious event resolved.'
+    } else {
+      const res = await api.post('/admin/audit-logs/resolve-suspicious', {
+        note: resolveNote.value.trim() || undefined,
+        date_from: filters.value.date_from || undefined,
+        date_to: filters.value.date_to || undefined,
+      })
+      message.value = res.data.message || 'Open suspicious events resolved.'
+    }
+    resolveOpen.value = false
+    await Promise.all([load(), loadStats()])
+  } catch (err) {
+    error.value = apiErrorMessage(err, 'Could not resolve suspicious event(s).')
+  } finally {
+    resolving.value = false
   }
 }
 
@@ -415,12 +528,14 @@ function parsedJson(value: unknown): string {
 }
 
 async function applyFilters() {
+  activeStatKey.value = null
   page.value = 1
   await load()
 }
 
 async function clearFilters() {
   filters.value = defaultFilters()
+  activeStatKey.value = null
   page.value = 1
   await load()
 }
@@ -432,7 +547,7 @@ async function goToPage(nextPage: number) {
 }
 
 onMounted(async () => {
-  await loadFilterOptions()
+  await Promise.all([loadFilterOptions(), loadStats()])
   await load()
 })
 </script>
@@ -441,6 +556,15 @@ onMounted(async () => {
   <div>
     <PageHeader title="Audit logs" subtitle="Admin panel activity, mutations, and authentication events">
       <template #actions>
+        <v-btn
+          color="warning"
+          variant="tonal"
+          prepend-icon="mdi-check-decagram"
+          :disabled="openSuspiciousCount === 0"
+          @click="openResolveAll"
+        >
+          Resolve open ({{ openSuspiciousCount }})
+        </v-btn>
         <v-btn
           color="primary"
           variant="tonal"
@@ -479,6 +603,33 @@ onMounted(async () => {
     <v-alert v-if="error" type="error" variant="tonal" class="mb-4" closable @click:close="error = ''">
       {{ error }}
     </v-alert>
+
+    <ParentCard title="Summary">
+      <p class="text-caption text-medium-emphasis mb-4">
+        Click a card to filter the table to those exact results (all time, today, suspicious, and more).
+      </p>
+      <v-row dense>
+        <v-col
+          v-for="card in statsCards"
+          :key="card.key"
+          cols="12"
+          sm="6"
+          md="4"
+          lg="3"
+        >
+          <StatCard
+            :title="card.title"
+            :value="statsLoading ? '…' : card.value"
+            :icon="card.icon"
+            :color="card.color"
+            :subtitle="card.subtitle"
+            :active="activeStatKey === card.key"
+            clickable
+            @click="drillDown(card)"
+          />
+        </v-col>
+      </v-row>
+    </ParentCard>
 
     <ParentCard title="Filters">
       <v-row dense>
@@ -547,6 +698,19 @@ onMounted(async () => {
             item-title="title"
             item-value="value"
             label="Suspicious"
+            clearable
+            variant="outlined"
+            hide-details
+            density="comfortable"
+          />
+        </v-col>
+        <v-col cols="12" sm="6" md="2">
+          <v-select
+            v-model="filters.resolved"
+            :items="resolutionFilterItems"
+            item-title="title"
+            item-value="value"
+            label="Resolution"
             clearable
             variant="outlined"
             hide-details
@@ -647,7 +811,11 @@ onMounted(async () => {
       item-value="id"
       hide-default-footer
       class="elevation-0"
-      :row-props="(row: { item: AuditLogRow }) => (row.item.is_suspicious ? { class: 'audit-row--suspicious' } : {})"
+      :row-props="(row: { item: AuditLogRow }) => {
+        if (row.item.suspicious_open) return { class: 'audit-row--suspicious' }
+        if (row.item.suspicious_resolved) return { class: 'audit-row--resolved' }
+        return {}
+      }"
     >
       <template #item.created_at="{ item }">
         <div class="text-no-wrap">{{ item.created_at ? formatDateTime12h(item.created_at) : '—' }}</div>
@@ -655,7 +823,7 @@ onMounted(async () => {
           <v-chip size="x-small" :color="actorColor(item.actor_type)" variant="tonal">
             {{ item.actor_label || ACTOR_LABELS[item.actor_type] || item.actor_type }}
           </v-chip>
-          <v-tooltip v-if="item.is_suspicious" location="top">
+          <v-tooltip v-if="item.suspicious_open" location="top">
             <template #activator="{ props }">
               <v-chip
                 v-bind="props"
@@ -664,10 +832,29 @@ onMounted(async () => {
                 variant="flat"
                 prepend-icon="mdi-alert"
               >
-                Suspicious
+                Open
               </v-chip>
             </template>
             <span>{{ item.suspicious_reasons || 'Flagged by security heuristics' }}</span>
+          </v-tooltip>
+          <v-tooltip v-else-if="item.suspicious_resolved" location="top">
+            <template #activator="{ props }">
+              <v-chip
+                v-bind="props"
+                size="x-small"
+                color="success"
+                variant="tonal"
+                prepend-icon="mdi-check"
+              >
+                Resolved
+              </v-chip>
+            </template>
+            <span>
+              {{ item.suspicious_resolution_note || 'Marked resolved' }}
+              <template v-if="item.suspicious_resolved_at">
+                — {{ formatDateTime12h(item.suspicious_resolved_at) }}
+              </template>
+            </span>
           </v-tooltip>
         </div>
       </template>
@@ -701,6 +888,15 @@ onMounted(async () => {
       <template #item.actions="{ item }">
         <div class="d-flex flex-wrap justify-end ga-1">
           <v-btn
+            v-if="item.suspicious_open"
+            size="small"
+            color="warning"
+            variant="text"
+            @click="openResolveOne(item)"
+          >
+            Resolve
+          </v-btn>
+          <v-btn
             v-if="canBlockLog(item)"
             size="small"
             color="error"
@@ -733,9 +929,19 @@ onMounted(async () => {
             <strong>Category:</strong>
             {{ selectedLog.actor_label || ACTOR_LABELS[selectedLog.actor_type] || selectedLog.actor_type }}
           </p>
-          <p v-if="selectedLog.is_suspicious" class="mb-2">
-            <v-chip size="small" color="error" variant="flat" class="mr-2">Suspicious</v-chip>
+          <p v-if="selectedLog.suspicious_open" class="mb-2">
+            <v-chip size="small" color="error" variant="flat" class="mr-2">Open suspicious</v-chip>
             {{ selectedLog.suspicious_reasons || 'Flagged by security heuristics' }}
+          </p>
+          <p v-else-if="selectedLog.suspicious_resolved" class="mb-2">
+            <v-chip size="small" color="success" variant="tonal" class="mr-2">Resolved</v-chip>
+            {{ selectedLog.suspicious_resolution_note || selectedLog.suspicious_reasons || 'Resolved' }}
+            <span v-if="selectedLog.suspicious_resolved_at" class="text-medium-emphasis">
+              — {{ formatDateTime12h(selectedLog.suspicious_resolved_at) }}
+              <template v-if="selectedLog.suspicious_resolved_by">
+                by {{ selectedLog.suspicious_resolved_by.name || selectedLog.suspicious_resolved_by.email }}
+              </template>
+            </span>
           </p>
           <p class="mb-2"><strong>URI:</strong> {{ selectedLog.request_uri || '—' }}</p>
           <p class="mb-2"><strong>IP:</strong> {{ selectedLog.ip_address || '—' }}</p>
@@ -747,6 +953,15 @@ onMounted(async () => {
           <pre class="audit-json">{{ parsedJson(selectedLog.new_values) }}</pre>
         </v-card-text>
         <v-card-actions>
+          <v-btn
+            v-if="selectedLog.suspicious_open"
+            color="warning"
+            variant="tonal"
+            prepend-icon="mdi-check"
+            @click="openResolveOne(selectedLog)"
+          >
+            Resolve
+          </v-btn>
           <v-btn
             v-if="canBlockLog(selectedLog)"
             color="error"
@@ -772,7 +987,7 @@ onMounted(async () => {
               IP blocks deny the API; email blocks deny login for that account.
             </template>
             <template v-else>
-              Choose whether to block the IP, the email, or both. Manage the lists under
+              Block from this suspicious audit event. Choose whether to block the IP, the email, or both. Manage the lists under
               <router-link :to="{ name: 'blocked-ips' }" @click="blockOpen = false">Blocked access</router-link>.
             </template>
           </p>
@@ -834,6 +1049,43 @@ onMounted(async () => {
         </v-card-actions>
       </v-card>
     </v-dialog>
+
+    <v-dialog v-model="resolveOpen" max-width="520">
+      <v-card>
+        <v-card-title>
+          {{ resolveMode === 'all' ? 'Resolve open suspicious events' : 'Resolve suspicious event' }}
+        </v-card-title>
+        <v-card-text>
+          <p class="text-body-2 text-medium-emphasis mb-4">
+            <template v-if="resolveMode === 'all'">
+              Mark all currently open suspicious audit events as reviewed
+              <template v-if="filters.date_from || filters.date_to">
+                within the active date filters
+              </template>
+              . They stay in the log but no longer need action.
+            </template>
+            <template v-else>
+              Mark this suspicious event as reviewed. It remains in the audit trail.
+            </template>
+          </p>
+          <v-textarea
+            v-model="resolveNote"
+            label="Resolution note (optional)"
+            variant="outlined"
+            density="comfortable"
+            rows="3"
+            autofocus
+          />
+        </v-card-text>
+        <v-card-actions>
+          <v-spacer />
+          <v-btn variant="text" @click="resolveOpen = false">Cancel</v-btn>
+          <v-btn color="warning" variant="flat" :loading="resolving" @click="submitResolve">
+            {{ resolveMode === 'all' ? 'Resolve all open' : 'Resolve' }}
+          </v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
   </div>
 </template>
 
@@ -851,5 +1103,8 @@ onMounted(async () => {
 }
 :deep(.audit-row--suspicious) {
   background: rgba(176, 0, 32, 0.06);
+}
+:deep(.audit-row--resolved) {
+  background: rgba(46, 125, 50, 0.05);
 }
 </style>

@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api\V1\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Http\Requests\Api\V1\Admin\ResolveSuspiciousAuditLogRequest;
 use App\Models\AuditLog;
 use App\Services\AuditLogService;
 use App\Support\SimpleExcelWriter;
@@ -10,6 +11,7 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Validation\ValidationException;
 use Symfony\Component\HttpFoundation\Response;
 
 class AuditLogController extends Controller
@@ -70,11 +72,202 @@ class AuditLogController extends Controller
         ]);
     }
 
+    public function stats(): JsonResponse
+    {
+        $today = now()->toDateString();
+        $hasSuspicious = Schema::hasColumn('audit_logs', 'is_suspicious');
+        $hasResolution = Schema::hasColumn('audit_logs', 'suspicious_resolved_at');
+        $hasActorType = Schema::hasColumn('audit_logs', 'actor_type');
+
+        $totalEvents = AuditLog::query()->count();
+        $eventsToday = AuditLog::query()->whereDate('created_at', $today)->count();
+
+        $suspiciousTotal = 0;
+        $suspiciousOpen = 0;
+        $suspiciousResolved = 0;
+        $suspiciousToday = 0;
+        $suspiciousOpenToday = 0;
+        $authFailedToday = 0;
+        $clientEventsToday = 0;
+        $systemUserEventsToday = 0;
+
+        if ($hasSuspicious) {
+            $suspiciousTotal = AuditLog::query()->where('is_suspicious', true)->count();
+            $suspiciousToday = AuditLog::query()
+                ->where('is_suspicious', true)
+                ->whereDate('created_at', $today)
+                ->count();
+
+            if ($hasResolution) {
+                $suspiciousOpen = AuditLog::query()->unresolvedSuspicious()->count();
+                $suspiciousResolved = AuditLog::query()->resolvedSuspicious()->count();
+                $suspiciousOpenToday = AuditLog::query()
+                    ->unresolvedSuspicious()
+                    ->whereDate('created_at', $today)
+                    ->count();
+            } else {
+                $suspiciousOpen = $suspiciousTotal;
+                $suspiciousOpenToday = $suspiciousToday;
+            }
+        }
+
+        $authFailedToday = AuditLog::query()
+            ->whereDate('created_at', $today)
+            ->whereIn('event_type', ['auth_failed', 'auth_2fa_failed', 'auth_failed_inactive', 'client_auth_failed', 'client_auth_ip_denied'])
+            ->count();
+
+        if ($hasActorType) {
+            $clientEventsToday = AuditLog::query()
+                ->whereDate('created_at', $today)
+                ->where('actor_type', AuditLogService::ACTOR_CLIENT)
+                ->count();
+            $systemUserEventsToday = AuditLog::query()
+                ->whereDate('created_at', $today)
+                ->where('actor_type', AuditLogService::ACTOR_SYSTEM_USER)
+                ->count();
+        }
+
+        $cards = [
+            [
+                'key' => 'total_events',
+                'title' => 'All events',
+                'value' => $totalEvents,
+                'subtitle' => 'All time',
+                'icon' => 'mdi-clipboard-text-outline',
+                'color' => 'primary',
+                'filters' => [],
+            ],
+            [
+                'key' => 'events_today',
+                'title' => 'Events today',
+                'value' => $eventsToday,
+                'subtitle' => 'Recorded today',
+                'icon' => 'mdi-calendar-today',
+                'color' => 'info',
+                'filters' => ['date_from' => $today, 'date_to' => $today],
+            ],
+            [
+                'key' => 'suspicious_total',
+                'title' => 'Suspicious (all time)',
+                'value' => $suspiciousTotal,
+                'subtitle' => 'Open + resolved',
+                'icon' => 'mdi-shield-alert-outline',
+                'color' => 'error',
+                'filters' => ['suspicious' => '1'],
+            ],
+            [
+                'key' => 'suspicious_today',
+                'title' => 'Suspicious today',
+                'value' => $suspiciousToday,
+                'subtitle' => 'Flagged today',
+                'icon' => 'mdi-calendar-alert',
+                'color' => 'warning',
+                'filters' => [
+                    'suspicious' => '1',
+                    'date_from' => $today,
+                    'date_to' => $today,
+                ],
+            ],
+            [
+                'key' => 'suspicious_open',
+                'title' => 'Open suspicious',
+                'value' => $suspiciousOpen,
+                'subtitle' => 'Needs review (all time)',
+                'icon' => 'mdi-alert-circle-outline',
+                'color' => 'error',
+                'filters' => ['suspicious' => '1', 'resolved' => '0'],
+            ],
+            [
+                'key' => 'suspicious_open_today',
+                'title' => 'Open today',
+                'value' => $suspiciousOpenToday,
+                'subtitle' => 'Unresolved from today',
+                'icon' => 'mdi-alert',
+                'color' => 'warning',
+                'filters' => [
+                    'suspicious' => '1',
+                    'resolved' => '0',
+                    'date_from' => $today,
+                    'date_to' => $today,
+                ],
+            ],
+            [
+                'key' => 'suspicious_resolved',
+                'title' => 'Resolved',
+                'value' => $suspiciousResolved,
+                'subtitle' => 'Closed suspicious events',
+                'icon' => 'mdi-check-circle-outline',
+                'color' => 'success',
+                'filters' => ['suspicious' => '1', 'resolved' => '1'],
+            ],
+            [
+                'key' => 'auth_failed_today',
+                'title' => 'Auth failures today',
+                'value' => $authFailedToday,
+                'subtitle' => 'Login / client auth',
+                'icon' => 'mdi-lock-alert-outline',
+                'color' => 'error',
+                'filters' => [
+                    'date_from' => $today,
+                    'date_to' => $today,
+                    'search' => 'auth_',
+                ],
+            ],
+            [
+                'key' => 'client_events_today',
+                'title' => 'Client today',
+                'value' => $clientEventsToday,
+                'subtitle' => 'Integration actors',
+                'icon' => 'mdi-api',
+                'color' => 'secondary',
+                'filters' => [
+                    'actor_type' => AuditLogService::ACTOR_CLIENT,
+                    'date_from' => $today,
+                    'date_to' => $today,
+                ],
+            ],
+            [
+                'key' => 'system_user_events_today',
+                'title' => 'System users today',
+                'value' => $systemUserEventsToday,
+                'subtitle' => 'Admin panel actors',
+                'icon' => 'mdi-account-outline',
+                'color' => 'primary',
+                'filters' => [
+                    'actor_type' => AuditLogService::ACTOR_SYSTEM_USER,
+                    'date_from' => $today,
+                    'date_to' => $today,
+                ],
+            ],
+        ];
+
+        return response()->json([
+            'data' => [
+                'today' => $today,
+                'totals' => [
+                    'total_events' => $totalEvents,
+                    'events_today' => $eventsToday,
+                    'suspicious_total' => $suspiciousTotal,
+                    'suspicious_open' => $suspiciousOpen,
+                    'suspicious_resolved' => $suspiciousResolved,
+                    'suspicious_today' => $suspiciousToday,
+                    'suspicious_open_today' => $suspiciousOpenToday,
+                    'auth_failed_today' => $authFailedToday,
+                    'client_events_today' => $clientEventsToday,
+                    'system_user_events_today' => $systemUserEventsToday,
+                ],
+                'cards' => $cards,
+            ],
+        ]);
+    }
+
     public function index(Request $request): JsonResponse
     {
         $perPage = min(100, max(10, (int) $request->integer('per_page', 50)));
 
-        $paginator = $this->filteredQuery($request)->paginate($perPage);
+        $paginator = $this->filteredQuery($request)
+            ->with(['resolver:id,name,email'])
+            ->paginate($perPage);
 
         return response()->json([
             'data' => $paginator->getCollection()->map(fn (AuditLog $log) => $this->transform($log))->values()->all(),
@@ -94,14 +287,18 @@ class AuditLogController extends Controller
         $total = (clone $query)->count();
         $limit = min(self::EXPORT_MAX_ROWS, max(1, (int) $request->integer('limit', self::EXPORT_MAX_ROWS)));
 
-        $logs = $query->limit($limit)->get();
+        $logs = $query->with(['resolver:id,name,email'])->limit($limit)->get();
 
         $headers = [
             'ID',
             'When',
             'Category',
             'Suspicious',
+            'Resolution',
             'Suspicious reasons',
+            'Resolved at',
+            'Resolved by',
+            'Resolution note',
             'Actor name',
             'Actor email',
             'Client',
@@ -125,12 +322,21 @@ class AuditLogController extends Controller
                 default => 'System user',
             };
 
+            $resolution = '—';
+            if ($log->is_suspicious) {
+                $resolution = $log->suspicious_resolved_at ? 'Resolved' : 'Open';
+            }
+
             return [
                 $log->id,
                 $log->created_at?->timezone(config('app.timezone'))->format('Y-m-d H:i:s') ?? '',
                 $actorLabel,
                 (bool) ($log->is_suspicious ?? false) ? 'Yes' : 'No',
+                $resolution,
                 (string) ($log->suspicious_reasons ?? ''),
+                $log->suspicious_resolved_at?->timezone(config('app.timezone'))->format('Y-m-d H:i:s') ?? '',
+                (string) ($log->resolver?->email ?? ''),
+                (string) ($log->suspicious_resolution_note ?? ''),
                 (string) ($log->user_name ?? ''),
                 (string) ($log->user_email ?? ''),
                 (string) ($log->externalIntegration?->name ?? $log->externalIntegration?->slug ?? ''),
@@ -159,7 +365,7 @@ class AuditLogController extends Controller
                 'exported_rows' => count($rows),
                 'matched_total' => $total,
                 'limit' => $limit,
-                'truncated' => $filename,
+                'filename' => $filename,
             ],
         ]);
 
@@ -170,6 +376,117 @@ class AuditLogController extends Controller
             'X-Export-Rows' => (string) count($rows),
             'X-Export-Total' => (string) $total,
             'X-Export-Truncated' => $total > count($rows) ? '1' : '0',
+        ]);
+    }
+
+    public function resolve(
+        ResolveSuspiciousAuditLogRequest $request,
+        AuditLog $auditLog,
+        AuditLogService $audit,
+    ): JsonResponse {
+        if (! Schema::hasColumn('audit_logs', 'suspicious_resolved_at')) {
+            throw ValidationException::withMessages([
+                'audit_log' => ['Suspicious resolution is not available until migrations are applied.'],
+            ]);
+        }
+
+        if (! $auditLog->is_suspicious) {
+            throw ValidationException::withMessages([
+                'audit_log' => ['This audit log is not flagged as suspicious.'],
+            ]);
+        }
+
+        if ($auditLog->suspicious_resolved_at !== null) {
+            return response()->json([
+                'message' => 'Already resolved.',
+                'data' => $this->transform($auditLog->loadMissing(['resolver:id,name,email', 'externalIntegration:id,name,slug'])),
+            ]);
+        }
+
+        $note = trim((string) $request->validated('note', ''));
+        $actor = $request->user();
+
+        $auditLog->update([
+            'suspicious_resolved_at' => now(),
+            'suspicious_resolved_by' => $actor?->id,
+            'suspicious_resolution_note' => $note !== '' ? $note : null,
+        ]);
+
+        $audit->log('Resolved suspicious audit log', [
+            'actor_type' => AuditLogService::ACTOR_SYSTEM_USER,
+            'event_type' => 'audit_suspicious_resolved',
+            'http_method' => 'POST',
+            'request_uri' => $request->path(),
+            'target_table' => 'audit_logs',
+            'target_id' => $auditLog->id,
+            'new_values' => [
+                'audit_log_id' => $auditLog->id,
+                'note' => $note !== '' ? $note : null,
+            ],
+        ]);
+
+        return response()->json([
+            'message' => 'Suspicious event marked as resolved.',
+            'data' => $this->transform($auditLog->fresh(['resolver:id,name,email', 'externalIntegration:id,name,slug'])),
+        ]);
+    }
+
+    public function resolveOpenSuspicious(
+        ResolveSuspiciousAuditLogRequest $request,
+        AuditLogService $audit,
+    ): JsonResponse {
+        if (! Schema::hasColumn('audit_logs', 'suspicious_resolved_at')) {
+            throw ValidationException::withMessages([
+                'audit_logs' => ['Suspicious resolution is not available until migrations are applied.'],
+            ]);
+        }
+
+        $note = trim((string) $request->validated('note', ''));
+        $actor = $request->user();
+        $now = now();
+
+        $query = AuditLog::query()->unresolvedSuspicious();
+
+        if ($request->filled('date_from')) {
+            $query->whereDate('created_at', '>=', (string) $request->input('date_from'));
+        }
+        if ($request->filled('date_to')) {
+            $query->whereDate('created_at', '<=', (string) $request->input('date_to'));
+        }
+
+        $ids = (clone $query)->pluck('id');
+        $count = $ids->count();
+
+        if ($count > 0) {
+            AuditLog::query()
+                ->whereIn('id', $ids->all())
+                ->update([
+                    'suspicious_resolved_at' => $now,
+                    'suspicious_resolved_by' => $actor?->id,
+                    'suspicious_resolution_note' => $note !== '' ? $note : null,
+                    'updated_at' => $now,
+                ]);
+        }
+
+        $audit->log('Resolved open suspicious audit logs', [
+            'actor_type' => AuditLogService::ACTOR_SYSTEM_USER,
+            'event_type' => 'audit_suspicious_resolved_bulk',
+            'http_method' => 'POST',
+            'request_uri' => $request->path(),
+            'target_table' => 'audit_logs',
+            'new_values' => [
+                'resolved_count' => $count,
+                'note' => $note !== '' ? $note : null,
+                'date_from' => $request->input('date_from'),
+                'date_to' => $request->input('date_to'),
+            ],
+        ]);
+
+        return response()->json([
+            'message' => $count > 0
+                ? "Resolved {$count} suspicious event".($count === 1 ? '' : 's').'.'
+                : 'No open suspicious events to resolve.',
+            'data' => ['resolved_count' => $count],
         ]);
     }
 
@@ -249,6 +566,15 @@ class AuditLogController extends Controller
             }
         }
 
+        if (Schema::hasColumn('audit_logs', 'suspicious_resolved_at') && $request->filled('resolved')) {
+            $resolved = $request->query('resolved');
+            if ($resolved === '1' || $resolved === 1 || $resolved === true || $resolved === 'true') {
+                $query->where('is_suspicious', true)->whereNotNull('suspicious_resolved_at');
+            } elseif ($resolved === '0' || $resolved === 0 || $resolved === false || $resolved === 'false') {
+                $query->where('is_suspicious', true)->whereNull('suspicious_resolved_at');
+            }
+        }
+
         return $query;
     }
 
@@ -257,6 +583,9 @@ class AuditLogController extends Controller
      */
     protected function transform(AuditLog $log): array
     {
+        $isSuspicious = (bool) ($log->is_suspicious ?? false);
+        $resolvedAt = $log->suspicious_resolved_at;
+
         return [
             'id' => $log->id,
             'actor_type' => $log->actor_type ?? AuditLogService::ACTOR_SYSTEM_USER,
@@ -284,8 +613,17 @@ class AuditLogController extends Controller
             'new_values' => $log->new_values,
             'ip_address' => $log->ip_address,
             'user_agent' => $log->user_agent,
-            'is_suspicious' => (bool) ($log->is_suspicious ?? false),
+            'is_suspicious' => $isSuspicious,
             'suspicious_reasons' => $log->suspicious_reasons,
+            'suspicious_resolved' => $isSuspicious && $resolvedAt !== null,
+            'suspicious_open' => $isSuspicious && $resolvedAt === null,
+            'suspicious_resolved_at' => $resolvedAt?->toIso8601String(),
+            'suspicious_resolution_note' => $log->suspicious_resolution_note,
+            'suspicious_resolved_by' => $log->resolver ? [
+                'id' => $log->resolver->id,
+                'name' => $log->resolver->name,
+                'email' => $log->resolver->email,
+            ] : null,
             'created_at' => $log->created_at?->toIso8601String(),
         ];
     }

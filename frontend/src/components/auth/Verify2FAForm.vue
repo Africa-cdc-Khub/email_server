@@ -29,7 +29,11 @@ async function submit() {
   loading.value = true
   error.value = ''
   try {
-    await auth.verify2fa(method.value, code.value.trim())
+    const result = await auth.verify2fa(method.value, code.value.trim())
+    if (result.mustSetupTotp) {
+      await router.push({ name: 'setup-authenticator' })
+      return
+    }
     await router.push({ name: 'dashboard' })
   } catch {
     error.value = 'Invalid verification code. Please try again.'

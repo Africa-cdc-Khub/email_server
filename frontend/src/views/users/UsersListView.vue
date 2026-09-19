@@ -13,6 +13,9 @@ type UserRow = {
   email: string
   is_admin: boolean
   is_active: boolean
+  totp_required?: boolean
+  two_factor_totp_enabled?: boolean
+  must_setup_totp?: boolean
   external_integrations: IntegrationSummary[]
 }
 
@@ -55,6 +58,7 @@ onMounted(load)
           { title: 'Name', key: 'name' },
           { title: 'Email', key: 'email' },
           { title: 'Role', key: 'is_admin' },
+          { title: 'Authenticator', key: 'authenticator' },
           { title: 'App access', key: 'external_integrations' },
           { title: 'Active', key: 'is_active' },
           { title: 'Actions', key: 'actions', sortable: false },
@@ -64,6 +68,25 @@ onMounted(load)
           <v-chip :color="item.is_admin ? 'primary' : 'default'" size="small" variant="tonal">
             {{ item.is_admin ? 'Admin' : 'User' }}
           </v-chip>
+        </template>
+        <template #item.authenticator="{ item }">
+          <v-chip
+            v-if="item.must_setup_totp"
+            size="small"
+            color="warning"
+            variant="tonal"
+          >
+            Setup required
+          </v-chip>
+          <v-chip
+            v-else-if="item.two_factor_totp_enabled"
+            size="small"
+            color="success"
+            variant="tonal"
+          >
+            {{ item.totp_required ? 'Required' : 'Enabled' }}
+          </v-chip>
+          <span v-else class="text-medium-emphasis">Optional</span>
         </template>
         <template #item.external_integrations="{ item }">
           <template v-if="item.is_admin">

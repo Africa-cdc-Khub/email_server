@@ -223,6 +223,8 @@ class AuthController extends Controller
             'is_active' => (bool) $user->is_active,
             'two_factor_email_enabled' => (bool) $user->two_factor_email_enabled,
             'two_factor_totp_enabled' => (bool) $user->two_factor_totp_enabled,
+            'totp_required' => $user->requiresTotp(),
+            'must_setup_totp' => $user->mustSetupTotp(),
         ];
     }
 }

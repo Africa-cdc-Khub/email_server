@@ -20,6 +20,7 @@ use Laravel\Sanctum\HasApiTokens;
     'is_active',
     'two_factor_email_enabled',
     'two_factor_totp_enabled',
+    'totp_required',
     'two_factor_totp_secret',
     'two_factor_totp_recovery_codes',
 ])]
@@ -48,6 +49,7 @@ class User extends Authenticatable
             'is_active' => 'boolean',
             'two_factor_email_enabled' => 'boolean',
             'two_factor_totp_enabled' => 'boolean',
+            'totp_required' => 'boolean',
             'two_factor_totp_secret' => 'encrypted',
             'two_factor_totp_recovery_codes' => 'array',
         ];
@@ -61,6 +63,22 @@ class User extends Authenticatable
     public function hasTwoFactorEnabled(): bool
     {
         return $this->two_factor_email_enabled || $this->two_factor_totp_enabled;
+    }
+
+    /**
+     * Admin-created accounts must enroll an authenticator and keep it enabled.
+     */
+    public function requiresTotp(): bool
+    {
+        return (bool) $this->totp_required;
+    }
+
+    /**
+     * True until the required authenticator has been confirmed.
+     */
+    public function mustSetupTotp(): bool
+    {
+        return $this->requiresTotp() && ! $this->two_factor_totp_enabled;
     }
 
     /**

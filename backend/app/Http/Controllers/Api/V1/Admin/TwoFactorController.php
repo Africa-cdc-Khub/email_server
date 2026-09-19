@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\Api\V1\Admin\ConfirmPasswordRequest;
 use App\Http\Requests\Api\V1\Admin\ConfirmTotpSetupRequest;
 use App\Http\Requests\Api\V1\Admin\ResendTwoFactorEmailRequest;
+use App\Http\Requests\Api\V1\Admin\SetupTotpRequest;
 use App\Http\Requests\Api\V1\Admin\VerifyTwoFactorRequest;
 use App\Services\AdminTwoFactorService;
 use App\Services\AuditLogService;
@@ -43,9 +44,12 @@ class TwoFactorController extends Controller
         ]);
     }
 
-    public function setupTotp(ConfirmPasswordRequest $request, AdminTwoFactorService $twoFactor): JsonResponse
+    public function setupTotp(SetupTotpRequest $request, AdminTwoFactorService $twoFactor): JsonResponse
     {
-        $setup = $twoFactor->beginTotpSetup($request->user(), $request->validated('password'));
+        $setup = $twoFactor->beginTotpSetup(
+            $request->user(),
+            $request->validated('password'),
+        );
 
         return response()->json(['data' => $setup]);
     }
@@ -131,6 +135,8 @@ class TwoFactorController extends Controller
             'is_active' => (bool) $user->is_active,
             'two_factor_email_enabled' => (bool) $user->two_factor_email_enabled,
             'two_factor_totp_enabled' => (bool) $user->two_factor_totp_enabled,
+            'totp_required' => $user->requiresTotp(),
+            'must_setup_totp' => $user->mustSetupTotp(),
         ];
     }
 }
