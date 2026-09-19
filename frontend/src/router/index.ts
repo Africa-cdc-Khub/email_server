@@ -6,6 +6,7 @@ const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
     { path: '/login', name: 'login', component: () => import('@/views/LoginView.vue'), meta: { guest: true } },
+    { path: '/register', name: 'register', component: () => import('@/views/RegisterView.vue'), meta: { guest: true } },
     { path: '/verify-2fa', name: 'verify-2fa', component: () => import('@/views/Verify2FAView.vue'), meta: { guest: true } },
     {
       path: '/setup-authenticator',
@@ -24,9 +25,9 @@ const router = createRouter({
         { path: 'providers', name: 'providers', component: () => import('@/views/ProvidersView.vue'), meta: { requiresAdmin: true } },
         { path: 'providers/new', name: 'provider-new', component: () => import('@/views/ProviderFormView.vue'), meta: { requiresAdmin: true } },
         { path: 'providers/:id/edit', name: 'provider-edit', component: () => import('@/views/ProviderFormView.vue'), meta: { requiresAdmin: true } },
-        { path: 'integrations', name: 'integrations', component: () => import('@/views/IntegrationsView.vue'), meta: { requiresAdmin: true } },
-        { path: 'integrations/new', name: 'integration-new', component: () => import('@/views/IntegrationFormView.vue'), meta: { requiresAdmin: true } },
-        { path: 'integrations/:id/edit', name: 'integration-edit', component: () => import('@/views/IntegrationFormView.vue'), meta: { requiresAdmin: true } },
+        { path: 'integrations', name: 'integrations', component: () => import('@/views/IntegrationsView.vue') },
+        { path: 'integrations/new', name: 'integration-new', component: () => import('@/views/IntegrationFormView.vue') },
+        { path: 'integrations/:id/edit', name: 'integration-edit', component: () => import('@/views/IntegrationFormView.vue') },
         { path: 'send-mail', name: 'send-mail', component: () => import('@/views/SendMailView.vue'), meta: { requiresAdmin: true } },
         { path: 'logs', name: 'logs', component: () => import('@/views/EmailLogsView.vue') },
         {

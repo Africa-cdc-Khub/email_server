@@ -69,8 +69,15 @@ async function submit() {
       <div class="text-h5 font-weight-bold mb-1 login-card__title">
         Sign in
       </div>
-      <div class="text-body-2 login-card__tagline mb-6">
+      <div class="text-body-2 login-card__tagline mb-2">
         {{ branding.branding.tagline || 'Manage email providers, integrations, and users' }}
+      </div>
+      <div class="text-body-2 text-medium-emphasis mb-6">
+        Partner organisations can
+        <router-link class="login-card__link font-weight-medium" :to="{ name: 'register' }">
+          create an account
+        </router-link>
+        to register clients after admin approval.
       </div>
 
       <v-alert v-if="error" type="error" variant="tonal" class="mb-4" density="compact">
@@ -118,6 +125,18 @@ async function submit() {
           <v-col cols="12" class="pt-2">
             <v-btn block color="primary" size="large" type="submit" :loading="loading">
               Sign in
+            </v-btn>
+          </v-col>
+          <v-col cols="12" class="pt-1">
+            <v-btn
+              block
+              variant="tonal"
+              color="primary"
+              size="large"
+              :to="{ name: 'register' }"
+              prepend-icon="mdi-account-plus-outline"
+            >
+              Create account
             </v-btn>
           </v-col>
         </v-row>

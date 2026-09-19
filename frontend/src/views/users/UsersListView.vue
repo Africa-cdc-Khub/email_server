@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import PageHeader from '@/components/shared/PageHeader.vue'
 import ParentCard from '@/components/shared/ParentCard.vue'
 import { api } from '@/lib/api'
+import { apiErrorMessage } from '@/lib/apiError'
 
 type IntegrationSummary = { id: number; name: string; slug: string }
 
@@ -11,8 +12,11 @@ type UserRow = {
   id: number
   name: string
   email: string
+  phone?: string | null
+  organisation?: string | null
   is_admin: boolean
   is_active: boolean
+  approval_status?: string
   totp_required?: boolean
   two_factor_totp_enabled?: boolean
   must_setup_totp?: boolean
@@ -21,15 +25,72 @@ type UserRow = {
 
 const items = ref<UserRow[]>([])
 const loading = ref(true)
+const actingId = ref<number | null>(null)
+const message = ref('')
+const error = ref('')
+const statusFilter = ref<string | null>('pending')
 const router = useRouter()
+
+const statusOptions = [
+  { value: null, title: 'All' },
+  { value: 'pending', title: 'Pending' },
+  { value: 'approved', title: 'Approved' },
+  { value: 'rejected', title: 'Rejected' },
+]
+
+const pendingCount = computed(
+  () => items.value.filter((u) => u.approval_status === 'pending').length,
+)
 
 async function load() {
   loading.value = true
+  error.value = ''
   try {
-    const res = await api.get('/admin/users')
+    const res = await api.get('/admin/users', {
+      params: {
+        approval_status: statusFilter.value || undefined,
+      },
+    })
     items.value = res.data.data
+  } catch (err) {
+    items.value = []
+    error.value = apiErrorMessage(err, 'Could not load users.')
   } finally {
     loading.value = false
+  }
+}
+
+async function approve(item: UserRow) {
+  actingId.value = item.id
+  message.value = ''
+  error.value = ''
+  try {
+    const res = await api.post(`/admin/users/${item.id}/approve`)
+    message.value = res.data.message || 'Account approved.'
+    await load()
+  } catch (err) {
+    error.value = apiErrorMessage(err, 'Could not approve account.')
+  } finally {
+    actingId.value = null
+  }
+}
+
+async function reject(item: UserRow) {
+  const reason = window.prompt('Optional rejection reason:', '') ?? undefined
+  if (reason === undefined) return
+  actingId.value = item.id
+  message.value = ''
+  error.value = ''
+  try {
+    const res = await api.post(`/admin/users/${item.id}/reject`, {
+      reason: reason || null,
+    })
+    message.value = res.data.message || 'Account rejected.'
+    await load()
+  } catch (err) {
+    error.value = apiErrorMessage(err, 'Could not reject account.')
+  } finally {
+    actingId.value = null
   }
 }
 
@@ -39,31 +100,87 @@ async function remove(item: UserRow) {
   await load()
 }
 
+watch(statusFilter, () => {
+  load()
+})
+
 onMounted(load)
 </script>
 
 <template>
   <div>
-    <PageHeader title="User management" subtitle="Admin and app-scoped accounts for the email server panel">
+    <PageHeader title="User management" subtitle="Approve registrations and manage panel accounts">
       <template #actions>
         <v-btn color="primary" prepend-icon="mdi-plus" :to="{ name: 'user-new' }">Add user</v-btn>
       </template>
     </PageHeader>
 
+    <v-alert v-if="message" type="success" variant="tonal" class="mb-4" closable @click:close="message = ''">
+      {{ message }}
+    </v-alert>
+    <v-alert v-if="error" type="error" variant="tonal" class="mb-4" closable @click:close="error = ''">
+      {{ error }}
+    </v-alert>
+
     <ParentCard title="Users">
+      <div class="d-flex flex-wrap ga-3 align-center mb-4">
+        <v-select
+          v-model="statusFilter"
+          :items="statusOptions"
+          item-title="title"
+          item-value="value"
+          label="Approval status"
+          variant="outlined"
+          density="comfortable"
+          hide-details
+          clearable
+          style="max-width: 220px"
+        />
+        <v-chip v-if="statusFilter === 'pending' || pendingCount" size="small" color="warning" variant="tonal">
+          Pending in view: {{ items.filter((u) => u.approval_status === 'pending').length }}
+        </v-chip>
+      </div>
+
       <v-data-table
         :loading="loading"
         :items="items"
         :headers="[
           { title: 'Name', key: 'name' },
           { title: 'Email', key: 'email' },
+          { title: 'Organisation', key: 'organisation' },
+          { title: 'Phone', key: 'phone' },
+          { title: 'Approval', key: 'approval_status' },
           { title: 'Role', key: 'is_admin' },
           { title: 'Authenticator', key: 'authenticator' },
           { title: 'App access', key: 'external_integrations' },
           { title: 'Active', key: 'is_active' },
-          { title: 'Actions', key: 'actions', sortable: false },
+          { title: 'Actions', key: 'actions', sortable: false, width: 220 },
         ]"
       >
+        <template #item.organisation="{ item }">
+          {{ item.organisation || '—' }}
+        </template>
+        <template #item.phone="{ item }">
+          {{ item.phone || '—' }}
+        </template>
+        <template #item.approval_status="{ item }">
+          <v-chip
+            size="small"
+            variant="tonal"
+            class="text-capitalize"
+            :color="
+              item.approval_status === 'approved'
+                ? 'success'
+                : item.approval_status === 'pending'
+                  ? 'warning'
+                  : item.approval_status === 'rejected'
+                    ? 'error'
+                    : 'default'
+            "
+          >
+            {{ item.approval_status || 'approved' }}
+          </v-chip>
+        </template>
         <template #item.is_admin="{ item }">
           <v-chip :color="item.is_admin ? 'primary' : 'default'" size="small" variant="tonal">
             {{ item.is_admin ? 'Admin' : 'User' }}
@@ -112,13 +229,35 @@ onMounted(load)
           </v-icon>
         </template>
         <template #item.actions="{ item }">
-          <v-btn
-            size="small"
-            variant="text"
-            icon="mdi-pencil"
-            @click="router.push({ name: 'user-edit', params: { id: item.id } })"
-          />
-          <v-btn size="small" variant="text" color="error" icon="mdi-delete" @click="remove(item)" />
+          <div class="d-flex ga-1 flex-wrap">
+            <v-btn
+              v-if="item.approval_status === 'pending'"
+              size="small"
+              color="success"
+              variant="tonal"
+              :loading="actingId === item.id"
+              @click="approve(item)"
+            >
+              Approve
+            </v-btn>
+            <v-btn
+              v-if="item.approval_status === 'pending'"
+              size="small"
+              color="error"
+              variant="tonal"
+              :loading="actingId === item.id"
+              @click="reject(item)"
+            >
+              Reject
+            </v-btn>
+            <v-btn
+              size="small"
+              variant="text"
+              icon="mdi-pencil"
+              @click="router.push({ name: 'user-edit', params: { id: item.id } })"
+            />
+            <v-btn size="small" variant="text" icon="mdi-delete" color="error" @click="remove(item)" />
+          </div>
         </template>
       </v-data-table>
     </ParentCard>

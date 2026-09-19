@@ -6,11 +6,14 @@ import PageHeader from '@/components/shared/PageHeader.vue'
 import ParentCard from '@/components/shared/ParentCard.vue'
 import { api } from '@/lib/api'
 import { generateClientSecret } from '@/lib/secrets'
+import { useAuthStore } from '@/stores/auth'
 
 type ProviderOption = { id: number; name: string; driver: string }
 
 const route = useRoute()
 const router = useRouter()
+const auth = useAuthStore()
+const isAdmin = computed(() => auth.isAdmin)
 const isEdit = computed(() => route.name === 'integration-edit')
 const id = computed(() => route.params.id as string | undefined)
 
@@ -79,7 +82,10 @@ async function save() {
       .map((s) => s.trim())
       .filter(Boolean),
     description: form.value.description,
-    is_active: form.value.is_active,
+  }
+
+  if (isAdmin.value) {
+    payload.is_active = form.value.is_active
   }
 
   if (autoGenerateSecret.value) {
@@ -232,7 +238,16 @@ onMounted(async () => {
             <FormField label="Description">
               <v-textarea v-model="form.description" rows="2" variant="outlined" hide-details />
             </FormField>
-            <v-switch v-model="form.is_active" label="Active" color="primary" hide-details />
+            <v-switch
+              v-if="isAdmin"
+              v-model="form.is_active"
+              label="Active"
+              color="primary"
+              hide-details
+            />
+            <v-alert v-else type="info" variant="tonal" density="compact" class="mt-2">
+              New clients are created inactive. An administrator must activate this client before it can authenticate.
+            </v-alert>
           </v-col>
         </v-row>
         <div class="d-flex ga-2 mt-6">

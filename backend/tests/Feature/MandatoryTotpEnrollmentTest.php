@@ -12,6 +12,12 @@ class MandatoryTotpEnrollmentTest extends TestCase
 {
     use RefreshDatabase;
 
+    protected function setUp(): void
+    {
+        parent::setUp();
+        config(['services.captcha.enabled' => false]);
+    }
+
     public function test_admin_created_user_is_marked_totp_required(): void
     {
         $admin = User::factory()->create(['is_admin' => true, 'is_active' => true]);
