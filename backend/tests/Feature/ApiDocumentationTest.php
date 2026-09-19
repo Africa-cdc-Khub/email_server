@@ -51,10 +51,31 @@ class ApiDocumentationTest extends TestCase
             ->assertOk()
             ->assertHeader('Content-Type', 'text/html; charset=UTF-8');
 
-        $this->withToken($token)
+        $docs = $this->withToken($token)
             ->getJson('/api/docs.json')
             ->assertOk()
             ->assertJsonPath('info.title', 'Email Server API');
+
+        $sendContent = $docs->json('paths./integrations/send.post.requestBody.content');
+        $this->assertIsArray($sendContent);
+        $this->assertArrayHasKey('application/json', $sendContent);
+        $this->assertArrayNotHasKey('application/x-www-form-urlencoded', $sendContent);
+        $this->assertArrayHasKey(
+            'attachments',
+            $sendContent['application/json']['schema']['properties'] ?? []
+        );
+        $this->assertSame(
+            'object',
+            $sendContent['application/json']['schema']['properties']['attachments']['items']['type'] ?? null
+        );
+        $this->assertArrayHasKey(
+            'filename',
+            $sendContent['application/json']['schema']['properties']['attachments']['items']['properties'] ?? []
+        );
+        $this->assertArrayHasKey(
+            'content',
+            $sendContent['application/json']['schema']['properties']['attachments']['items']['properties'] ?? []
+        );
     }
 
     public function test_docs_auth_cookie_grants_access(): void
@@ -92,9 +113,13 @@ class ApiDocumentationTest extends TestCase
             'password' => 'SecurePass123!',
         ]);
 
+        app(\App\Services\CaptchaService::class)->seedForTests('docs-cookie-key', 'DOCS1');
+
         $response = $this->postJson('/api/v1/admin/auth/login', [
             'email' => $user->email,
             'password' => 'SecurePass123!',
+            'captcha_key' => 'docs-cookie-key',
+            'captcha' => 'DOCS1',
         ]);
 
         $response->assertOk();

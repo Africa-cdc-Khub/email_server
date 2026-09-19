@@ -11,14 +11,22 @@ class ApiDocumentationController extends Controller
     public function spec(): JsonResponse
     {
         $cached = storage_path('api-docs/openapi.json');
+        $metaPath = storage_path('api-docs/openapi.meta.json');
         $openapiDir = app_path('OpenApi');
+        $sourceHash = $this->openApiSourceHash($openapiDir);
 
-        if (is_readable($cached) && ! $this->openApiCacheIsStale($cached, $openapiDir)) {
+        if (
+            is_readable($cached)
+            && is_readable($metaPath)
+            && ! $this->openApiCacheIsStale($metaPath, $sourceHash)
+        ) {
             try {
                 /** @var array<string, mixed> $decoded */
                 $decoded = json_decode((string) file_get_contents($cached), true, 512, JSON_THROW_ON_ERROR);
 
-                return response()->json($this->withAppServer($decoded));
+                return response()
+                    ->json($this->withAppServer($decoded))
+                    ->header('Cache-Control', 'no-store, private');
             } catch (Throwable) {
                 // Fall through to live generation
             }
@@ -41,8 +49,14 @@ class ApiDocumentationController extends Controller
 
             @mkdir(dirname($cached), 0775, true);
             @file_put_contents($cached, $json);
+            @file_put_contents($metaPath, json_encode([
+                'source_hash' => $sourceHash,
+                'generated_at' => now()->toIso8601String(),
+            ], JSON_THROW_ON_ERROR));
 
-            return response()->json($this->withAppServer($decoded));
+            return response()
+                ->json($this->withAppServer($decoded))
+                ->header('Cache-Control', 'no-store, private');
         } catch (Throwable $e) {
             report($e);
 
@@ -93,17 +107,25 @@ class ApiDocumentationController extends Controller
         return $spec;
     }
 
-    private function openApiCacheIsStale(string $cachedPath, string $openapiDir): bool
+    private function openApiCacheIsStale(string $metaPath, string $sourceHash): bool
     {
-        $cacheMtime = @filemtime($cachedPath);
-        if ($cacheMtime === false) {
+        try {
+            /** @var array{source_hash?: string} $meta */
+            $meta = json_decode((string) file_get_contents($metaPath), true, 512, JSON_THROW_ON_ERROR);
+
+            return ($meta['source_hash'] ?? '') !== $sourceHash;
+        } catch (Throwable) {
             return true;
         }
+    }
 
+    private function openApiSourceHash(string $openapiDir): string
+    {
         if (! is_dir($openapiDir)) {
-            return false;
+            return 'missing';
         }
 
+        $hashes = [];
         $iterator = new \RecursiveIteratorIterator(
             new \RecursiveDirectoryIterator($openapiDir, \FilesystemIterator::SKIP_DOTS)
         );
@@ -115,11 +137,12 @@ class ApiDocumentationController extends Controller
             if (strtolower($file->getExtension()) !== 'php') {
                 continue;
             }
-            if ($file->getMTime() > $cacheMtime) {
-                return true;
-            }
+            $path = $file->getPathname();
+            $hashes[$path] = hash_file('sha256', $path) ?: '';
         }
 
-        return false;
+        ksort($hashes);
+
+        return hash('sha256', json_encode($hashes, JSON_THROW_ON_ERROR));
     }
 }

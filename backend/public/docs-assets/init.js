@@ -21,8 +21,8 @@ window.onload = function () {
     presets: [SwaggerUIBundle.presets.apis, SwaggerUIBundle.SwaggerUIStandalonePreset],
     layout: 'BaseLayout',
     persistAuthorization: true,
-    defaultModelsExpandDepth: 1,
-    defaultModelExpandDepth: 1,
+    defaultModelsExpandDepth: 2,
+    defaultModelExpandDepth: 3,
     tryItOutEnabled: true,
     requestInterceptor: function (req) {
       // Prefer sessionStorage bearer (same-tab SPA); cookie covers top-level navigation.
