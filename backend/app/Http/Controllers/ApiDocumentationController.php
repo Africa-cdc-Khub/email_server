@@ -11,7 +11,9 @@ class ApiDocumentationController extends Controller
     public function spec(): JsonResponse
     {
         $cached = storage_path('api-docs/openapi.json');
-        if (is_readable($cached)) {
+        $openapiDir = app_path('OpenApi');
+
+        if (is_readable($cached) && ! $this->openApiCacheIsStale($cached, $openapiDir)) {
             try {
                 /** @var array<string, mixed> $decoded */
                 $decoded = json_decode((string) file_get_contents($cached), true, 512, JSON_THROW_ON_ERROR);
@@ -31,7 +33,7 @@ class ApiDocumentationController extends Controller
             }
 
             $openapi = \OpenApi\Generator::scan([
-                app_path('OpenApi'),
+                $openapiDir,
             ]);
 
             $json = $openapi->toJson();
@@ -89,5 +91,35 @@ class ApiDocumentationController extends Controller
         ];
 
         return $spec;
+    }
+
+    private function openApiCacheIsStale(string $cachedPath, string $openapiDir): bool
+    {
+        $cacheMtime = @filemtime($cachedPath);
+        if ($cacheMtime === false) {
+            return true;
+        }
+
+        if (! is_dir($openapiDir)) {
+            return false;
+        }
+
+        $iterator = new \RecursiveIteratorIterator(
+            new \RecursiveDirectoryIterator($openapiDir, \FilesystemIterator::SKIP_DOTS)
+        );
+
+        foreach ($iterator as $file) {
+            if (! $file->isFile()) {
+                continue;
+            }
+            if (strtolower($file->getExtension()) !== 'php') {
+                continue;
+            }
+            if ($file->getMTime() > $cacheMtime) {
+                return true;
+            }
+        }
+
+        return false;
     }
 }
