@@ -1,7 +1,7 @@
 # Self-registration & scoped clients
 
 **Date:** 2026-09-19  
-**Status:** Approved (pending final user review of this file)  
+**Status:** Implemented (2026-09-19)  
 **Surface:** Admin panel (`/login`, `/register`, `/integrations`, `/users`, `/logs`)
 
 ## Problem
