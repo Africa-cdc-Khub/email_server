@@ -70,11 +70,27 @@ class IntegrationDocumentation
      *     path="/integrations/send",
      *     tags={"Integration Mail"},
      *     summary="Send an email",
-     *     description="Queue an email for delivery through the Email Server. Requires a valid integration JWT from POST /integrations/auth/token. Delivery is asynchronous — use GET /integrations/logs/{logId} to check status.\n\n**Attachments:** include an `attachments` array of objects with `filename` + base64 `content` (optional `content_type`). Limits: max 10 files, 5 MB each, 15 MB total. Use `Content-Type: application/json`.",
+     *     description="Queue an email for delivery through the Email Server. Requires a valid integration JWT from POST /integrations/auth/token. Delivery is asynchronous — use GET /integrations/logs/{logId} to check status.\n\n**Attachments:** switch Request body to `application/json` and send an `attachments` array (`filename` + base64 `content`, optional `content_type`). Limits: max 10 files, 5 MB each, 15 MB total. Form-urlencoded does not support attachments.",
      *     security={{"integrationJwt":{}}},
      *
      *     @OA\RequestBody(
      *         required=true,
+     *
+     *         @OA\MediaType(
+     *             mediaType="application/x-www-form-urlencoded",
+     *
+     *             @OA\Schema(
+     *                 required={"to","subject","body"},
+     *
+     *                 @OA\Property(property="to", type="string", format="email", example="user@example.com", description="Recipient email address"),
+     *                 @OA\Property(property="subject", type="string", maxLength=500, example="Welcome to the portal", description="Email subject line (max 500 characters)"),
+     *                 @OA\Property(property="body", type="string", example="<p>Hello from Email Server</p>", description="Email message content. Use HTML tags when is_html is true."),
+     *                 @OA\Property(property="is_html", type="string", default="true", example="true", enum={"true","false","1","0"}, description="Set to true if body contains HTML (default). Set to false for plain text."),
+     *                 @OA\Property(property="provider_id", type="integer", nullable=true, description="Optional. Leave empty in most cases. Internal numeric ID of a specific email provider (Exchange, SMTP, etc.) configured in the admin panel. When omitted, the server uses the provider linked to your integration, or the system default provider."),
+     *                 @OA\Property(property="cc", type="string", example="", description="Optional. Additional recipients to copy (comma-separated email addresses). Leave empty to omit."),
+     *                 @OA\Property(property="bcc", type="string", example="", description="Optional. Blind-copy recipients (comma-separated email addresses). Leave empty to omit.")
+     *             )
+     *         ),
      *
      *         @OA\MediaType(
      *             mediaType="application/json",
@@ -105,34 +121,6 @@ class IntegrationDocumentation
      *                         @OA\Property(property="mime_type", type="string", description="Alias for content_type")
      *                     )
      *                 )
-     *             ),
-     *
-     *             @OA\Examples(
-     *                 example="with_attachment",
-     *                 summary="Send with a PDF attachment",
-     *                 value={
-     *                     "to": "user@example.com",
-     *                     "subject": "Invoice attached",
-     *                     "body": "<p>Please find your invoice attached.</p>",
-     *                     "is_html": true,
-     *                     "attachments": {
-     *                         {
-     *                             "filename": "invoice.pdf",
-     *                             "content": "JVBERi0xLjQKJcTl8uXrp/Og0MTGCjEgMCBvYmo...",
-     *                             "content_type": "application/pdf"
-     *                         }
-     *                     }
-     *                 }
-     *             ),
-     *             @OA\Examples(
-     *                 example="plain",
-     *                 summary="Send without attachments",
-     *                 value={
-     *                     "to": "user@example.com",
-     *                     "subject": "Welcome to the portal",
-     *                     "body": "<p>Hello from Email Server</p>",
-     *                     "is_html": true
-     *                 }
      *             )
      *         )
      *     ),
