@@ -8,6 +8,8 @@ use App\Models\BrandingSetting;
 use App\Models\EmailProvider;
 use App\Models\ExternalIntegration;
 use App\Models\User;
+use App\Services\MigrationExportService;
+use App\Services\MigrationPackageCipher;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Hash;
@@ -25,7 +27,7 @@ class MigrationBackupRestoreTest extends TestCase
         return $admin->createToken('admin-panel')->plainTextToken;
     }
 
-    public function test_admin_can_export_migration_package(): void
+    public function test_admin_can_export_encrypted_migration_package_with_one_time_key(): void
     {
         Storage::fake('public');
 
@@ -61,23 +63,37 @@ class MigrationBackupRestoreTest extends TestCase
         ]);
 
         $res = $this->withToken($this->adminToken())
-            ->get('/api/v1/admin/migration/export')
-            ->assertOk();
+            ->getJson('/api/v1/admin/migration/export')
+            ->assertOk()
+            ->assertJsonStructure([
+                'encryption_key',
+                'filename',
+                'package' => ['meta', 'nonce', 'tag', 'ciphertext'],
+                'message',
+            ]);
 
-        $this->assertStringContainsString('attachment', (string) $res->headers->get('Content-Disposition'));
-        $json = $res->json();
-        $this->assertSame(1, $json['meta']['schema_version']);
-        $this->assertSame('secret-pass', $json['email_providers'][0]['config']['password']);
-        $this->assertSame(
-            'partner@example.com',
-            collect($json['users'])->firstWhere('email', 'partner@example.com')['email']
+        $key = $res->json('encryption_key');
+        $this->assertIsString($key);
+        $this->assertGreaterThanOrEqual(40, strlen($key));
+
+        $package = $res->json('package');
+        $this->assertSame(MigrationExportService::SCHEMA_VERSION, $package['meta']['schema_version']);
+        $this->assertTrue($package['meta']['encrypted']);
+        $this->assertSame(MigrationPackageCipher::CIPHER, $package['meta']['cipher']);
+        $this->assertStringNotContainsString('secret-pass', json_encode($package));
+        $this->assertArrayNotHasKey('email_providers', $package);
+
+        $cipher = app(MigrationPackageCipher::class);
+        $plaintext = $cipher->decrypt(
+            $package['ciphertext'],
+            $package['nonce'],
+            $package['tag'],
+            $cipher->decodeKey($key)
         );
-        $this->assertSame('partner-app', $json['external_integrations'][0]['slug']);
-        $this->assertSame('smtp-main', $json['external_integrations'][0]['email_provider_slug']);
-        $this->assertTrue(collect($json['user_client_links'])->contains(
-            fn ($l) => $l['user_email'] === 'partner@example.com' && $l['client_slug'] === 'partner-app'
-        ));
-        $this->assertSame('Migrated App', $json['branding']['app_name']);
+        $inner = json_decode($plaintext, true);
+        $this->assertSame('secret-pass', $inner['email_providers'][0]['config']['password']);
+        $this->assertSame('partner@example.com', collect($inner['users'])->firstWhere('email', 'partner@example.com')['email']);
+        $this->assertSame('Migrated App', $inner['branding']['app_name']);
     }
 
     public function test_non_admin_cannot_export(): void
@@ -88,7 +104,7 @@ class MigrationBackupRestoreTest extends TestCase
             ->assertForbidden();
     }
 
-    public function test_import_creates_missing_users_and_updates_existing_clients(): void
+    public function test_import_requires_key_and_upserts_records(): void
     {
         Storage::fake('public');
 
@@ -102,20 +118,19 @@ class MigrationBackupRestoreTest extends TestCase
             'is_active' => true,
         ]);
 
-        $oldSecret = 'old-client-secret-value';
         $newSecret = 'new-client-secret-value-99';
         $client = ExternalIntegration::query()->create([
             'name' => 'Partner App',
             'slug' => 'partner-app',
-            'api_key_hash' => ExternalIntegration::hashClientSecret($oldSecret),
+            'api_key_hash' => ExternalIntegration::hashClientSecret('old-client-secret-value'),
             'api_key_prefix' => 'old…',
             'email_provider_id' => $provider->id,
             'is_active' => false,
         ]);
 
-        $package = [
+        $payload = [
             'meta' => [
-                'schema_version' => 1,
+                'schema_version' => MigrationExportService::PAYLOAD_VERSION,
                 'exported_at' => now()->toIso8601String(),
                 'app_name' => 'Email Server',
                 'source_app_url' => 'https://example.test',
@@ -183,13 +198,46 @@ class MigrationBackupRestoreTest extends TestCase
             ],
         ];
 
+        $cipher = app(MigrationPackageCipher::class);
+        $key = $cipher->generateKey();
+        $sealed = $cipher->encrypt(json_encode($payload, JSON_THROW_ON_ERROR), $key['key_raw']);
+        $envelope = [
+            'meta' => [
+                'schema_version' => MigrationExportService::SCHEMA_VERSION,
+                'encrypted' => true,
+                'cipher' => MigrationPackageCipher::CIPHER,
+                'kdf' => 'none',
+                'key_bytes' => MigrationPackageCipher::KEY_BYTES,
+            ],
+            'nonce' => $sealed['nonce'],
+            'tag' => $sealed['tag'],
+            'ciphertext' => $sealed['ciphertext'],
+        ];
+
         $file = UploadedFile::fake()->createWithContent(
             'migration.json',
-            json_encode($package, JSON_THROW_ON_ERROR)
+            json_encode($envelope, JSON_THROW_ON_ERROR)
         );
 
         $this->withToken($this->adminToken())
             ->post('/api/v1/admin/migration/import', ['file' => $file])
+            ->assertStatus(422);
+
+        $this->withToken($this->adminToken())
+            ->post('/api/v1/admin/migration/import', [
+                'file' => $file,
+                'encryption_key' => 'not-a-valid-key',
+            ])
+            ->assertStatus(422);
+
+        $this->withToken($this->adminToken())
+            ->post('/api/v1/admin/migration/import', [
+                'file' => UploadedFile::fake()->createWithContent(
+                    'migration.json',
+                    json_encode($envelope, JSON_THROW_ON_ERROR)
+                ),
+                'encryption_key' => $key['key_encoded'],
+            ])
             ->assertOk()
             ->assertJsonPath('data.users.created', 1)
             ->assertJsonPath('data.clients.updated', 1)
@@ -209,15 +257,34 @@ class MigrationBackupRestoreTest extends TestCase
         ])->assertOk()->assertJsonStructure(['token']);
     }
 
-    public function test_import_rejects_invalid_schema_version(): void
+    public function test_import_rejects_wrong_encryption_key(): void
     {
+        $cipher = app(MigrationPackageCipher::class);
+        $right = $cipher->generateKey();
+        $wrong = $cipher->generateKey();
+        $sealed = $cipher->encrypt('{"meta":{"schema_version":1}}', $right['key_raw']);
+        $envelope = [
+            'meta' => [
+                'schema_version' => MigrationExportService::SCHEMA_VERSION,
+                'encrypted' => true,
+                'cipher' => MigrationPackageCipher::CIPHER,
+            ],
+            'nonce' => $sealed['nonce'],
+            'tag' => $sealed['tag'],
+            'ciphertext' => $sealed['ciphertext'],
+        ];
+
         $file = UploadedFile::fake()->createWithContent(
             'migration.json',
-            json_encode(['meta' => ['schema_version' => 99]], JSON_THROW_ON_ERROR)
+            json_encode($envelope, JSON_THROW_ON_ERROR)
         );
 
         $this->withToken($this->adminToken())
-            ->post('/api/v1/admin/migration/import', ['file' => $file])
-            ->assertStatus(422);
+            ->post('/api/v1/admin/migration/import', [
+                'file' => $file,
+                'encryption_key' => $wrong['key_encoded'],
+            ])
+            ->assertStatus(422)
+            ->assertJsonFragment(['message' => 'Could not decrypt migration package. Check the encryption key and file integrity.']);
     }
 }

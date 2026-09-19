@@ -16,8 +16,12 @@ use InvalidArgumentException;
 
 class MigrationImportService
 {
+    public function __construct(
+        private readonly MigrationPackageCipher $cipher,
+    ) {}
+
     /**
-     * @param  array<string, mixed>  $package
+     * @param  array<string, mixed>  $envelope  Encrypted package (schema 2) or legacy plaintext (schema 1) — schema 1 rejected
      * @return array{
      *     providers: array{created: int, updated: int},
      *     users: array{created: int, updated: int},
@@ -27,12 +31,14 @@ class MigrationImportService
      *     warnings: list<string>
      * }
      */
-    public function import(array $package): array
+    public function import(array $envelope, string $encryptionKey): array
     {
+        $package = $this->decryptEnvelope($envelope, $encryptionKey);
+
         $version = (int) data_get($package, 'meta.schema_version', 0);
-        if ($version !== MigrationExportService::SCHEMA_VERSION) {
+        if ($version !== MigrationExportService::PAYLOAD_VERSION) {
             throw new InvalidArgumentException(
-                'Unsupported migration schema_version. Expected '.MigrationExportService::SCHEMA_VERSION.'.'
+                'Unsupported migration payload schema_version. Expected '.MigrationExportService::PAYLOAD_VERSION.'.'
             );
         }
 
@@ -63,6 +69,44 @@ class MigrationImportService
         $summary['warnings'] = $warnings;
 
         return $summary;
+    }
+
+    /**
+     * @param  array<string, mixed>  $envelope
+     * @return array<string, mixed>
+     */
+    private function decryptEnvelope(array $envelope, string $encryptionKey): array
+    {
+        $version = (int) data_get($envelope, 'meta.schema_version', 0);
+        if ($version !== MigrationExportService::SCHEMA_VERSION) {
+            throw new InvalidArgumentException(
+                'Unsupported migration package schema_version. Expected '.MigrationExportService::SCHEMA_VERSION.' (encrypted).'
+            );
+        }
+
+        if (! data_get($envelope, 'meta.encrypted')) {
+            throw new InvalidArgumentException('Migration package is not encrypted.');
+        }
+
+        $cipher = (string) data_get($envelope, 'meta.cipher', '');
+        if ($cipher !== MigrationPackageCipher::CIPHER) {
+            throw new InvalidArgumentException('Unsupported migration cipher.');
+        }
+
+        $rawKey = $this->cipher->decodeKey($encryptionKey);
+        $plaintext = $this->cipher->decrypt(
+            (string) ($envelope['ciphertext'] ?? ''),
+            (string) ($envelope['nonce'] ?? ''),
+            (string) ($envelope['tag'] ?? ''),
+            $rawKey
+        );
+
+        $package = json_decode($plaintext, true);
+        if (! is_array($package)) {
+            throw new InvalidArgumentException('Decrypted migration payload is not valid JSON.');
+        }
+
+        return $package;
     }
 
     /**

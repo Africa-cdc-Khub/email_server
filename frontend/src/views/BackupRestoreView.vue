@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import PageHeader from '@/components/shared/PageHeader.vue'
 import ParentCard from '@/components/shared/ParentCard.vue'
 import { api } from '@/lib/api'
@@ -19,24 +19,44 @@ type ImportSummary = {
 const exporting = ref(false)
 const importing = ref(false)
 const file = ref<File[] | File | null>(null)
+const encryptionKey = ref('')
 const error = ref('')
 const message = ref('')
 const summary = ref<ImportSummary | null>(null)
 
-function pickFile(): File | null {
+const keyDialog = ref(false)
+const issuedKey = ref('')
+const keyCopied = ref(false)
+
+const selectedFile = computed(() => {
   const value = file.value
   if (Array.isArray(value)) return value[0] ?? null
   return value
+})
+
+const canRestore = computed(
+  () => !!selectedFile.value && encryptionKey.value.trim().length >= 40,
+)
+
+function downloadJson(filename: string, data: unknown) {
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = filename
+  document.body.appendChild(anchor)
+  anchor.click()
+  anchor.remove()
+  URL.revokeObjectURL(url)
 }
 
-function filenameFromDisposition(header: string | undefined, fallback: string): string {
-  if (!header) return fallback
-  const match = /filename\*?=(?:UTF-8''|")?([^\";]+)/i.exec(header)
-  if (!match?.[1]) return fallback
+async function copyIssuedKey() {
+  if (!issuedKey.value) return
   try {
-    return decodeURIComponent(match[1].replace(/"/g, '').trim())
+    await navigator.clipboard.writeText(issuedKey.value)
+    keyCopied.value = true
   } catch {
-    return match[1].replace(/"/g, '').trim()
+    error.value = 'Could not copy key — select and copy it manually.'
   }
 }
 
@@ -44,19 +64,20 @@ async function downloadPackage() {
   exporting.value = true
   error.value = ''
   message.value = ''
+  keyCopied.value = false
   try {
-    const res = await api.get('/admin/migration/export', { responseType: 'blob' })
-    const blob = new Blob([res.data], { type: 'application/json' })
-    const url = URL.createObjectURL(blob)
-    const anchor = document.createElement('a')
-    anchor.href = url
-    anchor.download = filenameFromDisposition(
-      res.headers['content-disposition'],
-      `email-server-migration-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.json`,
-    )
-    anchor.click()
-    URL.revokeObjectURL(url)
-    message.value = 'Migration package downloaded. Store it securely — it contains credentials.'
+    const res = await api.get('/admin/migration/export')
+    const key = String(res.data.encryption_key || '')
+    const filename = String(res.data.filename || `email-server-migration-${Date.now()}.json`)
+    const pkg = res.data.package
+    if (!key || !pkg) {
+      throw new Error('Export response missing encryption key or package.')
+    }
+    downloadJson(filename, pkg)
+    issuedKey.value = key
+    keyDialog.value = true
+    message.value =
+      'Encrypted package downloaded. Copy the encryption key now — it is not stored on the server.'
   } catch (err) {
     error.value = apiErrorMessage(err, 'Could not export migration package.')
   } finally {
@@ -65,14 +86,18 @@ async function downloadPackage() {
 }
 
 async function restorePackage() {
-  const selected = pickFile()
+  const selected = selectedFile.value
   if (!selected) {
     error.value = 'Choose a migration JSON file to restore.'
     return
   }
+  if (!encryptionKey.value.trim()) {
+    error.value = 'Paste the encryption key that was shown when this package was downloaded.'
+    return
+  }
   if (
     !confirm(
-      'Restore this migration package? Matching users (by email), clients (by slug), and providers (by slug) will be created or updated. The file contains secrets.',
+      'Restore this encrypted migration package? Matching users (by email), clients (by slug), and providers (by slug) will be created or updated.',
     )
   ) {
     return
@@ -85,12 +110,14 @@ async function restorePackage() {
   try {
     const body = new FormData()
     body.append('file', selected)
+    body.append('encryption_key', encryptionKey.value.trim())
     const res = await api.post('/admin/migration/import', body, {
       headers: { 'Content-Type': 'multipart/form-data' },
     })
     summary.value = res.data.data as ImportSummary
     message.value = res.data.message || 'Migration imported.'
     file.value = null
+    encryptionKey.value = ''
   } catch (err) {
     error.value = apiErrorMessage(err, 'Could not import migration package.')
   } finally {
@@ -103,12 +130,13 @@ async function restorePackage() {
   <div>
     <PageHeader
       title="Backup / Restore"
-      subtitle="Export users, clients, providers, and branding for migration to another server"
+      subtitle="Export encrypted users, clients, providers, and branding for migration to another server"
     />
 
     <v-alert type="warning" variant="tonal" class="mb-4" border="start">
-      Migration packages include decrypted email-provider credentials and password hashes.
-      Treat the download like a password dump and delete it when the migration is finished.
+      Each download is encrypted with a unique 256-bit key generated for that file only. The key is shown
+      once after download — copy it and store it separately. Without the key, the package cannot be restored
+      (including by brute force).
     </v-alert>
 
     <v-alert v-if="message" type="success" variant="tonal" class="mb-4" closable @click:close="message = ''">
@@ -122,8 +150,8 @@ async function restorePackage() {
       <v-col cols="12" md="6">
         <ParentCard title="Export">
           <p class="text-medium-emphasis mb-4">
-            Download a JSON package of accounts, integration clients, email providers, ownership links,
-            and branding. Use this file on the destination server’s Backup / Restore page.
+            Download an encrypted JSON package. Credentials inside are sealed with AES-256-GCM using a
+            fresh random key. You will need that key on the destination server.
           </p>
           <v-btn
             color="primary"
@@ -131,7 +159,7 @@ async function restorePackage() {
             :loading="exporting"
             @click="downloadPackage"
           >
-            Download migration package
+            Download encrypted package
           </v-btn>
         </ParentCard>
       </v-col>
@@ -139,25 +167,36 @@ async function restorePackage() {
       <v-col cols="12" md="6">
         <ParentCard title="Restore">
           <p class="text-medium-emphasis mb-4">
-            Upload a package from another server. Missing users are created; existing users and clients
-            matched by email/slug are updated. Provider secrets are re-encrypted with this server’s key.
+            Upload the encrypted package and paste the encryption key from the source server. Missing users
+            are created; existing users and clients matched by email/slug are updated.
           </p>
           <v-file-input
             v-model="file"
-            label="Migration JSON file"
+            label="Encrypted migration JSON"
             accept=".json,application/json"
             variant="outlined"
             density="comfortable"
             prepend-icon="mdi-file-upload-outline"
             show-size
             clearable
+            class="mb-3"
+          />
+          <v-text-field
+            v-model="encryptionKey"
+            label="Encryption key"
+            variant="outlined"
+            density="comfortable"
+            autocomplete="off"
+            spellcheck="false"
+            hint="The one-time key shown when the package was downloaded"
+            persistent-hint
             class="mb-4"
           />
           <v-btn
             color="warning"
             prepend-icon="mdi-database-import-outline"
             :loading="importing"
-            :disabled="!pickFile()"
+            :disabled="!canRestore"
             @click="restorePackage"
           >
             Restore package
@@ -196,5 +235,35 @@ async function restorePackage() {
         </ul>
       </div>
     </ParentCard>
+
+    <v-dialog v-model="keyDialog" max-width="640" persistent>
+      <v-card>
+        <v-card-title>Copy encryption key</v-card-title>
+        <v-card-text>
+          <v-alert type="error" variant="tonal" class="mb-4">
+            This key is shown once and is not stored on the server. If you lose it, the downloaded file
+            cannot be restored.
+          </v-alert>
+          <v-textarea
+            :model-value="issuedKey"
+            label="Encryption key"
+            variant="outlined"
+            readonly
+            auto-grow
+            rows="2"
+            class="font-mono"
+          />
+        </v-card-text>
+        <v-card-actions>
+          <v-btn color="primary" variant="tonal" prepend-icon="mdi-content-copy" @click="copyIssuedKey">
+            {{ keyCopied ? 'Copied' : 'Copy key' }}
+          </v-btn>
+          <v-spacer />
+          <v-btn variant="text" :disabled="!keyCopied" @click="keyDialog = false">
+            I have saved the key
+          </v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
   </div>
 </template>

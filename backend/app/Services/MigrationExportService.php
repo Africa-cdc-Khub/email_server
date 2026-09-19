@@ -12,7 +12,15 @@ use Illuminate\Support\Facades\Storage;
 
 class MigrationExportService
 {
-    public const SCHEMA_VERSION = 1;
+    /** Outer envelope version (encrypted package). */
+    public const SCHEMA_VERSION = 2;
+
+    /** Inner plaintext payload version. */
+    public const PAYLOAD_VERSION = 1;
+
+    public function __construct(
+        private readonly MigrationPackageCipher $cipher,
+    ) {}
 
     public function filename(): string
     {
@@ -20,13 +28,15 @@ class MigrationExportService
     }
 
     /**
+     * Build plaintext migration payload (never written to disk unencrypted).
+     *
      * @return array<string, mixed>
      */
-    public function build(): array
+    public function buildPayload(): array
     {
         return [
             'meta' => [
-                'schema_version' => self::SCHEMA_VERSION,
+                'schema_version' => self::PAYLOAD_VERSION,
                 'exported_at' => now()->toIso8601String(),
                 'app_name' => (string) config('app.name', 'Email Server'),
                 'source_app_url' => (string) config('app.url', ''),
@@ -37,6 +47,51 @@ class MigrationExportService
             'user_client_links' => $this->exportLinks(),
             'branding' => $this->exportBranding(),
         ];
+    }
+
+    /**
+     * @return array{
+     *     encryption_key: string,
+     *     filename: string,
+     *     package: array<string, mixed>
+     * }
+     */
+    public function buildEncryptedExport(): array
+    {
+        $payload = $this->buildPayload();
+        $plaintext = json_encode($payload, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES);
+        $key = $this->cipher->generateKey();
+        $sealed = $this->cipher->encrypt($plaintext, $key['key_raw']);
+
+        return [
+            'encryption_key' => $key['key_encoded'],
+            'filename' => $this->filename(),
+            'package' => [
+                'meta' => [
+                    'schema_version' => self::SCHEMA_VERSION,
+                    'encrypted' => true,
+                    'cipher' => MigrationPackageCipher::CIPHER,
+                    'kdf' => 'none',
+                    'key_bytes' => MigrationPackageCipher::KEY_BYTES,
+                    'exported_at' => data_get($payload, 'meta.exported_at'),
+                    'app_name' => data_get($payload, 'meta.app_name'),
+                    'source_app_url' => data_get($payload, 'meta.source_app_url'),
+                ],
+                'nonce' => $sealed['nonce'],
+                'tag' => $sealed['tag'],
+                'ciphertext' => $sealed['ciphertext'],
+            ],
+        ];
+    }
+
+    /**
+     * @deprecated Use buildPayload() / buildEncryptedExport()
+     *
+     * @return array<string, mixed>
+     */
+    public function build(): array
+    {
+        return $this->buildPayload();
     }
 
     /**
