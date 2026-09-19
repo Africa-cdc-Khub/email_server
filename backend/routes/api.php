@@ -3,6 +3,7 @@
 use App\Http\Controllers\Api\V1\Admin\AuditLogController;
 use App\Http\Controllers\Api\V1\Admin\BlockedIpController;
 use App\Http\Controllers\Api\V1\Admin\MailController;
+use App\Http\Controllers\Api\V1\Admin\MigrationController;
 use App\Http\Controllers\Api\V1\Admin\AuthController;
 use App\Http\Controllers\Api\V1\Admin\BrandingController as AdminBrandingController;
 use App\Http\Controllers\Api\V1\Admin\CaptchaController;
@@ -105,6 +106,11 @@ Route::prefix('v1')->group(function () {
                 Route::post('/email-providers/{email_provider}/test', [EmailProviderController::class, 'test']);
                 Route::post('/email-providers/{email_provider}/set-default', [EmailProviderController::class, 'setDefault']);
                 Route::apiResource('email-providers', EmailProviderController::class)->except(['index', 'destroy']);
+
+                Route::get('/migration/export', [MigrationController::class, 'export'])
+                    ->middleware('throttle:20,60');
+                Route::post('/migration/import', [MigrationController::class, 'import'])
+                    ->middleware('throttle:5,60');
             });
         });
     });
