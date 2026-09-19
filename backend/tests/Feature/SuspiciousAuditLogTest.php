@@ -99,13 +99,8 @@ class SuspiciousAuditLogTest extends TestCase
         $this->assertStringContainsString('User account deleted', (string) $log->suspicious_reasons);
     }
 
-    public function test_single_failed_login_is_not_suspicious(): void
+    public function test_single_failed_login_is_still_flagged_suspicious(): void
     {
-        config([
-            'services.audit_suspicious.auth_fail_ip_threshold' => 3,
-            'services.audit_suspicious.auth_fail_email_threshold' => 3,
-        ]);
-
         app(AuditLogService::class)->log('Failed login attempt', [
             'event_type' => 'auth_failed',
             'http_method' => 'POST',
@@ -115,6 +110,7 @@ class SuspiciousAuditLogTest extends TestCase
 
         $log = AuditLog::query()->latest('id')->first();
         $this->assertNotNull($log);
-        $this->assertFalse((bool) $log->is_suspicious);
+        $this->assertTrue((bool) $log->is_suspicious);
+        $this->assertStringContainsString('Failed login attempt', (string) $log->suspicious_reasons);
     }
 }

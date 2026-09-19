@@ -48,6 +48,11 @@ class SuspiciousAuditDetector
                 'client_auth_failed' => 'client auth failures',
                 default => 'failed logins',
             };
+            $reasons[] = match ($eventType) {
+                'auth_2fa_failed' => 'Failed two-factor verification',
+                'client_auth_failed' => 'Failed client authentication',
+                default => 'Failed login attempt',
+            };
             $ipThreshold = $this->authFailIpThreshold();
             $emailThreshold = $this->authFailEmailThreshold();
 

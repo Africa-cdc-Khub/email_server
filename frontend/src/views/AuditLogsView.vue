@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import PageHeader from '@/components/shared/PageHeader.vue'
+import ParentCard from '@/components/shared/ParentCard.vue'
 import { api } from '@/lib/api'
 import { apiErrorMessage } from '@/lib/apiError'
 import { formatDateTime12h } from '@/lib/formatDate'
@@ -267,150 +268,152 @@ onMounted(async () => {
       {{ error }}
     </v-alert>
 
-    <v-row class="mb-4" dense>
-      <v-col cols="12" md="4">
-        <v-text-field
-          v-model="filters.search"
-          label="Search action / URI / user / IP"
-          clearable
-          variant="outlined"
-          hide-details
-          density="comfortable"
-          prepend-inner-icon="mdi-magnify"
-          @keyup.enter="applyFilters"
-        />
-      </v-col>
-      <v-col cols="12" sm="6" md="2">
-        <v-select
-          v-model="filters.http_method"
-          :items="httpMethods"
-          label="Method"
-          clearable
-          variant="outlined"
-          hide-details
-          density="comfortable"
-        />
-      </v-col>
-      <v-col cols="12" sm="6" md="2">
-        <v-select
-          v-model="filters.actor_type"
-          :items="actorTypeOptions"
-          item-title="title"
-          item-value="value"
-          label="Category"
-          clearable
-          variant="outlined"
-          hide-details
-          density="comfortable"
-        />
-      </v-col>
-      <v-col cols="12" sm="6" md="3">
-        <v-select
-          v-model="filters.event_type"
-          :items="eventTypes"
-          label="Event type"
-          clearable
-          variant="outlined"
-          hide-details
-          density="comfortable"
-        />
-      </v-col>
-      <v-col cols="12" sm="6" md="3">
-        <v-select
-          v-model="filters.target_table"
-          :items="targetTables"
-          label="Target table"
-          clearable
-          variant="outlined"
-          hide-details
-          density="comfortable"
-        />
-      </v-col>
-      <v-col cols="12" sm="6" md="2">
-        <v-select
-          v-model="filters.suspicious"
-          :items="suspiciousFilterItems"
-          item-title="title"
-          item-value="value"
-          label="Suspicious"
-          clearable
-          variant="outlined"
-          hide-details
-          density="comfortable"
-        />
-      </v-col>
-      <v-col cols="12" sm="6" md="3">
-        <v-text-field
-          v-model="filters.name"
-          label="User name"
-          clearable
-          variant="outlined"
-          hide-details
-          density="comfortable"
-          @keyup.enter="applyFilters"
-        />
-      </v-col>
-      <v-col cols="12" sm="6" md="3">
-        <v-text-field
-          v-model="filters.email"
-          label="User email"
-          clearable
-          variant="outlined"
-          hide-details
-          density="comfortable"
-          @keyup.enter="applyFilters"
-        />
-      </v-col>
-      <v-col cols="12" sm="6" md="2">
-        <v-text-field
-          v-model="filters.ip_address"
-          label="IP address"
-          clearable
-          variant="outlined"
-          hide-details
-          density="comfortable"
-          @keyup.enter="applyFilters"
-        />
-      </v-col>
-      <v-col cols="12" sm="6" md="2">
-        <v-text-field
-          v-model="filters.date_from"
-          label="Date from"
-          type="date"
-          clearable
-          variant="outlined"
-          hide-details
-          density="comfortable"
-        />
-      </v-col>
-      <v-col cols="12" sm="6" md="2">
-        <v-text-field
-          v-model="filters.date_to"
-          label="Date to"
-          type="date"
-          clearable
-          variant="outlined"
-          hide-details
-          density="comfortable"
-        />
-      </v-col>
-      <v-col cols="12" sm="6" md="2">
-        <v-select
-          v-model="filters.per_page"
-          :items="[25, 50, 100]"
-          label="Rows"
-          variant="outlined"
-          hide-details
-          density="comfortable"
-        />
-      </v-col>
-      <v-col cols="12" md="4" class="d-flex flex-wrap ga-2 align-center">
-        <v-btn color="primary" variant="tonal" :loading="loading" @click="applyFilters">Apply</v-btn>
-        <v-btn variant="text" :disabled="loading || activeFilterCount === 0" @click="clearFilters">
-          Clear{{ activeFilterCount ? ` (${activeFilterCount})` : '' }}
-        </v-btn>
-      </v-col>
-    </v-row>
+    <ParentCard title="Filters">
+      <v-row dense>
+        <v-col cols="12" md="4">
+          <v-text-field
+            v-model="filters.search"
+            label="Search action / URI / user / IP"
+            clearable
+            variant="outlined"
+            hide-details
+            density="comfortable"
+            prepend-inner-icon="mdi-magnify"
+            @keyup.enter="applyFilters"
+          />
+        </v-col>
+        <v-col cols="12" sm="6" md="2">
+          <v-select
+            v-model="filters.http_method"
+            :items="httpMethods"
+            label="Method"
+            clearable
+            variant="outlined"
+            hide-details
+            density="comfortable"
+          />
+        </v-col>
+        <v-col cols="12" sm="6" md="2">
+          <v-select
+            v-model="filters.actor_type"
+            :items="actorTypeOptions"
+            item-title="title"
+            item-value="value"
+            label="Category"
+            clearable
+            variant="outlined"
+            hide-details
+            density="comfortable"
+          />
+        </v-col>
+        <v-col cols="12" sm="6" md="2">
+          <v-select
+            v-model="filters.event_type"
+            :items="eventTypes"
+            label="Event type"
+            clearable
+            variant="outlined"
+            hide-details
+            density="comfortable"
+          />
+        </v-col>
+        <v-col cols="12" sm="6" md="2">
+          <v-select
+            v-model="filters.target_table"
+            :items="targetTables"
+            label="Target table"
+            clearable
+            variant="outlined"
+            hide-details
+            density="comfortable"
+          />
+        </v-col>
+        <v-col cols="12" sm="6" md="2">
+          <v-select
+            v-model="filters.suspicious"
+            :items="suspiciousFilterItems"
+            item-title="title"
+            item-value="value"
+            label="Suspicious"
+            clearable
+            variant="outlined"
+            hide-details
+            density="comfortable"
+          />
+        </v-col>
+        <v-col cols="12" sm="6" md="3">
+          <v-text-field
+            v-model="filters.name"
+            label="User name"
+            clearable
+            variant="outlined"
+            hide-details
+            density="comfortable"
+            @keyup.enter="applyFilters"
+          />
+        </v-col>
+        <v-col cols="12" sm="6" md="3">
+          <v-text-field
+            v-model="filters.email"
+            label="User email"
+            clearable
+            variant="outlined"
+            hide-details
+            density="comfortable"
+            @keyup.enter="applyFilters"
+          />
+        </v-col>
+        <v-col cols="12" sm="6" md="2">
+          <v-text-field
+            v-model="filters.ip_address"
+            label="IP address"
+            clearable
+            variant="outlined"
+            hide-details
+            density="comfortable"
+            @keyup.enter="applyFilters"
+          />
+        </v-col>
+        <v-col cols="12" sm="6" md="2">
+          <v-text-field
+            v-model="filters.date_from"
+            label="Date from"
+            type="date"
+            clearable
+            variant="outlined"
+            hide-details
+            density="comfortable"
+          />
+        </v-col>
+        <v-col cols="12" sm="6" md="2">
+          <v-text-field
+            v-model="filters.date_to"
+            label="Date to"
+            type="date"
+            clearable
+            variant="outlined"
+            hide-details
+            density="comfortable"
+          />
+        </v-col>
+        <v-col cols="12" sm="6" md="2">
+          <v-select
+            v-model="filters.per_page"
+            :items="[25, 50, 100]"
+            label="Rows"
+            variant="outlined"
+            hide-details
+            density="comfortable"
+          />
+        </v-col>
+        <v-col cols="12" md="4" class="d-flex flex-wrap ga-2 align-center">
+          <v-btn color="primary" variant="tonal" :loading="loading" @click="applyFilters">Apply</v-btn>
+          <v-btn variant="text" :disabled="loading || activeFilterCount === 0" @click="clearFilters">
+            Clear{{ activeFilterCount ? ` (${activeFilterCount})` : '' }}
+          </v-btn>
+        </v-col>
+      </v-row>
+    </ParentCard>
 
     <div class="text-caption text-medium-emphasis mb-3">
       Showing {{ rowsOnPage ? firstRowNumber : 0 }}–{{ firstRowNumber + rowsOnPage - (rowsOnPage ? 1 : 0) }}
@@ -419,9 +422,7 @@ onMounted(async () => {
 
     <v-data-table
       :headers="[
-        { title: 'When', key: 'created_at', sortable: false },
-        { title: 'Category', key: 'actor_type', sortable: false, width: 130 },
-        { title: 'Flag', key: 'is_suspicious', sortable: false, width: 120 },
+        { title: 'When', key: 'created_at', sortable: false, minWidth: 180 },
         { title: 'Actor', key: 'user', sortable: false },
         { title: 'Method', key: 'http_method', sortable: false },
         { title: 'Event', key: 'event_type', sortable: false },
@@ -437,23 +438,26 @@ onMounted(async () => {
       :row-props="(row: { item: AuditLogRow }) => (row.item.is_suspicious ? { class: 'audit-row--suspicious' } : {})"
     >
       <template #item.created_at="{ item }">
-        {{ item.created_at ? formatDateTime12h(item.created_at) : '—' }}
-      </template>
-      <template #item.actor_type="{ item }">
-        <v-chip size="small" :color="actorColor(item.actor_type)" variant="tonal">
-          {{ item.actor_label || ACTOR_LABELS[item.actor_type] || item.actor_type }}
-        </v-chip>
-      </template>
-      <template #item.is_suspicious="{ item }">
-        <v-tooltip v-if="item.is_suspicious" location="top">
-          <template #activator="{ props }">
-            <v-chip v-bind="props" size="small" color="error" variant="flat" prepend-icon="mdi-alert">
-              Suspicious
-            </v-chip>
-          </template>
-          <span>{{ item.suspicious_reasons || 'Flagged by security heuristics' }}</span>
-        </v-tooltip>
-        <span v-else class="text-medium-emphasis">—</span>
+        <div class="text-no-wrap">{{ item.created_at ? formatDateTime12h(item.created_at) : '—' }}</div>
+        <div class="d-flex flex-wrap ga-1 mt-1">
+          <v-chip size="x-small" :color="actorColor(item.actor_type)" variant="tonal">
+            {{ item.actor_label || ACTOR_LABELS[item.actor_type] || item.actor_type }}
+          </v-chip>
+          <v-tooltip v-if="item.is_suspicious" location="top">
+            <template #activator="{ props }">
+              <v-chip
+                v-bind="props"
+                size="x-small"
+                color="error"
+                variant="flat"
+                prepend-icon="mdi-alert"
+              >
+                Suspicious
+              </v-chip>
+            </template>
+            <span>{{ item.suspicious_reasons || 'Flagged by security heuristics' }}</span>
+          </v-tooltip>
+        </div>
       </template>
       <template #item.user="{ item }">
         <div>{{ userDisplay(item) }}</div>

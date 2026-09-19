@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import PageHeader from '@/components/shared/PageHeader.vue'
+import ParentCard from '@/components/shared/ParentCard.vue'
 import { api } from '@/lib/api'
 import { apiErrorMessage } from '@/lib/apiError'
 import { formatDateTime12h } from '@/lib/formatDate'
@@ -182,50 +183,52 @@ onMounted(async () => {
       {{ error }}
     </v-alert>
 
-    <v-row class="mb-4" dense>
-      <v-col cols="12" md="3">
-        <v-select
-          v-model="statusFilter"
-          :items="statuses"
-          item-title="label"
-          item-value="value"
-          label="Status"
-          clearable
-          variant="outlined"
-          hide-details
-          density="comfortable"
-        />
-      </v-col>
-      <v-col cols="12" md="3">
-        <v-select
-          v-model="clientFilter"
-          :items="clientItems"
-          item-title="title"
-          item-value="value"
-          label="Client"
-          clearable
-          variant="outlined"
-          hide-details
-          density="comfortable"
-        />
-      </v-col>
-      <v-col cols="12" md="4">
-        <v-text-field
-          v-model="search"
-          label="Search to / subject / IP"
-          clearable
-          variant="outlined"
-          hide-details
-          density="comfortable"
-          prepend-inner-icon="mdi-magnify"
-          @keyup.enter="applyFilters"
-        />
-      </v-col>
-      <v-col cols="12" md="2" class="d-flex ga-2 align-center">
-        <v-btn color="primary" variant="tonal" @click="applyFilters">Apply</v-btn>
-        <v-btn variant="text" @click="clearFilters">Clear</v-btn>
-      </v-col>
-    </v-row>
+    <ParentCard title="Filters">
+      <v-row dense>
+        <v-col cols="12" md="3">
+          <v-select
+            v-model="statusFilter"
+            :items="statuses"
+            item-title="label"
+            item-value="value"
+            label="Status"
+            clearable
+            variant="outlined"
+            hide-details
+            density="comfortable"
+          />
+        </v-col>
+        <v-col cols="12" md="3">
+          <v-select
+            v-model="clientFilter"
+            :items="clientItems"
+            item-title="title"
+            item-value="value"
+            label="Client"
+            clearable
+            variant="outlined"
+            hide-details
+            density="comfortable"
+          />
+        </v-col>
+        <v-col cols="12" md="4">
+          <v-text-field
+            v-model="search"
+            label="Search to / subject / IP"
+            clearable
+            variant="outlined"
+            hide-details
+            density="comfortable"
+            prepend-inner-icon="mdi-magnify"
+            @keyup.enter="applyFilters"
+          />
+        </v-col>
+        <v-col cols="12" md="2" class="d-flex ga-2 align-center">
+          <v-btn color="primary" variant="tonal" @click="applyFilters">Apply</v-btn>
+          <v-btn variant="text" @click="clearFilters">Clear</v-btn>
+        </v-col>
+      </v-row>
+    </ParentCard>
 
     <v-data-table-server
       :loading="loading"
