@@ -235,8 +235,7 @@ onMounted(async () => {
       :items="items"
       :items-length="total"
       :headers="[
-        { title: 'To', key: 'to' },
-        { title: 'Subject', key: 'subject' },
+        { title: 'To / Subject', key: 'to_subject', sortable: false },
         { title: 'Client', key: 'source' },
         { title: 'IP address', key: 'sender_ip' },
         { title: 'Sending system', key: 'sending_system' },
@@ -248,6 +247,12 @@ onMounted(async () => {
       ]"
       @update:page="(p: number) => { page = p; load() }"
     >
+      <template #item.to_subject="{ item }">
+        <div class="to-subject-cell">
+          <div class="to-subject-cell__to">{{ item.to || '—' }}</div>
+          <div class="to-subject-cell__subject">{{ item.subject || '—' }}</div>
+        </div>
+      </template>
       <template #item.sending_system="{ item }">
         <span class="font-weight-medium">{{ item.sending_system }}</span>
       </template>
@@ -296,3 +301,26 @@ onMounted(async () => {
     </v-data-table-server>
   </div>
 </template>
+
+<style scoped>
+.to-subject-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 12rem;
+  max-width: 28rem;
+  padding: 0.15rem 0;
+  line-height: 1.35;
+}
+
+.to-subject-cell__to {
+  font-weight: 600;
+  word-break: break-word;
+}
+
+.to-subject-cell__subject {
+  color: rgba(var(--v-theme-on-surface), 0.62);
+  font-size: 0.8125rem;
+  word-break: break-word;
+}
+</style>

@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\Api\V1\Admin\AuditLogController;
+use App\Http\Controllers\Api\V1\Admin\BlockedIpController;
 use App\Http\Controllers\Api\V1\Admin\MailController;
 use App\Http\Controllers\Api\V1\Admin\AuthController;
 use App\Http\Controllers\Api\V1\Admin\BrandingController as AdminBrandingController;
@@ -64,6 +65,18 @@ Route::prefix('v1')->group(function () {
                 Route::get('/captcha', CaptchaController::class);
                 Route::get('/audit-logs/filter-options', [AuditLogController::class, 'filterOptions']);
                 Route::get('/audit-logs', [AuditLogController::class, 'index']);
+
+                Route::get('/blocked-ips', [BlockedIpController::class, 'index']);
+                Route::get('/blocked-emails', [BlockedIpController::class, 'indexEmails']);
+                Route::post('/blocked-ips', [BlockedIpController::class, 'store'])
+                    ->middleware('throttle:30,1');
+                Route::post('/blocked-ips/block-suspicious', [BlockedIpController::class, 'blockSuspicious'])
+                    ->middleware('throttle:10,1');
+                Route::delete('/blocked-ips/{blocked_ip}', [BlockedIpController::class, 'destroy'])
+                    ->middleware('throttle:30,1');
+                Route::delete('/blocked-emails/{blocked_email}', [BlockedIpController::class, 'destroyEmail'])
+                    ->middleware('throttle:30,1');
+
                 Route::post('/send-mail', [MailController::class, 'send'])
                     ->middleware('throttle:30,1');
 

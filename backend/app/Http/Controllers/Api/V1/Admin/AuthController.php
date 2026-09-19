@@ -11,6 +11,7 @@ use App\Models\User;
 use App\Services\AdminPasswordResetService;
 use App\Services\AdminTwoFactorService;
 use App\Services\AuditLogService;
+use App\Services\BlockedEmailService;
 use App\Support\ApiDocsAuthCookie;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -23,9 +24,27 @@ class AuthController extends Controller
         LoginRequest $request,
         AdminTwoFactorService $twoFactor,
         AuditLogService $audit,
+        BlockedEmailService $blockedEmails,
     ): JsonResponse {
+        $email = (string) $request->validated('email');
+
+        if ($blockedEmails->isBlocked($email)) {
+            $audit->log('Login attempt with blocked email', [
+                'actor_type' => AuditLogService::ACTOR_SYSTEM_USER,
+                'event_type' => 'auth_failed_blocked_email',
+                'http_method' => 'POST',
+                'request_uri' => $request->path(),
+                'attempted_email' => $email,
+                'new_values' => ['email' => $email, 'reason' => 'email_blocked'],
+            ]);
+
+            throw ValidationException::withMessages([
+                'email' => ['This email address has been blocked.'],
+            ]);
+        }
+
         try {
-            $user = User::query()->where('email', $request->validated('email'))->first();
+            $user = User::query()->where('email', $email)->first();
         } catch (\Throwable $e) {
             report($e);
 
@@ -40,8 +59,8 @@ class AuthController extends Controller
                 'event_type' => 'auth_failed',
                 'http_method' => 'POST',
                 'request_uri' => $request->path(),
-                'attempted_email' => $request->validated('email'),
-                'new_values' => ['email' => $request->validated('email')],
+                'attempted_email' => $email,
+                'new_values' => ['email' => $email],
             ]);
 
             throw ValidationException::withMessages([
@@ -131,16 +150,36 @@ class AuthController extends Controller
         ]);
     }
 
-    public function forgotPassword(ForgotPasswordRequest $request, AdminPasswordResetService $passwordReset, AuditLogService $audit): JsonResponse
-    {
-        $passwordReset->sendResetLink($request->validated('email'));
+    public function forgotPassword(
+        ForgotPasswordRequest $request,
+        AdminPasswordResetService $passwordReset,
+        AuditLogService $audit,
+        BlockedEmailService $blockedEmails,
+    ): JsonResponse {
+        $email = (string) $request->validated('email');
+
+        if ($blockedEmails->isBlocked($email)) {
+            $audit->log('Password reset blocked for blocked email', [
+                'event_type' => 'auth_forgot_blocked_email',
+                'http_method' => 'POST',
+                'request_uri' => $request->path(),
+                'attempted_email' => $email,
+                'new_values' => ['email' => $email, 'reason' => 'email_blocked'],
+            ]);
+
+            return response()->json([
+                'message' => 'If an account exists for that email, a password reset link has been sent.',
+            ]);
+        }
+
+        $passwordReset->sendResetLink($email);
 
         $audit->log('Password reset link requested', [
             'event_type' => 'auth_forgot',
             'http_method' => 'POST',
             'request_uri' => $request->path(),
-            'attempted_email' => $request->validated('email'),
-            'new_values' => ['email' => $request->validated('email')],
+            'attempted_email' => $email,
+            'new_values' => ['email' => $email],
         ]);
 
         return response()->json([

@@ -58,6 +58,12 @@ const router = createRouter({
           component: () => import('@/views/AuditLogsView.vue'),
           meta: { requiresAdmin: true },
         },
+        {
+          path: 'blocked-ips',
+          name: 'blocked-ips',
+          component: () => import('@/views/BlockedIpsView.vue'),
+          meta: { requiresAdmin: true },
+        },
       ],
     },
   ],

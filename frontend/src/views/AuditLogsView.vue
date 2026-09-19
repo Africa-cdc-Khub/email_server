@@ -45,6 +45,23 @@ type Filters = {
   per_page: number
 }
 
+type BlockDialogMode = 'single' | 'all_suspicious'
+type BlockScope = 'ip' | 'email' | 'both'
+
+function isValidEmail(value: string | null | undefined): boolean {
+  if (!value) return false
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim())
+}
+
+function logEmail(row: AuditLogRow | null | undefined): string {
+  if (!row) return ''
+  return isValidEmail(row.user_email) ? String(row.user_email).trim() : ''
+}
+
+function canBlockLog(row: AuditLogRow): boolean {
+  return Boolean(row.ip_address) || Boolean(logEmail(row))
+}
+
 function defaultFilters(): Filters {
   return {
     search: '',
@@ -64,6 +81,7 @@ function defaultFilters(): Filters {
 
 const loading = ref(false)
 const error = ref('')
+const message = ref('')
 const rows = ref<AuditLogRow[]>([])
 const filters = ref<Filters>(defaultFilters())
 const page = ref(1)
@@ -72,6 +90,15 @@ const total = ref(0)
 const perPage = ref(50)
 const detailsOpen = ref(false)
 const selectedLog = ref<AuditLogRow | null>(null)
+
+const blockOpen = ref(false)
+const blockMode = ref<BlockDialogMode>('single')
+const blockScope = ref<BlockScope>('ip')
+const blockIp = ref('')
+const blockEmail = ref('')
+const blockReason = ref('')
+const blockAuditLogId = ref<number | null>(null)
+const blocking = ref(false)
 
 const eventTypes = ref<string[]>([])
 const targetTables = ref<string[]>([])
@@ -111,6 +138,39 @@ const ACTOR_LABELS: Record<string, string> = {
   system_user: 'System user',
   client: 'Client',
   system: 'System',
+}
+
+const blockDialogTitle = computed(() =>
+  blockMode.value === 'all_suspicious' ? 'Block suspicious access' : 'Block from audit log',
+)
+
+const blockScopeItems = computed(() => {
+  const items: { title: string; value: BlockScope; disabled?: boolean }[] = [
+    { title: 'IP only', value: 'ip', disabled: blockMode.value === 'single' && !blockIp.value },
+    { title: 'Email only', value: 'email', disabled: blockMode.value === 'single' && !blockEmail.value },
+    {
+      title: 'IP and email',
+      value: 'both',
+      disabled: blockMode.value === 'single' && (!blockIp.value || !blockEmail.value),
+    },
+  ]
+  return items
+})
+
+const canSubmitBlock = computed(() => {
+  if (blockReason.value.trim().length < 3) return false
+  if (blockMode.value === 'all_suspicious') return true
+  if (blockScope.value === 'ip') return Boolean(blockIp.value.trim())
+  if (blockScope.value === 'email') return Boolean(blockEmail.value.trim())
+  return Boolean(blockIp.value.trim() && blockEmail.value.trim())
+})
+
+function defaultScopeForLog(row: AuditLogRow): BlockScope {
+  const hasIp = Boolean(row.ip_address)
+  const hasEmail = Boolean(logEmail(row))
+  if (hasIp && hasEmail) return 'both'
+  if (hasEmail) return 'email'
+  return 'ip'
 }
 
 async function loadFilterOptions() {
@@ -221,6 +281,64 @@ function openDetails(row: AuditLogRow) {
   detailsOpen.value = true
 }
 
+function openBlockIp(row: AuditLogRow) {
+  if (!canBlockLog(row)) return
+  blockMode.value = 'single'
+  blockIp.value = row.ip_address || ''
+  blockEmail.value = logEmail(row)
+  blockScope.value = defaultScopeForLog(row)
+  blockAuditLogId.value = row.id
+  blockReason.value = row.is_suspicious
+    ? `Suspicious audit activity: ${row.suspicious_reasons || row.event_type || row.action}`
+    : `Blocked from audit log #${row.id} (${row.event_type || row.action})`
+  blockOpen.value = true
+}
+
+function openBlockAllSuspicious() {
+  blockMode.value = 'all_suspicious'
+  blockIp.value = ''
+  blockEmail.value = ''
+  blockScope.value = 'both'
+  blockAuditLogId.value = null
+  blockReason.value = 'Bulk block of suspicious IPs and emails from audit logs'
+  blockOpen.value = true
+}
+
+async function submitBlock() {
+  if (!canSubmitBlock.value) return
+  blocking.value = true
+  error.value = ''
+  message.value = ''
+  try {
+    if (blockMode.value === 'all_suspicious') {
+      const res = await api.post('/admin/blocked-ips/block-suspicious', {
+        reason: blockReason.value.trim(),
+        scope: blockScope.value,
+      })
+      message.value = res.data.message || 'Suspicious access blocked.'
+    } else {
+      const payload: Record<string, unknown> = {
+        scope: blockScope.value,
+        reason: blockReason.value.trim(),
+        audit_log_id: blockAuditLogId.value || undefined,
+      }
+      if (blockScope.value === 'ip' || blockScope.value === 'both') {
+        payload.ip_address = blockIp.value.trim()
+      }
+      if (blockScope.value === 'email' || blockScope.value === 'both') {
+        payload.email = blockEmail.value.trim()
+      }
+      const res = await api.post('/admin/blocked-ips', payload)
+      message.value = res.data.message || 'Access blocked.'
+    }
+    blockOpen.value = false
+  } catch (err) {
+    error.value = apiErrorMessage(err, 'Could not block access.')
+  } finally {
+    blocking.value = false
+  }
+}
+
 function parsedJson(value: unknown): string {
   if (value == null || value === '') return 'No snapshot recorded.'
   if (typeof value === 'string') {
@@ -262,8 +380,33 @@ onMounted(async () => {
 
 <template>
   <div>
-    <PageHeader title="Audit logs" subtitle="Admin panel activity, mutations, and authentication events" />
+    <PageHeader title="Audit logs" subtitle="Admin panel activity, mutations, and authentication events">
+      <template #actions>
+        <v-btn
+          color="error"
+          variant="tonal"
+          prepend-icon="mdi-cancel"
+          @click="openBlockAllSuspicious"
+        >
+          Block suspicious…
+        </v-btn>
+        <v-btn
+          variant="text"
+          prepend-icon="mdi-ip-network-outline"
+          :to="{ name: 'blocked-ips' }"
+        >
+          View blocked access
+        </v-btn>
+      </template>
+    </PageHeader>
 
+    <v-alert v-if="message" type="success" variant="tonal" class="mb-4" closable @click:close="message = ''">
+      {{ message }}
+      <template v-if="message.toLowerCase().includes('block')">
+        —
+        <router-link :to="{ name: 'blocked-ips' }">open blocked IPs</router-link>
+      </template>
+    </v-alert>
     <v-alert v-if="error" type="error" variant="tonal" class="mb-4" closable @click:close="error = ''">
       {{ error }}
     </v-alert>
@@ -428,7 +571,7 @@ onMounted(async () => {
         { title: 'Event', key: 'event_type', sortable: false },
         { title: 'Action', key: 'action', sortable: false },
         { title: 'Target', key: 'target', sortable: false },
-        { title: '', key: 'actions', sortable: false, align: 'end' },
+        { title: '', key: 'actions', sortable: false, align: 'end', width: 200 },
       ]"
       :items="rows"
       :loading="loading"
@@ -487,7 +630,18 @@ onMounted(async () => {
         {{ targetDisplay(item) }}
       </template>
       <template #item.actions="{ item }">
-        <v-btn size="small" variant="text" @click="openDetails(item)">Details</v-btn>
+        <div class="d-flex flex-wrap justify-end ga-1">
+          <v-btn
+            v-if="canBlockLog(item)"
+            size="small"
+            color="error"
+            variant="text"
+            @click="openBlockIp(item)"
+          >
+            Block…
+          </v-btn>
+          <v-btn size="small" variant="text" @click="openDetails(item)">Details</v-btn>
+        </div>
       </template>
     </v-data-table>
 
@@ -516,6 +670,7 @@ onMounted(async () => {
           </p>
           <p class="mb-2"><strong>URI:</strong> {{ selectedLog.request_uri || '—' }}</p>
           <p class="mb-2"><strong>IP:</strong> {{ selectedLog.ip_address || '—' }}</p>
+          <p class="mb-2"><strong>Email:</strong> {{ selectedLog.user_email || '—' }}</p>
           <p class="mb-2"><strong>User agent:</strong> {{ selectedLog.user_agent || '—' }}</p>
           <p class="mb-1"><strong>Old values</strong></p>
           <pre class="audit-json mb-4">{{ parsedJson(selectedLog.old_values) }}</pre>
@@ -523,8 +678,90 @@ onMounted(async () => {
           <pre class="audit-json">{{ parsedJson(selectedLog.new_values) }}</pre>
         </v-card-text>
         <v-card-actions>
+          <v-btn
+            v-if="canBlockLog(selectedLog)"
+            color="error"
+            variant="tonal"
+            prepend-icon="mdi-cancel"
+            @click="openBlockIp(selectedLog)"
+          >
+            Block…
+          </v-btn>
           <v-spacer />
           <v-btn variant="text" @click="detailsOpen = false">Close</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
+    <v-dialog v-model="blockOpen" max-width="560">
+      <v-card>
+        <v-card-title>{{ blockDialogTitle }}</v-card-title>
+        <v-card-text>
+          <p class="text-body-2 text-medium-emphasis mb-4">
+            <template v-if="blockMode === 'all_suspicious'">
+              Block every distinct IP and/or email currently flagged as suspicious in audit logs.
+              IP blocks deny the API; email blocks deny login for that account.
+            </template>
+            <template v-else>
+              Choose whether to block the IP, the email, or both. Manage the lists under
+              <router-link :to="{ name: 'blocked-ips' }" @click="blockOpen = false">Blocked access</router-link>.
+            </template>
+          </p>
+
+          <v-radio-group v-model="blockScope" class="mb-2" hide-details>
+            <v-radio
+              v-for="opt in blockScopeItems"
+              :key="opt.value"
+              :label="opt.title"
+              :value="opt.value"
+              :disabled="opt.disabled"
+            />
+          </v-radio-group>
+
+          <v-text-field
+            v-if="blockMode === 'single' && (blockScope === 'ip' || blockScope === 'both')"
+            v-model="blockIp"
+            label="IP address"
+            variant="outlined"
+            density="comfortable"
+            class="mb-2"
+            readonly
+          />
+          <v-text-field
+            v-if="blockMode === 'single' && (blockScope === 'email' || blockScope === 'both')"
+            v-model="blockEmail"
+            label="Email"
+            variant="outlined"
+            density="comfortable"
+            class="mb-2"
+            readonly
+          />
+          <v-textarea
+            v-model="blockReason"
+            label="Reason"
+            variant="outlined"
+            density="comfortable"
+            rows="3"
+            hint="Required — stored with the block and shown on Blocked access"
+            persistent-hint
+            autofocus
+          />
+        </v-card-text>
+        <v-card-actions>
+          <v-btn variant="text" :to="{ name: 'blocked-ips' }" @click="blockOpen = false">
+            View blocked access
+          </v-btn>
+          <v-spacer />
+          <v-btn variant="text" @click="blockOpen = false">Cancel</v-btn>
+          <v-btn
+            color="error"
+            variant="flat"
+            :loading="blocking"
+            :disabled="!canSubmitBlock"
+            @click="submitBlock"
+          >
+            {{ blockMode === 'all_suspicious' ? 'Block all' : 'Block' }}
+          </v-btn>
         </v-card-actions>
       </v-card>
     </v-dialog>
