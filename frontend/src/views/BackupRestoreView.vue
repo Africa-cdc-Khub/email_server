@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, nextTick, ref } from 'vue'
 import PageHeader from '@/components/shared/PageHeader.vue'
 import ParentCard from '@/components/shared/ParentCard.vue'
 import { api } from '@/lib/api'
@@ -26,6 +26,8 @@ const summary = ref<ImportSummary | null>(null)
 
 const keyDialog = ref(false)
 const issuedKey = ref('')
+const issuedFilename = ref('')
+const pendingPackage = ref<unknown>(null)
 const keyCopied = ref(false)
 
 const selectedFile = computed(() => {
@@ -60,6 +62,11 @@ async function copyIssuedKey() {
   }
 }
 
+function saveEncryptedFile() {
+  if (!pendingPackage.value || !issuedFilename.value) return
+  downloadJson(issuedFilename.value, pendingPackage.value)
+}
+
 async function downloadPackage() {
   exporting.value = true
   error.value = ''
@@ -67,22 +74,39 @@ async function downloadPackage() {
   keyCopied.value = false
   try {
     const res = await api.get('/admin/migration/export')
-    const key = String(res.data.encryption_key || '')
-    const filename = String(res.data.filename || `email-server-migration-${Date.now()}.json`)
-    const pkg = res.data.package
+    const payload = res.data?.data && res.data.encryption_key === undefined ? res.data.data : res.data
+    const key = String(payload?.encryption_key || '')
+    const filename = String(payload?.filename || `email-server-migration-${Date.now()}.json`)
+    const pkg = payload?.package
     if (!key || !pkg) {
       throw new Error('Export response missing encryption key or package.')
     }
-    downloadJson(filename, pkg)
+
+    // Show the key first — do not start the file download until the modal is open.
     issuedKey.value = key
+    issuedFilename.value = filename
+    pendingPackage.value = pkg
     keyDialog.value = true
     message.value =
-      'Encrypted package downloaded. Copy the encryption key now — it is not stored on the server.'
+      'Copy the encryption key below. The package file is not downloaded until you confirm.'
+
+    await nextTick()
   } catch (err) {
     error.value = apiErrorMessage(err, 'Could not export migration package.')
   } finally {
     exporting.value = false
   }
+}
+
+function confirmKeyAndDownload() {
+  if (!keyCopied.value) {
+    error.value = 'Copy the encryption key before downloading the package.'
+    return
+  }
+  saveEncryptedFile()
+  keyDialog.value = false
+  message.value =
+    'Encrypted package downloaded. Keep the encryption key separate from the file — it is not stored on the server.'
 }
 
 async function restorePackage() {
@@ -143,18 +167,27 @@ async function restorePackage() {
       {{ message }}
     </v-alert>
     <v-alert
-      v-if="issuedKey && !keyDialog"
+      v-if="issuedKey"
       type="error"
       variant="tonal"
       class="mb-4"
       border="start"
-      closable
-      @click:close="issuedKey = ''"
     >
-      <div class="text-subtitle-2 mb-2">Encryption key (copy and store separately — not in the download file)</div>
+      <div class="text-subtitle-2 mb-2">Encryption key (not stored on the server — copy it now)</div>
       <code class="d-block text-break mb-3" style="user-select: all">{{ issuedKey }}</code>
-      <v-btn size="small" color="error" variant="flat" prepend-icon="mdi-content-copy" @click="copyIssuedKey">
+      <v-btn size="small" color="error" variant="flat" prepend-icon="mdi-content-copy" class="me-2" @click="copyIssuedKey">
         {{ keyCopied ? 'Copied' : 'Copy key' }}
+      </v-btn>
+      <v-btn
+        v-if="pendingPackage"
+        size="small"
+        color="primary"
+        variant="flat"
+        prepend-icon="mdi-download"
+        :disabled="!keyCopied"
+        @click="confirmKeyAndDownload"
+      >
+        Download encrypted file
       </v-btn>
     </v-alert>
     <v-alert v-if="error" type="error" variant="tonal" class="mb-4" closable @click:close="error = ''">
@@ -253,11 +286,11 @@ async function restorePackage() {
 
     <v-dialog v-model="keyDialog" max-width="640" persistent>
       <v-card>
-        <v-card-title>Copy encryption key</v-card-title>
+        <v-card-title>Copy encryption key before download</v-card-title>
         <v-card-text>
           <v-alert type="error" variant="tonal" class="mb-4">
-            This key is shown once and is not stored on the server. If you lose it, the downloaded file
-            cannot be restored.
+            This key is shown once and is not stored on the server. Copy it first — the encrypted
+            package file is downloaded only after you confirm.
           </v-alert>
           <v-textarea
             :model-value="issuedKey"
@@ -274,8 +307,14 @@ async function restorePackage() {
             {{ keyCopied ? 'Copied' : 'Copy key' }}
           </v-btn>
           <v-spacer />
-          <v-btn variant="text" :disabled="!keyCopied" @click="keyDialog = false">
-            I have saved the key
+          <v-btn
+            color="primary"
+            variant="flat"
+            prepend-icon="mdi-download"
+            :disabled="!keyCopied"
+            @click="confirmKeyAndDownload"
+          >
+            Download encrypted file
           </v-btn>
         </v-card-actions>
       </v-card>
