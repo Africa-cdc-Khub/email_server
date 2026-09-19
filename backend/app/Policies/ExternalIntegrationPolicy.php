@@ -19,7 +19,7 @@ class ExternalIntegrationPolicy
 
     public function create(User $user): bool
     {
-        return $user->is_active && $user->isApproved();
+        return $user->canRegisterClients();
     }
 
     public function update(User $user, ExternalIntegration $externalIntegration): bool

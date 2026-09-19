@@ -22,6 +22,9 @@ const loading = ref(true)
 const router = useRouter()
 const auth = useAuthStore()
 const isAdmin = computed(() => auth.isAdmin)
+const canCreateClients = computed(
+  () => isAdmin.value || auth.user?.two_factor_totp_enabled === true,
+)
 
 async function load() {
   loading.value = true
@@ -53,13 +56,23 @@ onMounted(load)
       "
     >
       <template #actions>
-        <v-btn color="primary" prepend-icon="mdi-plus" :to="{ name: 'integration-new' }">
-          {{ isAdmin ? 'Add integration' : 'Add client' }}
+        <v-btn
+          color="primary"
+          prepend-icon="mdi-plus"
+          :to="canCreateClients ? { name: 'integration-new' } : { name: 'security' }"
+        >
+          {{ isAdmin ? 'Add integration' : canCreateClients ? 'Add client' : 'Enable authenticator first' }}
         </v-btn>
       </template>
     </PageHeader>
 
-    <v-alert v-if="!isAdmin" type="info" variant="tonal" class="mb-4">
+    <v-alert v-if="!isAdmin && !canCreateClients" type="warning" variant="tonal" class="mb-4">
+      Enable an authenticator app under
+      <router-link :to="{ name: 'security' }">Security</router-link>
+      before you can register integration clients.
+    </v-alert>
+
+    <v-alert v-else-if="!isAdmin" type="info" variant="tonal" class="mb-4">
       You only see clients linked to your account. Inactive clients cannot obtain a JWT until an admin activates them.
     </v-alert>
 

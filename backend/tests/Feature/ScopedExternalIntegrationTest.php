@@ -46,6 +46,28 @@ class ScopedExternalIntegrationTest extends TestCase
         $this->assertTrue($user->externalIntegrations()->whereKey($id)->exists());
     }
 
+    public function test_approved_user_without_totp_cannot_create_client(): void
+    {
+        $user = User::factory()->create([
+            'is_admin' => false,
+            'is_active' => true,
+            'approval_status' => UserApprovalStatus::Approved,
+            'totp_required' => false,
+            'two_factor_totp_enabled' => false,
+        ]);
+
+        $this->withToken($user->createToken('admin-panel')->plainTextToken)
+            ->postJson('/api/v1/admin/external-integrations', [
+                'name' => 'Blocked App',
+                'generate_secret' => true,
+            ])
+            ->assertForbidden()
+            ->assertJsonPath(
+                'message',
+                'Enable authenticator app (2FA) in Security settings before registering a client.'
+            );
+    }
+
     public function test_user_cannot_see_others_clients(): void
     {
         $a = $this->approvedAccount();

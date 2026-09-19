@@ -24,6 +24,7 @@ use Laravel\Sanctum\HasApiTokens;
     'approval_status',
     'approved_at',
     'approved_by',
+    'created_by',
     'rejected_at',
     'rejection_reason',
     'two_factor_email_enabled',
@@ -74,6 +75,29 @@ class User extends Authenticatable
     public function isPendingApproval(): bool
     {
         return $this->approval_status === UserApprovalStatus::Pending;
+    }
+
+    /**
+     * Approved partner accounts may create team users after authenticator enrollment.
+     */
+    public function canManageTeamAccounts(): bool
+    {
+        return ! $this->is_admin
+            && $this->is_active
+            && $this->isApproved()
+            && $this->two_factor_totp_enabled;
+    }
+
+    /**
+     * Admins always can. Partners may register clients only after authenticator (TOTP) is enabled.
+     */
+    public function canRegisterClients(): bool
+    {
+        if ($this->is_admin) {
+            return true;
+        }
+
+        return $this->canManageTeamAccounts();
     }
 
     public function externalIntegrations(): BelongsToMany

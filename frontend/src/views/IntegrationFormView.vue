@@ -133,6 +133,11 @@ watch(autoGenerateSecret, (auto) => {
 })
 
 onMounted(async () => {
+  if (!isEdit.value && !isAdmin.value && !auth.user?.two_factor_totp_enabled) {
+    await router.replace({ name: 'security' })
+    return
+  }
+
   loading.value = true
   await loadProviders()
   await loadIntegration()

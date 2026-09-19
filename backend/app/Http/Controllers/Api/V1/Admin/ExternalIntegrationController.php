@@ -38,10 +38,18 @@ class ExternalIntegrationController extends Controller
 
     public function store(StoreExternalIntegrationRequest $request): JsonResponse
     {
-        $this->authorize('create', ExternalIntegration::class);
-
         /** @var User $user */
         $user = $request->user();
+
+        if (! $user->canRegisterClients()) {
+            return response()->json([
+                'message' => $user->is_admin
+                    ? 'You are not allowed to create clients.'
+                    : 'Enable authenticator app (2FA) in Security settings before registering a client.',
+            ], 403);
+        }
+
+        $this->authorize('create', ExternalIntegration::class);
         $data = $request->validated();
         $clientSecret = $this->resolveClientSecret($data);
         $slug = $data['slug'] ?? $data['client_id'] ?? Str::slug($data['name']);
