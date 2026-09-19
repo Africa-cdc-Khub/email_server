@@ -1,7 +1,7 @@
 # Migration backup & restore
 
 **Date:** 2026-09-19  
-**Status:** Approved (awaiting implementation)  
+**Status:** Implemented (2026-09-19)  
 **Surface:** Admin panel (`/backup`) — admins only
 
 ## Problem

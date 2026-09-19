@@ -55,6 +55,12 @@ const router = createRouter({
           meta: { requiresAdmin: true },
         },
         {
+          path: 'backup',
+          name: 'backup',
+          component: () => import('@/views/BackupRestoreView.vue'),
+          meta: { requiresAdmin: true },
+        },
+        {
           path: 'security',
           name: 'security',
           component: () => import('@/views/SecuritySettingsView.vue'),
