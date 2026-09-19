@@ -62,7 +62,7 @@ class ApiDocumentationTest extends TestCase
         $this->assertArrayHasKey('application/json', $sendContent);
 
         $formProps = $sendContent['application/x-www-form-urlencoded']['schema']['properties'] ?? [];
-        foreach (['to', 'subject', 'body', 'is_html', 'provider_id', 'cc', 'bcc'] as $field) {
+        foreach (['to', 'subject', 'body', 'is_html', 'provider_id', 'cc', 'bcc', 'attachments'] as $field) {
             $this->assertArrayHasKey($field, $formProps, "Form schema missing {$field}");
         }
 

@@ -70,7 +70,7 @@ class IntegrationDocumentation
      *     path="/integrations/send",
      *     tags={"Integration Mail"},
      *     summary="Send an email",
-     *     description="Queue an email for delivery through the Email Server. Requires a valid integration JWT from POST /integrations/auth/token. Delivery is asynchronous — use GET /integrations/logs/{logId} to check status.\n\n**Attachments:** switch Request body to `application/json` and send an `attachments` array (`filename` + base64 `content`, optional `content_type`). Limits: max 10 files, 5 MB each, 15 MB total. Form-urlencoded does not support attachments.",
+     *     description="Queue an email for delivery through the Email Server. Requires a valid integration JWT from POST /integrations/auth/token. Delivery is asynchronous — use GET /integrations/logs/{logId} to check status.\n\n**Attachments:** optional on both form and JSON bodies. Each item needs `filename` + base64 `content` (optional `content_type`). Limits: max 10 files, 5 MB each, 15 MB total. In Try it out, expand the attachments array and add items.",
      *     security={{"integrationJwt":{}}},
      *
      *     @OA\RequestBody(
@@ -88,7 +88,20 @@ class IntegrationDocumentation
      *                 @OA\Property(property="is_html", type="string", default="true", example="true", enum={"true","false","1","0"}, description="Set to true if body contains HTML (default). Set to false for plain text."),
      *                 @OA\Property(property="provider_id", type="integer", nullable=true, description="Optional. Leave empty in most cases. Internal numeric ID of a specific email provider (Exchange, SMTP, etc.) configured in the admin panel. When omitted, the server uses the provider linked to your integration, or the system default provider."),
      *                 @OA\Property(property="cc", type="string", example="", description="Optional. Additional recipients to copy (comma-separated email addresses). Leave empty to omit."),
-     *                 @OA\Property(property="bcc", type="string", example="", description="Optional. Blind-copy recipients (comma-separated email addresses). Leave empty to omit.")
+     *                 @OA\Property(property="bcc", type="string", example="", description="Optional. Blind-copy recipients (comma-separated email addresses). Leave empty to omit."),
+     *                 @OA\Property(
+     *                     property="attachments",
+     *                     type="array",
+     *                     maxItems=10,
+     *                     description="Optional file attachments. Add an item per file: filename + base64 content. Max 10 files, 5 MB each, 15 MB total.",
+     *                     @OA\Items(
+     *                         type="object",
+     *                         required={"filename","content"},
+     *                         @OA\Property(property="filename", type="string", example="invoice.pdf", description="Original file name including extension"),
+     *                         @OA\Property(property="content", type="string", example="JVBERi0xLjQKJcTl8uXrp/Og0MTGCjEgMCBvYmo...", description="Base64-encoded file bytes"),
+     *                         @OA\Property(property="content_type", type="string", example="application/pdf", description="Optional MIME type")
+     *                     )
+     *                 )
      *             )
      *         ),
      *
@@ -149,7 +162,7 @@ class IntegrationDocumentation
      *     schema="EmailAttachment",
      *     type="object",
      *     required={"filename","content"},
-     *     description="File attachment for POST /integrations/send (application/json only)",
+     *     description="File attachment for POST /integrations/send",
      *     @OA\Property(property="filename", type="string", example="invoice.pdf", description="Original file name including extension"),
      *     @OA\Property(property="content", type="string", example="JVBERi0xLjQKJcTl8uXrp/Og0MTGCjEgMCBvYmo...", description="Base64-encoded file bytes. A data-URI prefix (data:application/pdf;base64,...) is allowed."),
      *     @OA\Property(property="content_type", type="string", example="application/pdf", description="Optional MIME type; guessed from filename when omitted")

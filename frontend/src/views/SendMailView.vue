@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import FormField from '@/components/forms/FormField.vue'
 import CaptchaWidget from '@/components/forms/CaptchaWidget.vue'
 import PageHeader from '@/components/shared/PageHeader.vue'
@@ -8,6 +8,10 @@ import { api } from '@/lib/api'
 import { apiErrorMessage } from '@/lib/apiError'
 
 type ProviderOption = { id: number; name: string; driver: string; is_default?: boolean }
+type AttachmentPayload = { filename: string; content: string; content_type: string }
+
+const MAX_ATTACHMENTS = 10
+const MAX_BYTES_PER_FILE = 5 * 1024 * 1024
 
 const providers = ref<ProviderOption[]>([])
 const loading = ref(false)
@@ -18,6 +22,9 @@ const lastLogId = ref<number | null>(null)
 const captchaKey = ref<string | null>(null)
 const captchaAnswer = ref('')
 const captchaResetKey = ref(0)
+const attachmentFiles = ref<File[]>([])
+const attachmentInputKey = ref(0)
+const attachmentInput = ref<HTMLInputElement | null>(null)
 
 const form = ref({
   to: '',
@@ -29,11 +36,69 @@ const form = ref({
   bcc: '',
 })
 
+const attachmentLabels = computed(() =>
+  attachmentFiles.value.map((file) => `${file.name} (${formatBytes(file.size)})`),
+)
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
 function parseAddresses(value: string): string[] {
   return value
     .split(/[,\n]/)
     .map((entry) => entry.trim())
     .filter(Boolean)
+}
+
+function onAttachmentPick(event: Event) {
+  const input = event.target as HTMLInputElement
+  const picked = Array.from(input.files ?? [])
+  error.value = ''
+
+  if (picked.length === 0) return
+
+  const next = [...attachmentFiles.value]
+  for (const file of picked) {
+    if (next.length >= MAX_ATTACHMENTS) {
+      error.value = `You can attach at most ${MAX_ATTACHMENTS} files.`
+      break
+    }
+    if (file.size > MAX_BYTES_PER_FILE) {
+      error.value = `${file.name} is larger than 5 MB.`
+      continue
+    }
+    if (next.some((existing) => existing.name === file.name && existing.size === file.size)) {
+      continue
+    }
+    next.push(file)
+  }
+
+  attachmentFiles.value = next
+  attachmentInputKey.value += 1
+}
+
+function removeAttachment(index: number) {
+  attachmentFiles.value = attachmentFiles.value.filter((_, i) => i !== index)
+}
+
+function readFileAsAttachment(file: File): Promise<AttachmentPayload> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => {
+      const result = String(reader.result ?? '')
+      const content = result.includes(',') ? result.slice(result.indexOf(',') + 1) : result
+      resolve({
+        filename: file.name,
+        content,
+        content_type: file.type || 'application/octet-stream',
+      })
+    }
+    reader.onerror = () => reject(new Error(`Could not read ${file.name}`))
+    reader.readAsDataURL(file)
+  })
 }
 
 async function loadProviders() {
@@ -50,6 +115,11 @@ async function sendMail() {
   lastLogId.value = null
 
   try {
+    const attachments =
+      attachmentFiles.value.length > 0
+        ? await Promise.all(attachmentFiles.value.map(readFileAsAttachment))
+        : []
+
     const payload: Record<string, unknown> = {
       to: form.value.to,
       subject: form.value.subject,
@@ -62,6 +132,7 @@ async function sendMail() {
     const bcc = parseAddresses(form.value.bcc)
     if (cc.length) payload.cc = cc
     if (bcc.length) payload.bcc = bcc
+    if (attachments.length) payload.attachments = attachments
     if (captchaKey.value) {
       payload.captcha_key = captchaKey.value
       payload.captcha = captchaAnswer.value
@@ -74,6 +145,8 @@ async function sendMail() {
     form.value.body = ''
     form.value.cc = ''
     form.value.bcc = ''
+    attachmentFiles.value = []
+    attachmentInputKey.value += 1
     captchaResetKey.value += 1
   } catch (err) {
     error.value = apiErrorMessage(err, 'Failed to queue email. Check the form and try again.')
@@ -174,6 +247,41 @@ onMounted(async () => {
                 :disabled="loading"
               />
             </FormField>
+            <FormField label="Attachments">
+              <div class="attachment-picker">
+                <v-btn
+                  variant="tonal"
+                  prepend-icon="mdi-paperclip"
+                  :disabled="loading || attachmentFiles.length >= MAX_ATTACHMENTS"
+                  @click="attachmentInput?.click()"
+                >
+                  Add files
+                </v-btn>
+                <input
+                  :key="attachmentInputKey"
+                  ref="attachmentInput"
+                  type="file"
+                  class="d-none"
+                  multiple
+                  @change="onAttachmentPick"
+                />
+                <div class="text-caption text-medium-emphasis">
+                  Optional. Up to {{ MAX_ATTACHMENTS }} files, 5 MB each.
+                </div>
+                <div v-if="attachmentLabels.length" class="attachment-list">
+                  <v-chip
+                    v-for="(label, index) in attachmentLabels"
+                    :key="`${label}-${index}`"
+                    size="small"
+                    variant="tonal"
+                    closable
+                    @click:close="removeAttachment(index)"
+                  >
+                    {{ label }}
+                  </v-chip>
+                </div>
+              </div>
+            </FormField>
           </v-col>
         </v-row>
         <div class="d-flex flex-column ga-4 mt-6">
@@ -192,3 +300,17 @@ onMounted(async () => {
     </ParentCard>
   </div>
 </template>
+
+<style scoped>
+.attachment-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.attachment-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+</style>

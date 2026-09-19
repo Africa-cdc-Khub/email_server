@@ -18,6 +18,7 @@ type EmailLog = {
   source: string
   sender_ip: string | null
   can_retry?: boolean
+  attachment_count?: number
   external_integration_id: number | null
   created_at: string
 }
@@ -240,6 +241,7 @@ onMounted(async () => {
         { title: 'IP address', key: 'sender_ip' },
         { title: 'Sending system', key: 'sending_system' },
         { title: 'Status', key: 'status' },
+        { title: 'Attachments', key: 'attachment_count', sortable: false, width: 110 },
         { title: 'Driver', key: 'driver' },
         { title: 'Error', key: 'error_message' },
         { title: 'When', key: 'created_at' },
@@ -272,6 +274,12 @@ onMounted(async () => {
         >
           {{ item.status }}
         </v-chip>
+      </template>
+      <template #item.attachment_count="{ item }">
+        <span v-if="(item.attachment_count ?? 0) > 0" class="text-no-wrap">
+          {{ item.attachment_count }}
+        </span>
+        <span v-else class="text-medium-emphasis">—</span>
       </template>
       <template #item.error_message="{ item }">
         <span class="text-caption text-medium-emphasis">{{ item.error_message || '—' }}</span>
