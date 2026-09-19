@@ -161,15 +161,26 @@ class BlockedIpService
             return collect();
         }
 
-        /** @var Collection<string, true> $set */
-        $set = Cache::remember(self::CACHE_KEY, self::CACHE_SECONDS, function () {
+        $ips = Cache::remember(self::CACHE_KEY, self::CACHE_SECONDS, function () {
             return BlockedIp::query()
                 ->where('is_active', true)
                 ->pluck('ip_address')
-                ->mapWithKeys(fn ($ip) => [(string) $ip => true]);
+                ->map(fn ($ip) => (string) $ip)
+                ->values()
+                ->all();
         });
 
-        return $set;
+        if (! is_array($ips)) {
+            $this->forgetCache();
+            $ips = BlockedIp::query()
+                ->where('is_active', true)
+                ->pluck('ip_address')
+                ->map(fn ($ip) => (string) $ip)
+                ->values()
+                ->all();
+        }
+
+        return collect($ips)->mapWithKeys(fn (string $ip) => [$ip => true]);
     }
 
     private function tableReady(): bool

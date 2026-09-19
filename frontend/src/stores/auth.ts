@@ -36,8 +36,18 @@ export const useAuthStore = defineStore('auth', {
     isAdmin: (s) => s.user?.is_admin === true,
   },
   actions: {
-    async login(email: string, password: string): Promise<LoginResult> {
-      const { data } = await api.post('/admin/auth/login', { email, password })
+    async login(
+      email: string,
+      password: string,
+      captcha?: { captcha_key: string; captcha: string } | null,
+    ): Promise<LoginResult> {
+      const payload: Record<string, string> = { email, password }
+      if (captcha?.captcha_key) {
+        payload.captcha_key = captcha.captcha_key
+        payload.captcha = captcha.captcha
+      }
+
+      const { data } = await api.post('/admin/auth/login', payload)
 
       if (data.requires_2fa) {
         this.pending2fa = {

@@ -39,6 +39,8 @@ Route::prefix('v1')->group(function () {
             ->middleware('throttle:5,1');
         Route::post('/auth/reset-password', [AuthController::class, 'resetPassword'])
             ->middleware('throttle:10,1');
+        Route::get('/captcha', CaptchaController::class)
+            ->middleware('throttle:30,1');
 
         Route::middleware(['auth:sanctum', EnsureUserIsActive::class, LogAdminAccess::class])->group(function () {
             Route::get('/auth/me', [AuthController::class, 'me']);
@@ -62,7 +64,6 @@ Route::prefix('v1')->group(function () {
                     ->middleware('throttle:30,1');
 
                 Route::apiResource('users', UserController::class);
-                Route::get('/captcha', CaptchaController::class);
                 Route::get('/audit-logs/filter-options', [AuditLogController::class, 'filterOptions']);
                 Route::get('/audit-logs', [AuditLogController::class, 'index']);
 

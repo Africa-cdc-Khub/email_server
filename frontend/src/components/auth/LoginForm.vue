@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import CaptchaWidget from '@/components/forms/CaptchaWidget.vue'
 import FormField from '@/components/forms/FormField.vue'
 import { safeInternalRedirect } from '@/lib/safeRedirect'
 import { useAuthStore } from '@/stores/auth'
@@ -12,6 +13,9 @@ const router = useRouter()
 const route = useRoute()
 const email = ref('')
 const password = ref('')
+const captchaKey = ref<string | null>(null)
+const captchaAnswer = ref('')
+const captchaResetKey = ref(0)
 const loading = ref(false)
 const error = ref('')
 
@@ -19,7 +23,11 @@ async function submit() {
   loading.value = true
   error.value = ''
   try {
-    const result = await auth.login(email.value, password.value)
+    const captcha =
+      captchaKey.value && captchaAnswer.value
+        ? { captcha_key: captchaKey.value, captcha: captchaAnswer.value }
+        : null
+    const result = await auth.login(email.value, password.value, captcha)
     if (result.requires2fa) {
       await router.push({ name: 'verify-2fa' })
       return
@@ -30,11 +38,15 @@ async function submit() {
     )
     await router.push(redirect ?? { name: 'dashboard' })
   } catch (e: unknown) {
+    captchaResetKey.value += 1
     const axiosErr = e as {
       response?: { status?: number; data?: { message?: string; errors?: Record<string, string[]> } }
     }
     const apiMessage = axiosErr.response?.data?.message
-    const fieldError = axiosErr.response?.data?.errors?.email?.[0]
+    const fieldError =
+      axiosErr.response?.data?.errors?.email?.[0] ||
+      axiosErr.response?.data?.errors?.captcha?.[0] ||
+      axiosErr.response?.data?.errors?.password?.[0]
     if (axiosErr.response?.status === 503 && apiMessage) {
       error.value = apiMessage
     } else {
@@ -86,6 +98,13 @@ async function submit() {
                 color="primary"
               />
             </FormField>
+          </v-col>
+          <v-col cols="12">
+            <CaptchaWidget
+              :reset-key="captchaResetKey"
+              @update:key="captchaKey = $event"
+              @update:answer="captchaAnswer = $event"
+            />
           </v-col>
           <v-col cols="12" class="d-flex justify-end pt-0">
             <v-btn variant="text" size="small" class="login-card__link px-0" :to="{ name: 'forgot-password' }">

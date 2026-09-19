@@ -36,11 +36,12 @@ return [
     ],
 
     /*
-    | Simple word+number image CAPTCHA for admin send-mail + provider test email.
+    | Simple word+number image CAPTCHA for admin login, send-mail, and provider test email.
     | No third-party / Google dependency. Disable with CAPTCHA_ENABLED=false.
     */
     'captcha' => [
-        'enabled' => filter_var(env('CAPTCHA_ENABLED', true), FILTER_VALIDATE_BOOL),
+        // On by default. Set CAPTCHA_ENABLED=false to disable.
+        'enabled' => filter_var(env('CAPTCHA_ENABLED', 'true'), FILTER_VALIDATE_BOOL),
         'length' => (int) env('CAPTCHA_LENGTH', 5),
         'ttl' => (int) env('CAPTCHA_TTL', 600),
     ],

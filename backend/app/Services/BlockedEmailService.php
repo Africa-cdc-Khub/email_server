@@ -147,15 +147,26 @@ class BlockedEmailService
             return collect();
         }
 
-        /** @var Collection<string, true> $set */
-        $set = Cache::remember(self::CACHE_KEY, self::CACHE_SECONDS, function () {
+        $emails = Cache::remember(self::CACHE_KEY, self::CACHE_SECONDS, function () {
             return BlockedEmail::query()
                 ->where('is_active', true)
                 ->pluck('email')
-                ->mapWithKeys(fn ($email) => [(string) $email => true]);
+                ->map(fn ($email) => (string) $email)
+                ->values()
+                ->all();
         });
 
-        return $set;
+        if (! is_array($emails)) {
+            $this->forgetCache();
+            $emails = BlockedEmail::query()
+                ->where('is_active', true)
+                ->pluck('email')
+                ->map(fn ($email) => (string) $email)
+                ->values()
+                ->all();
+        }
+
+        return collect($emails)->mapWithKeys(fn (string $email) => [$email => true]);
     }
 
     private function tableReady(): bool

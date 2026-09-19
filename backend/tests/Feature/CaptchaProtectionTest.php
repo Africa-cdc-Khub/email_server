@@ -27,13 +27,62 @@ class CaptchaProtectionTest extends TestCase
     public function test_captcha_endpoint_returns_image_challenge_when_enabled(): void
     {
         $this->enableCaptcha();
-        $admin = User::factory()->create(['is_admin' => true, 'is_active' => true]);
 
-        $this->withToken($admin->createToken('admin-panel')->plainTextToken)
-            ->getJson('/api/v1/admin/captcha')
+        $this->getJson('/api/v1/admin/captcha')
             ->assertOk()
             ->assertJsonPath('data.enabled', true)
             ->assertJsonStructure(['data' => ['key', 'image', 'ttl']]);
+    }
+
+    public function test_login_requires_valid_captcha_when_enabled(): void
+    {
+        $this->enableCaptcha();
+
+        User::factory()->create([
+            'email' => 'admin@example.com',
+            'password' => bcrypt('CorrectPass1!'),
+            'is_admin' => true,
+            'is_active' => true,
+        ]);
+
+        $this->postJson('/api/v1/admin/auth/login', [
+            'email' => 'admin@example.com',
+            'password' => 'CorrectPass1!',
+        ])
+            ->assertStatus(422)
+            ->assertJsonValidationErrors(['captcha']);
+
+        $this->postJson('/api/v1/admin/auth/login', [
+            'email' => 'admin@example.com',
+            'password' => 'CorrectPass1!',
+            'captcha_key' => 'missing-key',
+            'captcha' => 'wrong',
+        ])
+            ->assertStatus(422)
+            ->assertJsonValidationErrors(['captcha']);
+    }
+
+    public function test_login_succeeds_with_valid_captcha(): void
+    {
+        $this->enableCaptcha();
+
+        User::factory()->create([
+            'email' => 'admin@example.com',
+            'password' => bcrypt('CorrectPass1!'),
+            'is_admin' => true,
+            'is_active' => true,
+        ]);
+
+        app(CaptchaService::class)->seedForTests('login-key', 'XY9Z1');
+
+        $this->postJson('/api/v1/admin/auth/login', [
+            'email' => 'admin@example.com',
+            'password' => 'CorrectPass1!',
+            'captcha_key' => 'login-key',
+            'captcha' => 'xy9z1',
+        ])
+            ->assertOk()
+            ->assertJsonStructure(['token', 'user']);
     }
 
     public function test_send_mail_requires_valid_captcha_when_enabled(): void
