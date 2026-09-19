@@ -142,6 +142,21 @@ async function restorePackage() {
     <v-alert v-if="message" type="success" variant="tonal" class="mb-4" closable @click:close="message = ''">
       {{ message }}
     </v-alert>
+    <v-alert
+      v-if="issuedKey && !keyDialog"
+      type="error"
+      variant="tonal"
+      class="mb-4"
+      border="start"
+      closable
+      @click:close="issuedKey = ''"
+    >
+      <div class="text-subtitle-2 mb-2">Encryption key (copy and store separately — not in the download file)</div>
+      <code class="d-block text-break mb-3" style="user-select: all">{{ issuedKey }}</code>
+      <v-btn size="small" color="error" variant="flat" prepend-icon="mdi-content-copy" @click="copyIssuedKey">
+        {{ keyCopied ? 'Copied' : 'Copy key' }}
+      </v-btn>
+    </v-alert>
     <v-alert v-if="error" type="error" variant="tonal" class="mb-4" closable @click:close="error = ''">
       {{ error }}
     </v-alert>
