@@ -32,6 +32,7 @@ class UserFactory extends Factory
             'remember_token' => Str::random(10),
             'is_admin' => false,
             'is_active' => true,
+            'approval_status' => \App\Enums\UserApprovalStatus::Approved,
             'two_factor_email_enabled' => false,
             'two_factor_totp_enabled' => false,
             'totp_required' => false,

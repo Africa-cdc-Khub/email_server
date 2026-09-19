@@ -32,6 +32,8 @@ Route::prefix('v1')->group(function () {
     Route::prefix('admin')->group(function () {
         Route::post('/auth/login', [AuthController::class, 'login'])
             ->middleware('throttle:10,1');
+        Route::post('/auth/register', [AuthController::class, 'register'])
+            ->middleware('throttle:5,1');
         Route::post('/auth/verify-2fa', [TwoFactorController::class, 'verify'])
             ->middleware('throttle:10,1');
         Route::post('/auth/resend-2fa-email', [TwoFactorController::class, 'resendEmail'])
@@ -58,6 +60,11 @@ Route::prefix('v1')->group(function () {
             Route::get('/email-logs', [EmailLogController::class, 'index']);
             Route::get('/email-logs/filter-options', [EmailLogController::class, 'filterOptions']);
 
+            // Approved accounts may manage their own clients and pick a provider.
+            Route::get('/email-providers/drivers', [EmailProviderController::class, 'drivers']);
+            Route::get('/email-providers', [EmailProviderController::class, 'index']);
+            Route::apiResource('external-integrations', ExternalIntegrationController::class);
+
             Route::middleware(EnsureUserIsAdmin::class)->group(function () {
                 Route::post('/email-logs/retry-failed', [EmailLogController::class, 'retryFailed'])
                     ->middleware('throttle:10,1');
@@ -65,6 +72,8 @@ Route::prefix('v1')->group(function () {
                     ->middleware('throttle:30,1');
 
                 Route::apiResource('users', UserController::class);
+                Route::post('/users/{user}/approve', [UserController::class, 'approve']);
+                Route::post('/users/{user}/reject', [UserController::class, 'reject']);
                 Route::get('/audit-logs/filter-options', [AuditLogController::class, 'filterOptions']);
                 Route::get('/audit-logs/stats', [AuditLogController::class, 'stats']);
                 Route::get('/audit-logs/export', [AuditLogController::class, 'export'])
@@ -93,12 +102,9 @@ Route::prefix('v1')->group(function () {
                 Route::post('/branding', [AdminBrandingController::class, 'update']);
                 Route::put('/branding', [AdminBrandingController::class, 'update']);
 
-                Route::get('/email-providers/drivers', [EmailProviderController::class, 'drivers']);
                 Route::post('/email-providers/{email_provider}/test', [EmailProviderController::class, 'test']);
                 Route::post('/email-providers/{email_provider}/set-default', [EmailProviderController::class, 'setDefault']);
-                Route::apiResource('email-providers', EmailProviderController::class);
-
-                Route::apiResource('external-integrations', ExternalIntegrationController::class);
+                Route::apiResource('email-providers', EmailProviderController::class)->except(['index']);
             });
         });
     });

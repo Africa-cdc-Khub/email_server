@@ -20,7 +20,7 @@ class UpdateExternalIntegrationRequest extends FormRequest
         return [
             'name' => ['sometimes', 'string', 'max:255', new SafeMailHeader],
             'slug' => ['sometimes', 'string', 'max:64', 'alpha_dash', Rule::unique('external_integrations', 'slug')->ignore($integrationId)],
-            'client_secret' => ['required_without:generate_secret', 'nullable', 'string', 'min:16', 'max:255'],
+            'client_secret' => ['sometimes', 'nullable', 'string', 'min:16', 'max:255'],
             'generate_secret' => ['sometimes', 'boolean'],
             'email_provider_id' => ['sometimes', 'nullable', 'integer', 'exists:email_providers,id'],
             'allowed_ips' => ['sometimes', 'nullable', 'array'],

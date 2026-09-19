@@ -1,0 +1,134 @@
+<?php
+
+namespace Tests\Feature;
+
+use App\Enums\EmailDriver;
+use App\Enums\UserApprovalStatus;
+use App\Models\EmailProvider;
+use App\Models\ExternalIntegration;
+use App\Models\User;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Tests\TestCase;
+
+class ScopedExternalIntegrationTest extends TestCase
+{
+    use RefreshDatabase;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+        config(['services.captcha.enabled' => false]);
+    }
+
+    private function approvedAccount(): User
+    {
+        return User::factory()->create([
+            'is_admin' => false,
+            'is_active' => true,
+            'approval_status' => UserApprovalStatus::Approved,
+            'totp_required' => false,
+            'two_factor_totp_enabled' => true,
+        ]);
+    }
+
+    public function test_approved_user_creates_inactive_owned_client(): void
+    {
+        $user = $this->approvedAccount();
+        $token = $user->createToken('admin-panel')->plainTextToken;
+
+        $res = $this->withToken($token)->postJson('/api/v1/admin/external-integrations', [
+            'name' => 'My App',
+            'generate_secret' => true,
+        ])->assertCreated();
+
+        $id = (int) $res->json('data.id');
+        $this->assertFalse((bool) $res->json('data.is_active'));
+        $this->assertTrue($user->externalIntegrations()->whereKey($id)->exists());
+    }
+
+    public function test_user_cannot_see_others_clients(): void
+    {
+        $a = $this->approvedAccount();
+        $b = $this->approvedAccount();
+
+        $mine = ExternalIntegration::query()->create([
+            'name' => 'Mine',
+            'slug' => 'mine-app',
+            'api_key_hash' => ExternalIntegration::hashClientSecret('secret-mine-123456'),
+            'api_key_prefix' => 'sec…',
+            'is_active' => false,
+        ]);
+        $theirs = ExternalIntegration::query()->create([
+            'name' => 'Theirs',
+            'slug' => 'theirs-app',
+            'api_key_hash' => ExternalIntegration::hashClientSecret('secret-theirs-12345'),
+            'api_key_prefix' => 'sec…',
+            'is_active' => true,
+        ]);
+        $a->externalIntegrations()->attach($mine->id);
+        $b->externalIntegrations()->attach($theirs->id);
+
+        $this->withToken($a->createToken('admin-panel')->plainTextToken)
+            ->getJson('/api/v1/admin/external-integrations')
+            ->assertOk()
+            ->assertJsonCount(1, 'data')
+            ->assertJsonPath('data.0.slug', 'mine-app');
+    }
+
+    public function test_non_admin_cannot_activate_own_client(): void
+    {
+        $user = $this->approvedAccount();
+        $integration = ExternalIntegration::query()->create([
+            'name' => 'Pending App',
+            'slug' => 'pending-app',
+            'api_key_hash' => ExternalIntegration::hashClientSecret('secret-pending-1234'),
+            'api_key_prefix' => 'sec…',
+            'is_active' => false,
+        ]);
+        $user->externalIntegrations()->attach($integration->id);
+
+        $this->withToken($user->createToken('admin-panel')->plainTextToken)
+            ->putJson('/api/v1/admin/external-integrations/'.$integration->id, [
+                'name' => 'Pending App',
+                'is_active' => true,
+            ])
+            ->assertOk();
+
+        $this->assertFalse((bool) $integration->fresh()->is_active);
+    }
+
+    public function test_inactive_client_cannot_get_jwt(): void
+    {
+        $secret = 'inactive-client-secret-99';
+        ExternalIntegration::query()->create([
+            'name' => 'Inactive',
+            'slug' => 'inactive-client',
+            'api_key_hash' => ExternalIntegration::hashClientSecret($secret),
+            'api_key_prefix' => 'ina…',
+            'is_active' => false,
+        ]);
+
+        $this->postJson('/api/v1/integrations/auth/token', [
+            'client_id' => 'inactive-client',
+            'client_secret' => $secret,
+        ])->assertUnauthorized();
+    }
+
+    public function test_approved_user_can_list_email_providers(): void
+    {
+        EmailProvider::query()->create([
+            'name' => 'Log',
+            'slug' => 'log',
+            'driver' => EmailDriver::Log,
+            'config' => [],
+            'is_default' => true,
+            'is_active' => true,
+        ]);
+
+        $user = $this->approvedAccount();
+        $this->withToken($user->createToken('admin-panel')->plainTextToken)
+            ->getJson('/api/v1/admin/email-providers')
+            ->assertOk()
+            ->assertJsonStructure(['data']);
+    }
+}

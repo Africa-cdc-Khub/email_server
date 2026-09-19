@@ -6,7 +6,9 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\Api\V1\Admin\ChangePasswordRequest;
 use App\Http\Requests\Api\V1\Admin\ForgotPasswordRequest;
 use App\Http\Requests\Api\V1\Admin\LoginRequest;
+use App\Http\Requests\Api\V1\Admin\RegisterAccountRequest;
 use App\Http\Requests\Api\V1\Admin\ResetPasswordRequest;
+use App\Enums\UserApprovalStatus;
 use App\Models\User;
 use App\Services\AdminPasswordResetService;
 use App\Services\AdminTwoFactorService;
@@ -20,6 +22,42 @@ use Illuminate\Validation\ValidationException;
 
 class AuthController extends Controller
 {
+    public function register(RegisterAccountRequest $request, AuditLogService $audit): JsonResponse
+    {
+        $data = $request->validated();
+
+        $user = User::query()->create([
+            'name' => $data['name'],
+            'email' => $data['email'],
+            'password' => $data['password'],
+            'phone' => $data['phone'],
+            'organisation' => $data['organisation'],
+            'is_admin' => false,
+            'is_active' => false,
+            'approval_status' => UserApprovalStatus::Pending,
+            'totp_required' => false,
+        ]);
+
+        $audit->log('Account registration submitted', [
+            'actor_type' => AuditLogService::ACTOR_SYSTEM_USER,
+            'event_type' => 'user_registered',
+            'http_method' => 'POST',
+            'request_uri' => $request->path(),
+            'attempted_email' => $user->email,
+            'target_table' => 'users',
+            'target_id' => $user->id,
+            'new_values' => [
+                'email' => $user->email,
+                'organisation' => $user->organisation,
+                'approval_status' => UserApprovalStatus::Pending->value,
+            ],
+        ]);
+
+        return response()->json([
+            'message' => 'Registration received. An administrator must approve your account before you can sign in.',
+        ], 201);
+    }
+
     public function login(
         LoginRequest $request,
         AdminTwoFactorService $twoFactor,
@@ -66,6 +104,40 @@ class AuthController extends Controller
             throw ValidationException::withMessages([
                 'email' => ['The provided credentials are incorrect.'],
             ]);
+        }
+
+        if ($user->approval_status === UserApprovalStatus::Pending) {
+            $audit->log('Login attempt on pending account', [
+                'actor_type' => AuditLogService::ACTOR_SYSTEM_USER,
+                'event_type' => 'auth_failed_pending',
+                'http_method' => 'POST',
+                'request_uri' => $request->path(),
+                'user' => $user,
+                'attempted_email' => $user->email,
+                'target_table' => 'users',
+                'target_id' => $user->id,
+            ]);
+
+            return response()->json([
+                'message' => 'Your account is awaiting administrator approval.',
+            ], 403);
+        }
+
+        if ($user->approval_status === UserApprovalStatus::Rejected) {
+            $audit->log('Login attempt on rejected account', [
+                'actor_type' => AuditLogService::ACTOR_SYSTEM_USER,
+                'event_type' => 'auth_failed_rejected',
+                'http_method' => 'POST',
+                'request_uri' => $request->path(),
+                'user' => $user,
+                'attempted_email' => $user->email,
+                'target_table' => 'users',
+                'target_id' => $user->id,
+            ]);
+
+            return response()->json([
+                'message' => 'Your account registration was not approved.',
+            ], 403);
         }
 
         if (! $user->is_active) {
@@ -219,8 +291,13 @@ class AuthController extends Controller
             'id' => $user->id,
             'name' => $user->name,
             'email' => $user->email,
+            'phone' => $user->phone,
+            'organisation' => $user->organisation,
             'is_admin' => (bool) $user->is_admin,
             'is_active' => (bool) $user->is_active,
+            'approval_status' => $user->approval_status instanceof \App\Enums\UserApprovalStatus
+                ? $user->approval_status->value
+                : (string) $user->approval_status,
             'two_factor_email_enabled' => (bool) $user->two_factor_email_enabled,
             'two_factor_totp_enabled' => (bool) $user->two_factor_totp_enabled,
             'totp_required' => $user->requiresTotp(),

@@ -6,16 +6,30 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\Api\V1\Admin\StoreExternalIntegrationRequest;
 use App\Http\Requests\Api\V1\Admin\UpdateExternalIntegrationRequest;
 use App\Models\ExternalIntegration;
+use App\Models\User;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
 use Illuminate\Support\Str;
 
 class ExternalIntegrationController extends Controller
 {
-    public function index(): JsonResponse
+    public function index(Request $request): JsonResponse
     {
-        $integrations = ExternalIntegration::query()
+        $this->authorize('viewAny', ExternalIntegration::class);
+
+        /** @var User $user */
+        $user = $request->user();
+
+        $query = ExternalIntegration::query()
             ->with('emailProvider:id,name,driver')
-            ->orderBy('name')
+            ->orderBy('name');
+
+        if (! $user->is_admin) {
+            $ids = $user->allowedExternalIntegrationIds() ?? [];
+            $query->whereIn('id', $ids === [] ? [0] : $ids);
+        }
+
+        $integrations = $query
             ->get()
             ->map(fn (ExternalIntegration $integration) => $this->transform($integration));
 
@@ -24,9 +38,17 @@ class ExternalIntegrationController extends Controller
 
     public function store(StoreExternalIntegrationRequest $request): JsonResponse
     {
+        $this->authorize('create', ExternalIntegration::class);
+
+        /** @var User $user */
+        $user = $request->user();
         $data = $request->validated();
         $clientSecret = $this->resolveClientSecret($data);
         $slug = $data['slug'] ?? $data['client_id'] ?? Str::slug($data['name']);
+
+        $isActive = $user->is_admin
+            ? (bool) ($data['is_active'] ?? true)
+            : false;
 
         $integration = ExternalIntegration::query()->create([
             'name' => $data['name'],
@@ -36,19 +58,27 @@ class ExternalIntegrationController extends Controller
             'email_provider_id' => $data['email_provider_id'] ?? null,
             'allowed_ips' => $data['allowed_ips'] ?? [],
             'settings' => $data['settings'] ?? [],
-            'is_active' => $data['is_active'] ?? true,
+            'is_active' => $isActive,
             'description' => $data['description'] ?? null,
         ]);
 
+        if (! $user->is_admin) {
+            $user->externalIntegrations()->syncWithoutDetaching([$integration->id]);
+        }
+
         return response()->json([
             'data' => $this->transform($integration->load('emailProvider:id,name,driver')),
-            'message' => 'Integration created. Share client_id and client_secret with the connecting system.',
+            'message' => $user->is_admin
+                ? 'Integration created. Share client_id and client_secret with the connecting system.'
+                : 'Client created. It stays inactive until an administrator activates it. Share client_id and client_secret with the connecting system.',
             'client_secret' => $clientSecret,
         ], 201);
     }
 
     public function show(ExternalIntegration $externalIntegration): JsonResponse
     {
+        $this->authorize('view', $externalIntegration);
+
         $externalIntegration->load('emailProvider:id,name,driver');
 
         return response()->json(['data' => $this->transform($externalIntegration)]);
@@ -56,8 +86,17 @@ class ExternalIntegrationController extends Controller
 
     public function update(UpdateExternalIntegrationRequest $request, ExternalIntegration $externalIntegration): JsonResponse
     {
+        $this->authorize('update', $externalIntegration);
+
+        /** @var User $user */
+        $user = $request->user();
         $data = $request->validated();
         $clientSecret = null;
+
+        if (! $user->is_admin) {
+            // Non-admins cannot activate their own clients.
+            unset($data['is_active']);
+        }
 
         if (($data['generate_secret'] ?? false) || ! empty($data['client_secret'])) {
             $clientSecret = $this->resolveClientSecret($data);
@@ -83,6 +122,8 @@ class ExternalIntegrationController extends Controller
 
     public function destroy(ExternalIntegration $externalIntegration): JsonResponse
     {
+        $this->authorize('delete', $externalIntegration);
+
         $externalIntegration->delete();
 
         return response()->json(['message' => 'Integration deleted.']);

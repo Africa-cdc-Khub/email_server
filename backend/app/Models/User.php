@@ -3,6 +3,7 @@
 namespace App\Models;
 
 // use Illuminate\Contracts\Auth\MustVerifyEmail;
+use App\Enums\UserApprovalStatus;
 use Database\Factories\UserFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Attributes\Hidden;
@@ -16,8 +17,15 @@ use Laravel\Sanctum\HasApiTokens;
     'name',
     'email',
     'password',
+    'phone',
+    'organisation',
     'is_admin',
     'is_active',
+    'approval_status',
+    'approved_at',
+    'approved_by',
+    'rejected_at',
+    'rejection_reason',
     'two_factor_email_enabled',
     'two_factor_totp_enabled',
     'totp_required',
@@ -38,7 +46,7 @@ class User extends Authenticatable
     /**
      * Get the attributes that should be cast.
      *
-     * @return array<string, string>
+     * @return array<string, mixed>
      */
     protected function casts(): array
     {
@@ -47,12 +55,25 @@ class User extends Authenticatable
             'password' => 'hashed',
             'is_admin' => 'boolean',
             'is_active' => 'boolean',
+            'approval_status' => UserApprovalStatus::class,
+            'approved_at' => 'datetime',
+            'rejected_at' => 'datetime',
             'two_factor_email_enabled' => 'boolean',
             'two_factor_totp_enabled' => 'boolean',
             'totp_required' => 'boolean',
             'two_factor_totp_secret' => 'encrypted',
             'two_factor_totp_recovery_codes' => 'array',
         ];
+    }
+
+    public function isApproved(): bool
+    {
+        return $this->approval_status === UserApprovalStatus::Approved;
+    }
+
+    public function isPendingApproval(): bool
+    {
+        return $this->approval_status === UserApprovalStatus::Pending;
     }
 
     public function externalIntegrations(): BelongsToMany
