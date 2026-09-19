@@ -49,10 +49,14 @@ class PhpMailerSmtpMailer
             $mail->SMTPKeepAlive = false;
             $mail->AuthType = 'LOGIN';
 
-            $ehlo = parse_url((string) config('app.url'), PHP_URL_HOST);
-            if (is_string($ehlo) && $ehlo !== '') {
-                $mail->Hostname = $ehlo;
-            }
+            // Use a real mailbox domain for EHLO / Message-ID — Docker container
+            // hostnames (e.g. 3aa163459983) tank Gmail deliverability.
+            $mail->Hostname = $this->resolveHeloHostname($settings['host'], $fromAddress);
+            $mail->MessageID = sprintf(
+                '<%s@%s>',
+                bin2hex(random_bytes(16)),
+                $mail->Hostname
+            );
 
             if ($settings['username'] !== '') {
                 $mail->SMTPAuth = true;
@@ -200,5 +204,30 @@ class PhpMailerSmtpMailer
             'username' => $username,
             'password' => $password,
         ];
+    }
+
+    /**
+     * Prefer the From-domain (or SMTP host) for EHLO / Message-ID so Docker
+     * container hostnames never appear on the wire.
+     */
+    private function resolveHeloHostname(string $smtpHost, string $fromAddress): string
+    {
+        $fromHost = '';
+        if (str_contains($fromAddress, '@')) {
+            $fromHost = strtolower(trim(substr($fromAddress, strrpos($fromAddress, '@') + 1)));
+        }
+
+        if ($fromHost !== '' && preg_match('/^[a-z0-9.-]+\.[a-z]{2,}$/i', $fromHost) === 1) {
+            return $fromHost;
+        }
+
+        $smtpHost = strtolower(trim($smtpHost));
+        if ($smtpHost !== '' && preg_match('/^[a-z0-9.-]+\.[a-z]{2,}$/i', $smtpHost) === 1) {
+            return $smtpHost;
+        }
+
+        $appHost = parse_url((string) config('app.url'), PHP_URL_HOST);
+
+        return is_string($appHost) && $appHost !== '' ? $appHost : 'localhost';
     }
 }
