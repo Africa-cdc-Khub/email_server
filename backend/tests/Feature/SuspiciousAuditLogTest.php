@@ -17,6 +17,7 @@ class SuspiciousAuditLogTest extends TestCase
     {
         parent::setUp();
 
+        config(['services.captcha.enabled' => false]);
         $this->withoutMiddleware(\Illuminate\Routing\Middleware\ThrottleRequests::class);
     }
 
@@ -82,7 +83,11 @@ class SuspiciousAuditLogTest extends TestCase
     public function test_user_delete_is_flagged_suspicious(): void
     {
         $admin = User::factory()->create(['is_admin' => true, 'is_active' => true]);
-        $target = User::factory()->create(['is_admin' => false, 'is_active' => true]);
+        $target = User::factory()->create([
+            'is_admin' => false,
+            'is_active' => false,
+            'approval_status' => \App\Enums\UserApprovalStatus::Rejected,
+        ]);
 
         $this->withToken($admin->createToken('admin-panel')->plainTextToken)
             ->deleteJson('/api/v1/admin/users/'.$target->id)

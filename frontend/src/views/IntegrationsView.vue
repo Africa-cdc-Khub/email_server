@@ -62,6 +62,23 @@ async function setActive(item: Integration, active: boolean) {
   }
 }
 
+async function remove(item: Integration) {
+  if (item.is_active) return
+  if (!confirm(`Permanently delete inactive client "${item.name}"?`)) return
+  actingId.value = item.id
+  error.value = ''
+  message.value = ''
+  try {
+    await api.delete(`/admin/external-integrations/${item.id}`)
+    message.value = 'Inactive client deleted.'
+    await load()
+  } catch (err) {
+    error.value = apiErrorMessage(err, 'Could not delete client.')
+  } finally {
+    actingId.value = null
+  }
+}
+
 onMounted(load)
 </script>
 
@@ -153,6 +170,15 @@ onMounted(load)
             >
               Enable
             </v-btn>
+            <v-btn
+              v-if="!item.is_active"
+              size="small"
+              variant="text"
+              icon="mdi-delete"
+              color="error"
+              :loading="actingId === item.id"
+              @click="remove(item)"
+            />
           </div>
         </template>
       </v-data-table>

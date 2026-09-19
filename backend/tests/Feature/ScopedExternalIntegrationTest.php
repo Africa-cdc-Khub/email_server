@@ -157,7 +157,7 @@ class ScopedExternalIntegrationTest extends TestCase
             ->assertJsonStructure(['data']);
     }
 
-    public function test_admin_can_disable_integration_but_not_delete(): void
+    public function test_admin_can_disable_integration_and_delete_when_inactive(): void
     {
         $admin = User::factory()->create(['is_admin' => true, 'is_active' => true]);
         $integration = ExternalIntegration::query()->create([
@@ -172,7 +172,7 @@ class ScopedExternalIntegrationTest extends TestCase
 
         $this->withToken($token)
             ->deleteJson('/api/v1/admin/external-integrations/'.$integration->id)
-            ->assertMethodNotAllowed();
+            ->assertStatus(422);
 
         $this->withToken($token)
             ->putJson('/api/v1/admin/external-integrations/'.$integration->id, [
@@ -182,7 +182,12 @@ class ScopedExternalIntegrationTest extends TestCase
             ->assertJsonPath('data.is_active', false);
 
         $this->assertFalse((bool) $integration->fresh()->is_active);
-        $this->assertDatabaseHas('external_integrations', ['id' => $integration->id]);
+
+        $this->withToken($token)
+            ->deleteJson('/api/v1/admin/external-integrations/'.$integration->id)
+            ->assertOk();
+
+        $this->assertDatabaseMissing('external_integrations', ['id' => $integration->id]);
     }
 
     public function test_activating_integration_notifies_linked_users(): void

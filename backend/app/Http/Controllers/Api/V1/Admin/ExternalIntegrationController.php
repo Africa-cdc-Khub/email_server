@@ -146,6 +146,21 @@ class ExternalIntegrationController extends Controller
         return response()->json($response);
     }
 
+    public function destroy(ExternalIntegration $externalIntegration): JsonResponse
+    {
+        $this->authorize('delete', $externalIntegration);
+
+        if ($externalIntegration->is_active) {
+            return response()->json([
+                'message' => 'Active clients cannot be deleted. Disable the client first.',
+            ], 422);
+        }
+
+        $externalIntegration->delete();
+
+        return response()->json(['message' => 'Inactive client deleted.']);
+    }
+
     /**
      * @param  array<string, mixed>  $data
      */

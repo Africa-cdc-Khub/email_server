@@ -63,8 +63,7 @@ Route::prefix('v1')->group(function () {
             // Approved accounts may manage their own clients and pick a provider.
             Route::get('/email-providers/drivers', [EmailProviderController::class, 'drivers']);
             Route::get('/email-providers', [EmailProviderController::class, 'index']);
-            Route::apiResource('external-integrations', ExternalIntegrationController::class)
-                ->except(['destroy']);
+            Route::apiResource('external-integrations', ExternalIntegrationController::class);
 
             Route::middleware(EnsureUserIsAdmin::class)->group(function () {
                 Route::post('/email-logs/retry-failed', [EmailLogController::class, 'retryFailed'])

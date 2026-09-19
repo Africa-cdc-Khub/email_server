@@ -136,9 +136,20 @@ async function reject(item: UserRow) {
 }
 
 async function remove(item: UserRow) {
-  if (!confirm(`Delete user "${item.name}"?`)) return
-  await api.delete(`/admin/users/${item.id}`)
-  await load()
+  if (item.approval_status !== 'rejected') return
+  if (!confirm(`Permanently delete rejected account "${item.name}"?`)) return
+  actingId.value = item.id
+  message.value = ''
+  error.value = ''
+  try {
+    await api.delete(`/admin/users/${item.id}`)
+    message.value = 'Rejected account deleted.'
+    await load()
+  } catch (err) {
+    error.value = apiErrorMessage(err, 'Could not delete account.')
+  } finally {
+    actingId.value = null
+  }
 }
 
 function syncTabQuery(tab: StatusTab) {
@@ -354,7 +365,15 @@ onMounted(load)
               icon="mdi-pencil"
               @click="router.push({ name: 'user-edit', params: { id: item.id } })"
             />
-            <v-btn size="small" variant="text" icon="mdi-delete" color="error" @click="remove(item)" />
+            <v-btn
+              v-if="item.approval_status === 'rejected'"
+              size="small"
+              variant="text"
+              icon="mdi-delete"
+              color="error"
+              :loading="actingId === item.id"
+              @click="remove(item)"
+            />
           </div>
         </template>
       </v-data-table>

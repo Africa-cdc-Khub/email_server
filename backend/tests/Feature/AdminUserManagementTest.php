@@ -2,9 +2,9 @@
 
 namespace Tests\Feature;
 
+use App\Enums\UserApprovalStatus;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
-use Illuminate\Support\Facades\Hash;
 use Tests\TestCase;
 
 class AdminUserManagementTest extends TestCase
@@ -60,5 +60,31 @@ class AdminUserManagementTest extends TestCase
         $this->withToken($token)
             ->deleteJson('/api/v1/admin/users/'.$admin->id)
             ->assertStatus(422);
+    }
+
+    public function test_admin_can_delete_rejected_account_only(): void
+    {
+        $token = $this->adminToken();
+        $approved = User::factory()->create([
+            'is_admin' => false,
+            'is_active' => true,
+            'approval_status' => UserApprovalStatus::Approved,
+        ]);
+        $rejected = User::factory()->create([
+            'is_admin' => false,
+            'is_active' => false,
+            'approval_status' => UserApprovalStatus::Rejected,
+        ]);
+
+        $this->withToken($token)
+            ->deleteJson('/api/v1/admin/users/'.$approved->id)
+            ->assertStatus(422);
+
+        $this->withToken($token)
+            ->deleteJson('/api/v1/admin/users/'.$rejected->id)
+            ->assertOk();
+
+        $this->assertDatabaseMissing('users', ['id' => $rejected->id]);
+        $this->assertDatabaseHas('users', ['id' => $approved->id]);
     }
 }

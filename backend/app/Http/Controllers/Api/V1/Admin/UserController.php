@@ -148,8 +148,18 @@ class UserController extends Controller
             return response()->json(['message' => 'You cannot delete your own account.'], 422);
         }
 
-        if ($user->is_admin && User::query()->where('is_admin', true)->where('is_active', true)->count() <= 1) {
-            return response()->json(['message' => 'Cannot delete the last active admin.'], 422);
+        if ($user->is_admin) {
+            return response()->json(['message' => 'Admin accounts cannot be deleted from this screen. Disable them instead.'], 422);
+        }
+
+        $status = $user->approval_status instanceof UserApprovalStatus
+            ? $user->approval_status
+            : UserApprovalStatus::tryFrom((string) $user->approval_status);
+
+        if ($status !== UserApprovalStatus::Rejected) {
+            return response()->json([
+                'message' => 'Only rejected accounts can be deleted. Disable active accounts or reject pending ones first.',
+            ], 422);
         }
 
         $snapshot = [
@@ -157,6 +167,7 @@ class UserController extends Controller
             'email' => $user->email,
             'is_admin' => $user->is_admin,
             'is_active' => $user->is_active,
+            'approval_status' => UserApprovalStatus::Rejected->value,
         ];
         $id = $user->id;
 
@@ -165,7 +176,7 @@ class UserController extends Controller
 
         $audit->logRecordChange('deleted', 'users', $id, $snapshot, null);
 
-        return response()->json(['message' => 'User deleted.']);
+        return response()->json(['message' => 'Rejected account deleted.']);
     }
 
     public function approve(Request $request, User $user, AuditLogService $audit, ApprovalNotifier $notifier): JsonResponse

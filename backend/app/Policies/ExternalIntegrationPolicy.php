@@ -26,4 +26,10 @@ class ExternalIntegrationPolicy
     {
         return $this->view($user, $externalIntegration);
     }
+
+    public function delete(User $user, ExternalIntegration $externalIntegration): bool
+    {
+        // Active clients are rejected in the controller with a clear 422 message.
+        return $this->view($user, $externalIntegration);
+    }
 }
