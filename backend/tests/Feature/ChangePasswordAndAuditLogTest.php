@@ -96,6 +96,44 @@ class ChangePasswordAndAuditLogTest extends TestCase
             ->assertJsonPath('meta.total', fn ($total) => (int) $total >= 1);
     }
 
+    public function test_admin_can_export_audit_logs_to_excel(): void
+    {
+        $admin = User::factory()->create(['is_admin' => true, 'is_active' => true]);
+        $token = $admin->createToken('admin-panel')->plainTextToken;
+
+        AuditLog::query()->create([
+            'user_id' => $admin->id,
+            'user_name' => $admin->name,
+            'user_email' => $admin->email,
+            'actor_type' => 'system_user',
+            'action' => 'Exported sample',
+            'event_type' => 'auth_failed',
+            'http_method' => 'POST',
+            'request_uri' => 'api/v1/admin/auth/login',
+            'ip_address' => '203.0.113.10',
+            'is_suspicious' => true,
+            'suspicious_reasons' => 'Failed login attempt',
+        ]);
+
+        $response = $this->withToken($token)
+            ->get('/api/v1/admin/audit-logs/export?event_type=auth_failed&event_type_exact=1')
+            ->assertOk();
+
+        $this->assertStringContainsString(
+            'application/vnd.ms-excel',
+            (string) $response->headers->get('Content-Type'),
+        );
+        $this->assertStringContainsString('.xls', (string) $response->headers->get('Content-Disposition'));
+        $this->assertGreaterThan(100, strlen($response->getContent()));
+        $this->assertStringContainsString('Workbook', $response->getContent());
+        $this->assertStringContainsString('Failed login attempt', $response->getContent());
+
+        $this->assertDatabaseHas('audit_logs', [
+            'event_type' => 'audit_export',
+            'user_id' => $admin->id,
+        ]);
+    }
+
     public function test_non_admin_cannot_list_audit_logs(): void
     {
         $user = User::factory()->create(['is_admin' => false, 'is_active' => true]);

@@ -65,6 +65,8 @@ Route::prefix('v1')->group(function () {
 
                 Route::apiResource('users', UserController::class);
                 Route::get('/audit-logs/filter-options', [AuditLogController::class, 'filterOptions']);
+                Route::get('/audit-logs/export', [AuditLogController::class, 'export'])
+                    ->middleware('throttle:10,1');
                 Route::get('/audit-logs', [AuditLogController::class, 'index']);
 
                 Route::get('/blocked-ips', [BlockedIpController::class, 'index']);

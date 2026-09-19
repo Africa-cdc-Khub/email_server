@@ -80,6 +80,7 @@ function defaultFilters(): Filters {
 }
 
 const loading = ref(false)
+const exporting = ref(false)
 const error = ref('')
 const message = ref('')
 const rows = ref<AuditLogRow[]>([])
@@ -197,22 +198,7 @@ async function load() {
   error.value = ''
   try {
     const res = await api.get('/admin/audit-logs', {
-      params: {
-        search: filters.value.search.trim() || undefined,
-        name: filters.value.name.trim() || undefined,
-        email: filters.value.email.trim() || undefined,
-        ip_address: filters.value.ip_address.trim() || undefined,
-        http_method: filters.value.http_method || undefined,
-        event_type: filters.value.event_type || undefined,
-        event_type_exact: filters.value.event_type ? 1 : undefined,
-        target_table: filters.value.target_table || undefined,
-        actor_type: filters.value.actor_type || undefined,
-        suspicious: filters.value.suspicious || undefined,
-        date_from: filters.value.date_from || undefined,
-        date_to: filters.value.date_to || undefined,
-        page: page.value,
-        per_page: filters.value.per_page,
-      },
+      params: listParams(),
     })
     rows.value = res.data.data
     page.value = res.data.meta.current_page
@@ -225,6 +211,79 @@ async function load() {
     error.value = apiErrorMessage(err, 'Could not load audit logs.')
   } finally {
     loading.value = false
+  }
+}
+
+function listParams(includePage = true): Record<string, string | number | undefined> {
+  return {
+    search: filters.value.search.trim() || undefined,
+    name: filters.value.name.trim() || undefined,
+    email: filters.value.email.trim() || undefined,
+    ip_address: filters.value.ip_address.trim() || undefined,
+    http_method: filters.value.http_method || undefined,
+    event_type: filters.value.event_type || undefined,
+    event_type_exact: filters.value.event_type ? 1 : undefined,
+    target_table: filters.value.target_table || undefined,
+    actor_type: filters.value.actor_type || undefined,
+    suspicious: filters.value.suspicious || undefined,
+    date_from: filters.value.date_from || undefined,
+    date_to: filters.value.date_to || undefined,
+    ...(includePage
+      ? {
+          page: page.value,
+          per_page: filters.value.per_page,
+        }
+      : {}),
+  }
+}
+
+async function exportExcel() {
+  exporting.value = true
+  error.value = ''
+  try {
+    const res = await api.get('/admin/audit-logs/export', {
+      params: listParams(false),
+      responseType: 'blob',
+    })
+
+    const disposition = String(res.headers['content-disposition'] || '')
+    const match = /filename="?([^"]+)"?/i.exec(disposition)
+    const filename = match?.[1] || `audit-logs-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.xls`
+
+    const blob = new Blob([res.data], {
+      type: 'application/vnd.ms-excel',
+    })
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = filename
+    document.body.appendChild(anchor)
+    anchor.click()
+    anchor.remove()
+    URL.revokeObjectURL(url)
+
+    const exportedRows = Number(res.headers['x-export-rows'] || 0)
+    const matchedTotal = Number(res.headers['x-export-total'] || exportedRows)
+    const truncated = String(res.headers['x-export-truncated'] || '') === '1'
+    message.value = truncated
+      ? `Exported ${exportedRows.toLocaleString()} of ${matchedTotal.toLocaleString()} matching audit logs (Excel limit applied).`
+      : `Exported ${exportedRows.toLocaleString()} audit log${exportedRows === 1 ? '' : 's'} to Excel.`
+  } catch (err) {
+    // Axios blob errors may wrap JSON in a Blob — try to surface a readable message.
+    const axiosErr = err as { response?: { data?: Blob | { message?: string }; status?: number } }
+    if (axiosErr.response?.data instanceof Blob) {
+      try {
+        const text = await axiosErr.response.data.text()
+        const parsed = JSON.parse(text) as { message?: string }
+        error.value = parsed.message || 'Could not export audit logs.'
+      } catch {
+        error.value = apiErrorMessage(err, 'Could not export audit logs.')
+      }
+    } else {
+      error.value = apiErrorMessage(err, 'Could not export audit logs.')
+    }
+  } finally {
+    exporting.value = false
   }
 }
 
@@ -382,6 +441,16 @@ onMounted(async () => {
   <div>
     <PageHeader title="Audit logs" subtitle="Admin panel activity, mutations, and authentication events">
       <template #actions>
+        <v-btn
+          color="primary"
+          variant="tonal"
+          prepend-icon="mdi-microsoft-excel"
+          :loading="exporting"
+          :disabled="loading || total === 0"
+          @click="exportExcel"
+        >
+          Export Excel
+        </v-btn>
         <v-btn
           color="error"
           variant="tonal"

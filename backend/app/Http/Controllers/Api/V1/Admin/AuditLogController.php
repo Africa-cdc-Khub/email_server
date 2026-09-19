@@ -5,12 +5,17 @@ namespace App\Http\Controllers\Api\V1\Admin;
 use App\Http\Controllers\Controller;
 use App\Models\AuditLog;
 use App\Services\AuditLogService;
+use App\Support\SimpleExcelWriter;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Schema;
+use Symfony\Component\HttpFoundation\Response;
 
 class AuditLogController extends Controller
 {
+    private const EXPORT_MAX_ROWS = 10000;
+
     public function filterOptions(): JsonResponse
     {
         $eventTypes = AuditLog::query()
@@ -69,6 +74,110 @@ class AuditLogController extends Controller
     {
         $perPage = min(100, max(10, (int) $request->integer('per_page', 50)));
 
+        $paginator = $this->filteredQuery($request)->paginate($perPage);
+
+        return response()->json([
+            'data' => $paginator->getCollection()->map(fn (AuditLog $log) => $this->transform($log))->values()->all(),
+            'meta' => [
+                'current_page' => $paginator->currentPage(),
+                'last_page' => $paginator->lastPage(),
+                'per_page' => $paginator->perPage(),
+                'total' => $paginator->total(),
+                'extended' => true,
+            ],
+        ]);
+    }
+
+    public function export(Request $request, AuditLogService $audit): Response
+    {
+        $query = $this->filteredQuery($request);
+        $total = (clone $query)->count();
+        $limit = min(self::EXPORT_MAX_ROWS, max(1, (int) $request->integer('limit', self::EXPORT_MAX_ROWS)));
+
+        $logs = $query->limit($limit)->get();
+
+        $headers = [
+            'ID',
+            'When',
+            'Category',
+            'Suspicious',
+            'Suspicious reasons',
+            'Actor name',
+            'Actor email',
+            'Client',
+            'IP address',
+            'Method',
+            'Event',
+            'Action',
+            'URI',
+            'Target table',
+            'Target ID',
+            'User agent',
+            'Old values',
+            'New values',
+        ];
+
+        $rows = $logs->map(function (AuditLog $log) {
+            $actorType = $log->actor_type ?? AuditLogService::ACTOR_SYSTEM_USER;
+            $actorLabel = match ($actorType) {
+                AuditLogService::ACTOR_CLIENT => 'Client',
+                AuditLogService::ACTOR_SYSTEM => 'System',
+                default => 'System user',
+            };
+
+            return [
+                $log->id,
+                $log->created_at?->timezone(config('app.timezone'))->format('Y-m-d H:i:s') ?? '',
+                $actorLabel,
+                (bool) ($log->is_suspicious ?? false) ? 'Yes' : 'No',
+                (string) ($log->suspicious_reasons ?? ''),
+                (string) ($log->user_name ?? ''),
+                (string) ($log->user_email ?? ''),
+                (string) ($log->externalIntegration?->name ?? $log->externalIntegration?->slug ?? ''),
+                (string) ($log->ip_address ?? ''),
+                (string) ($log->http_method ?? ''),
+                (string) ($log->event_type ?? ''),
+                (string) ($log->action ?? ''),
+                (string) ($log->request_uri ?? ''),
+                (string) ($log->target_table ?? ''),
+                (string) ($log->target_id ?? ''),
+                (string) ($log->user_agent ?? ''),
+                $this->jsonCell($log->old_values),
+                $this->jsonCell($log->new_values),
+            ];
+        })->all();
+
+        $binary = SimpleExcelWriter::toXls($headers, $rows, 'Audit logs');
+        $filename = 'audit-logs-'.now()->format('Ymd-His').'.xls';
+
+        $audit->log('Exported audit logs to Excel', [
+            'actor_type' => AuditLogService::ACTOR_SYSTEM_USER,
+            'event_type' => 'audit_export',
+            'http_method' => 'GET',
+            'request_uri' => $request->path(),
+            'new_values' => [
+                'exported_rows' => count($rows),
+                'matched_total' => $total,
+                'limit' => $limit,
+                'truncated' => $filename,
+            ],
+        ]);
+
+        return response($binary, 200, [
+            'Content-Type' => 'application/vnd.ms-excel; charset=UTF-8',
+            'Content-Disposition' => 'attachment; filename="'.$filename.'"',
+            'Cache-Control' => 'no-store, no-cache, must-revalidate',
+            'X-Export-Rows' => (string) count($rows),
+            'X-Export-Total' => (string) $total,
+            'X-Export-Truncated' => $total > count($rows) ? '1' : '0',
+        ]);
+    }
+
+    /**
+     * @return Builder<AuditLog>
+     */
+    protected function filteredQuery(Request $request): Builder
+    {
         $query = AuditLog::query()
             ->with(['externalIntegration:id,name,slug'])
             ->orderByDesc('id');
@@ -140,47 +249,61 @@ class AuditLogController extends Controller
             }
         }
 
-        $paginator = $query->paginate($perPage);
+        return $query;
+    }
 
-        return response()->json([
-            'data' => $paginator->getCollection()->map(fn (AuditLog $log) => [
-                'id' => $log->id,
-                'actor_type' => $log->actor_type ?? AuditLogService::ACTOR_SYSTEM_USER,
-                'actor_label' => match ($log->actor_type ?? AuditLogService::ACTOR_SYSTEM_USER) {
-                    AuditLogService::ACTOR_CLIENT => 'Client',
-                    AuditLogService::ACTOR_SYSTEM => 'System',
-                    default => 'System user',
-                },
-                'user_id' => $log->user_id,
-                'user_name' => $log->user_name,
-                'user_email' => $log->user_email,
-                'external_integration_id' => $log->external_integration_id,
-                'external_integration' => $log->externalIntegration ? [
-                    'id' => $log->externalIntegration->id,
-                    'name' => $log->externalIntegration->name,
-                    'slug' => $log->externalIntegration->slug,
-                ] : null,
-                'action' => $log->action,
-                'event_type' => $log->event_type,
-                'http_method' => $log->http_method,
-                'request_uri' => $log->request_uri,
-                'target_table' => $log->target_table,
-                'target_id' => $log->target_id,
-                'old_values' => $log->old_values,
-                'new_values' => $log->new_values,
-                'ip_address' => $log->ip_address,
-                'user_agent' => $log->user_agent,
-                'is_suspicious' => (bool) ($log->is_suspicious ?? false),
-                'suspicious_reasons' => $log->suspicious_reasons,
-                'created_at' => $log->created_at?->toIso8601String(),
-            ])->values()->all(),
-            'meta' => [
-                'current_page' => $paginator->currentPage(),
-                'last_page' => $paginator->lastPage(),
-                'per_page' => $paginator->perPage(),
-                'total' => $paginator->total(),
-                'extended' => true,
-            ],
-        ]);
+    /**
+     * @return array<string, mixed>
+     */
+    protected function transform(AuditLog $log): array
+    {
+        return [
+            'id' => $log->id,
+            'actor_type' => $log->actor_type ?? AuditLogService::ACTOR_SYSTEM_USER,
+            'actor_label' => match ($log->actor_type ?? AuditLogService::ACTOR_SYSTEM_USER) {
+                AuditLogService::ACTOR_CLIENT => 'Client',
+                AuditLogService::ACTOR_SYSTEM => 'System',
+                default => 'System user',
+            },
+            'user_id' => $log->user_id,
+            'user_name' => $log->user_name,
+            'user_email' => $log->user_email,
+            'external_integration_id' => $log->external_integration_id,
+            'external_integration' => $log->externalIntegration ? [
+                'id' => $log->externalIntegration->id,
+                'name' => $log->externalIntegration->name,
+                'slug' => $log->externalIntegration->slug,
+            ] : null,
+            'action' => $log->action,
+            'event_type' => $log->event_type,
+            'http_method' => $log->http_method,
+            'request_uri' => $log->request_uri,
+            'target_table' => $log->target_table,
+            'target_id' => $log->target_id,
+            'old_values' => $log->old_values,
+            'new_values' => $log->new_values,
+            'ip_address' => $log->ip_address,
+            'user_agent' => $log->user_agent,
+            'is_suspicious' => (bool) ($log->is_suspicious ?? false),
+            'suspicious_reasons' => $log->suspicious_reasons,
+            'created_at' => $log->created_at?->toIso8601String(),
+        ];
+    }
+
+    protected function jsonCell(mixed $value): string
+    {
+        if ($value === null || $value === '') {
+            return '';
+        }
+
+        if (is_string($value)) {
+            return $value;
+        }
+
+        try {
+            return (string) json_encode($value, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        } catch (\Throwable) {
+            return '';
+        }
     }
 }
