@@ -17,6 +17,8 @@ type EmailLog = {
   sending_system: string
   source: string
   sender_ip: string | null
+  body?: string | null
+  is_html?: boolean
   can_retry?: boolean
   attachment_count?: number
   external_integration_id: number | null
@@ -339,7 +341,7 @@ onMounted(async () => {
       </template>
     </v-data-table-server>
 
-    <v-dialog v-model="detailsOpen" max-width="640">
+    <v-dialog v-model="detailsOpen" max-width="860">
       <v-card v-if="selectedLog">
         <v-card-title>Email log #{{ selectedLog.id }}</v-card-title>
         <v-card-text class="details-body">
@@ -378,6 +380,20 @@ onMounted(async () => {
           <p v-if="selectedLog.updated_at">
             <strong>Updated:</strong> {{ formatDateTime12h(selectedLog.updated_at) }}
           </p>
+          <div class="mt-4">
+            <strong>Email body</strong>
+            <div v-if="selectedLog.body" class="body-preview mt-2">
+              <iframe
+                v-if="selectedLog.is_html"
+                class="body-preview__frame"
+                title="Email body preview"
+                sandbox=""
+                :srcdoc="selectedLog.body"
+              />
+              <pre v-else class="body-preview__text">{{ selectedLog.body }}</pre>
+            </div>
+            <p v-else class="text-medium-emphasis mt-2 mb-0">No stored body for this log.</p>
+          </div>
           <div class="mt-3">
             <strong>Error</strong>
             <pre class="error-block">{{ selectedLog.error_message || '—' }}</pre>
@@ -425,6 +441,33 @@ onMounted(async () => {
 
 .details-body p {
   margin-bottom: 0.5rem;
+}
+
+.body-preview {
+  border: 1px solid rgba(var(--v-theme-on-surface), 0.12);
+  border-radius: 8px;
+  overflow: hidden;
+  background: #fff;
+}
+
+.body-preview__frame {
+  display: block;
+  width: 100%;
+  min-height: 280px;
+  max-height: 420px;
+  border: 0;
+  background: #fff;
+}
+
+.body-preview__text {
+  margin: 0;
+  padding: 0.75rem 1rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 0.875rem;
+  max-height: 420px;
+  overflow: auto;
+  color: #111;
 }
 
 .error-block {

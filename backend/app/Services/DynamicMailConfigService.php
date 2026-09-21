@@ -26,6 +26,25 @@ class DynamicMailConfigService
                 ->first();
     }
 
+    /**
+     * Active providers to try after the primary fails, ordered by priority.
+     *
+     * @return list<EmailProvider>
+     */
+    public function fallbackProviders(?int $excludeProviderId = null): array
+    {
+        return EmailProvider::query()
+            ->where('is_active', true)
+            ->when(
+                $excludeProviderId !== null,
+                fn ($q) => $q->where('id', '!=', $excludeProviderId)
+            )
+            ->orderBy('priority')
+            ->orderBy('id')
+            ->get()
+            ->all();
+    }
+
     public function resolveProvider(?int $providerId = null): EmailProvider
     {
         if ($providerId !== null) {

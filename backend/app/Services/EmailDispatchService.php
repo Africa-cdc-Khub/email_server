@@ -139,6 +139,7 @@ class EmailDispatchService
             markFailedOnError: false,
             attachmentPayload: $loadedAttachments,
             cleanupAttachmentMeta: $attachmentMeta,
+            allowFallback: true,
         );
     }
 
@@ -214,6 +215,7 @@ class EmailDispatchService
             ),
             attachmentPayload: $attachmentPayload,
             cleanupAttachmentMeta: $stored,
+            allowFallback: ($source ?? '') !== 'admin_test',
         );
     }
 
@@ -321,82 +323,160 @@ class EmailDispatchService
         bool $markFailedOnError = true,
         array $attachmentPayload = [],
         array $cleanupAttachmentMeta = [],
+        bool $allowFallback = true,
     ): EmailLog {
-        $provider = $this->mailConfig->resolveProvider($providerId);
-        $this->mailConfig->purgeExchangeClient();
-        $from = $this->mailConfig->resolveFromIdentity($provider);
-        $subject = MailHeaderSanitizer::line($subject, 500);
-        $fromName = MailHeaderSanitizer::line((string) ($fromName ?: ($from['name'] ?? '')), 255);
+        $primary = $this->mailConfig->resolveProvider($providerId);
+        $candidates = [$primary];
 
-        try {
-            if ($provider->driver === EmailDriver::Smtp) {
-                $this->phpMailerSmtp->send(
+        if ($allowFallback) {
+            foreach ($this->mailConfig->fallbackProviders($primary->id) as $fallback) {
+                $candidates[] = $fallback;
+            }
+        }
+
+        $subject = MailHeaderSanitizer::line($subject, 500);
+        $lastError = null;
+        $attemptErrors = [];
+
+        foreach ($candidates as $index => $provider) {
+            $this->mailConfig->purgeExchangeClient();
+            $from = $this->mailConfig->resolveFromIdentity($provider);
+            $resolvedFromName = MailHeaderSanitizer::line(
+                (string) ($fromName ?: ($from['name'] ?? '')),
+                255
+            );
+
+            try {
+                $this->sendViaProvider(
                     provider: $provider,
                     to: $to,
                     subject: $subject,
                     body: $body,
                     isHtml: $isHtml,
-                    fromAddress: (string) ($from['address'] ?? ''),
-                    fromName: $fromName,
+                    from: $from,
+                    fromName: $resolvedFromName,
                     cc: $cc,
                     bcc: $bcc,
-                    attachments: $attachmentPayload,
+                    attachmentPayload: $attachmentPayload,
                 );
-            } else {
-                $mailer = $this->mailConfig->applyProvider($provider);
 
-                Mail::mailer($mailer)->send([], [], function (Message $message) use ($to, $subject, $body, $isHtml, $from, $cc, $bcc, $fromName, $attachmentPayload) {
-                    $message->to($to)->subject($subject);
-
-                    if (! empty($from['address'])) {
-                        $message->from($from['address'], $fromName ?: $from['name']);
-                    }
-
-                    foreach ($cc as $address) {
-                        $message->cc($address);
-                    }
-
-                    foreach ($bcc as $address) {
-                        $message->bcc($address);
-                    }
-
-                    if ($isHtml) {
-                        $message->html($body);
-                    } else {
-                        $message->text($body);
-                    }
-
-                    foreach ($attachmentPayload as $attachment) {
-                        $message->attachData(
-                            $attachment['content'],
-                            $attachment['filename'],
-                            ['mime' => $attachment['content_type'] ?? 'application/octet-stream'],
-                        );
-                    }
-                });
-            }
-
-            $log->update(['status' => 'sent', 'error_message' => null]);
-
-            if ($cleanupAttachmentMeta !== []) {
-                $this->attachments->deleteStored($cleanupAttachmentMeta);
                 $meta = $log->meta ?? [];
-                unset($meta['attachments']);
-                $meta['attachment_count'] = count($cleanupAttachmentMeta);
-                $meta['attachments_delivered'] = true;
-                $log->update(['meta' => $meta]);
-            }
-        } catch (Throwable $e) {
-            if ($markFailedOnError) {
-                $log->update([
-                    'status' => 'failed',
-                    'error_message' => $e->getMessage(),
-                ]);
-            }
+                if ($index > 0) {
+                    $meta['fallback_from_provider_id'] = $primary->id;
+                    $meta['fallback_from_driver'] = $primary->driver->value;
+                    $meta['fallback_error'] = $lastError?->getMessage();
+                    $meta['fallback_attempts'] = $attemptErrors;
+                }
 
-            throw $e;
+                $log->update([
+                    'email_provider_id' => $provider->id,
+                    'driver' => $provider->driver->value,
+                    'status' => 'sent',
+                    'error_message' => null,
+                    'meta' => $meta,
+                ]);
+
+                if ($cleanupAttachmentMeta !== []) {
+                    $this->attachments->deleteStored($cleanupAttachmentMeta);
+                    $meta = $log->meta ?? [];
+                    unset($meta['attachments']);
+                    $meta['attachment_count'] = count($cleanupAttachmentMeta);
+                    $meta['attachments_delivered'] = true;
+                    $log->update(['meta' => $meta]);
+                }
+
+                return $log->fresh() ?? $log;
+            } catch (Throwable $e) {
+                $lastError = $e;
+                $attemptErrors[] = [
+                    'provider_id' => $provider->id,
+                    'driver' => $provider->driver->value,
+                    'error' => $e->getMessage(),
+                ];
+            }
         }
 
-        return $log->fresh();
+        if ($markFailedOnError && $lastError !== null) {
+            $meta = $log->meta ?? [];
+            if ($attemptErrors !== []) {
+                $meta['fallback_attempts'] = $attemptErrors;
+            }
+
+            $log->update([
+                'status' => 'failed',
+                'error_message' => $lastError->getMessage(),
+                'meta' => $meta,
+            ]);
+        }
+
+        throw $lastError ?? new RuntimeException('Email delivery failed.');
+    }
+
+    /**
+     * @param  array{address: string|null, name: string}  $from
+     * @param  array<int, string>  $cc
+     * @param  array<int, string>  $bcc
+     * @param  list<array{filename: string, content: string, content_type: string, size?: int}>  $attachmentPayload
+     */
+    private function sendViaProvider(
+        EmailProvider $provider,
+        string $to,
+        string $subject,
+        string $body,
+        bool $isHtml,
+        array $from,
+        string $fromName,
+        array $cc,
+        array $bcc,
+        array $attachmentPayload,
+    ): void {
+        if ($provider->driver === EmailDriver::Smtp) {
+            $this->phpMailerSmtp->send(
+                provider: $provider,
+                to: $to,
+                subject: $subject,
+                body: $body,
+                isHtml: $isHtml,
+                fromAddress: (string) ($from['address'] ?? ''),
+                fromName: $fromName,
+                cc: $cc,
+                bcc: $bcc,
+                attachments: $attachmentPayload,
+            );
+
+            return;
+        }
+
+        $mailer = $this->mailConfig->applyProvider($provider);
+
+        Mail::mailer($mailer)->send([], [], function (Message $message) use ($to, $subject, $body, $isHtml, $from, $cc, $bcc, $fromName, $attachmentPayload) {
+            $message->to($to)->subject($subject);
+
+            if (! empty($from['address'])) {
+                $message->from($from['address'], $fromName ?: $from['name']);
+            }
+
+            foreach ($cc as $address) {
+                $message->cc($address);
+            }
+
+            foreach ($bcc as $address) {
+                $message->bcc($address);
+            }
+
+            if ($isHtml) {
+                $message->html($body);
+            } else {
+                $message->text($body);
+            }
+
+            foreach ($attachmentPayload as $attachment) {
+                $message->attachData(
+                    $attachment['content'],
+                    $attachment['filename'],
+                    ['mime' => $attachment['content_type'] ?? 'application/octet-stream'],
+                );
+            }
+        });
     }
 }

@@ -60,7 +60,9 @@ class EmailLogRetryTest extends TestCase
             ->assertOk()
             ->assertJsonPath('total', 1)
             ->assertJsonPath('data.0.id', $failed->id)
-            ->assertJsonPath('data.0.can_retry', true);
+            ->assertJsonPath('data.0.can_retry', true)
+            ->assertJsonPath('data.0.body', '<p>Hello</p>')
+            ->assertJsonPath('data.0.is_html', true);
 
         $this->withToken($token)
             ->getJson('/api/v1/admin/email-logs?driver='.$provider->driver->value)

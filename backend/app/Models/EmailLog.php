@@ -87,6 +87,8 @@ class EmailLog extends Model
             'sender_ip' => is_string($meta['sender_ip'] ?? null) && $meta['sender_ip'] !== ''
                 ? $meta['sender_ip']
                 : null,
+            'body' => is_string($meta['body'] ?? null) ? $meta['body'] : null,
+            'is_html' => (bool) ($meta['is_html'] ?? false),
             'can_retry' => $canRetry,
             'attachment_count' => (int) ($meta['attachment_count'] ?? (is_array($meta['attachments'] ?? null) ? count($meta['attachments']) : 0)),
             'email_provider' => $this->emailProvider ? [
