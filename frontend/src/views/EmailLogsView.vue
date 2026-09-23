@@ -10,6 +10,7 @@ import { useAuthStore } from '@/stores/auth'
 type EmailLog = {
   id: number
   to: string
+  from_address?: string | null
   subject: string
   status: string
   driver: string | null
@@ -272,7 +273,7 @@ onMounted(async () => {
       :items-length="total"
       :headers="[
         { title: 'To / Subject', key: 'to_subject', sortable: false },
-        { title: 'Client', key: 'source' },
+        { title: 'Client / From', key: 'source', sortable: false },
         { title: 'IP address', key: 'sender_ip' },
         { title: 'Sending system', key: 'sending_system' },
         { title: 'Status', key: 'status' },
@@ -292,9 +293,12 @@ onMounted(async () => {
         <span class="font-weight-medium">{{ item.sending_system }}</span>
       </template>
       <template #item.source="{ item }">
-        <v-chip size="small" variant="tonal" color="primary">
-          {{ item.source }}
-        </v-chip>
+        <div class="client-from-cell">
+          <v-chip size="small" variant="tonal" color="primary" class="align-self-start">
+            {{ item.source }}
+          </v-chip>
+          <div class="client-from-cell__from">{{ item.from_address || '—' }}</div>
+        </div>
       </template>
       <template #item.sender_ip="{ item }">
         <span class="text-no-wrap text-caption">{{ item.sender_ip || '—' }}</span>
@@ -364,6 +368,7 @@ onMounted(async () => {
             </v-chip>
           </p>
           <p><strong>Client:</strong> {{ selectedLog.source || '—' }}</p>
+          <p><strong>From:</strong> {{ selectedLog.from_address || '—' }}</p>
           <p><strong>Sending system:</strong> {{ selectedLog.sending_system || '—' }}</p>
           <p><strong>Driver:</strong> {{ selectedLog.driver || '—' }}</p>
           <p><strong>Provider:</strong> {{ selectedLog.email_provider?.name || '—' }}</p>
@@ -437,6 +442,20 @@ onMounted(async () => {
   color: rgba(var(--v-theme-on-surface), 0.62);
   font-size: 0.8125rem;
   word-break: break-word;
+}
+
+.client-from-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  min-width: 10rem;
+  padding: 0.15rem 0;
+}
+
+.client-from-cell__from {
+  color: rgba(var(--v-theme-on-surface), 0.72);
+  font-size: 0.8125rem;
+  word-break: break-all;
 }
 
 .details-body p {
