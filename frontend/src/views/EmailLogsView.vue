@@ -38,7 +38,7 @@ const total = ref(0)
 const error = ref('')
 const message = ref('')
 const retryingId = ref<number | null>(null)
-const retryingAll = ref(false)
+const retryingBulk = ref<'failed' | 'pending' | null>(null)
 const detailsOpen = ref(false)
 const selectedLog = ref<EmailLog | null>(null)
 
@@ -149,7 +149,7 @@ async function retryAllFailed() {
     : 'all failed emails'
   if (!confirm(`Resend ${scope} that still have a stored body?`)) return
 
-  retryingAll.value = true
+  retryingBulk.value = 'failed'
   message.value = ''
   error.value = ''
   try {
@@ -165,7 +165,33 @@ async function retryAllFailed() {
   } catch (err) {
     error.value = apiErrorMessage(err, 'Could not resend failed emails.')
   } finally {
-    retryingAll.value = false
+    retryingBulk.value = null
+  }
+}
+
+async function retryAllPending() {
+  const scope = clientFilter.value
+    ? 'pending emails for the selected client'
+    : 'all pending emails'
+  if (!confirm(`Queue ${scope} that still have a stored body for send now?`)) return
+
+  retryingBulk.value = 'pending'
+  message.value = ''
+  error.value = ''
+  try {
+    const res = await api.post('/admin/email-logs/retry-pending', null, {
+      params: {
+        external_integration_id: clientFilter.value || undefined,
+      },
+    })
+    message.value = res.data.message || 'Pending emails queued for send.'
+    statusFilter.value = 'pending'
+    page.value = 1
+    await load()
+  } catch (err) {
+    error.value = apiErrorMessage(err, 'Could not queue pending emails.')
+  } finally {
+    retryingBulk.value = null
   }
 }
 
@@ -189,10 +215,23 @@ onMounted(async () => {
       <template #actions>
         <v-btn
           v-if="canResend"
+          color="warning"
+          variant="tonal"
+          prepend-icon="mdi-email-fast-outline"
+          class="me-2"
+          :loading="retryingBulk === 'pending'"
+          :disabled="retryingBulk !== null"
+          @click="retryAllPending"
+        >
+          Send all pending
+        </v-btn>
+        <v-btn
+          v-if="canResend"
           color="error"
           variant="tonal"
           prepend-icon="mdi-email-sync-outline"
-          :loading="retryingAll"
+          :loading="retryingBulk === 'failed'"
+          :disabled="retryingBulk !== null"
           @click="retryAllFailed"
         >
           Resend all failed

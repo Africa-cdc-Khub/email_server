@@ -260,8 +260,31 @@ class EmailDispatchService
      */
     public function retryAllFailed(?string $externalIntegrationId = null): array
     {
+        return $this->retryAllByStatus('failed', $externalIntegrationId);
+    }
+
+    /**
+     * Re-queue all pending emails that still have a stored body (stuck jobs).
+     *
+     * @return array{queued: int, skipped: int}
+     */
+    public function retryAllPending(?string $externalIntegrationId = null): array
+    {
+        return $this->retryAllByStatus('pending', $externalIntegrationId);
+    }
+
+    /**
+     * @param  'failed'|'pending'  $status
+     * @return array{queued: int, skipped: int}
+     */
+    public function retryAllByStatus(string $status, ?string $externalIntegrationId = null): array
+    {
+        if (! in_array($status, ['failed', 'pending'], true)) {
+            throw new RuntimeException('Unsupported email log status for bulk retry.');
+        }
+
         $query = EmailLog::query()
-            ->where('status', 'failed')
+            ->where('status', $status)
             ->orderBy('id');
 
         if ($externalIntegrationId !== null && $externalIntegrationId !== '') {

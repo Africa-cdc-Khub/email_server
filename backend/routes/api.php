@@ -69,6 +69,8 @@ Route::prefix('v1')->group(function () {
             Route::middleware(EnsureUserIsAdmin::class)->group(function () {
                 Route::post('/email-logs/retry-failed', [EmailLogController::class, 'retryFailed'])
                     ->middleware('throttle:10,1');
+                Route::post('/email-logs/retry-pending', [EmailLogController::class, 'retryPending'])
+                    ->middleware('throttle:10,1');
                 Route::post('/email-logs/{email_log}/retry', [EmailLogController::class, 'retry'])
                     ->middleware('throttle:30,1');
 

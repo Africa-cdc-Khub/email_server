@@ -147,6 +147,65 @@ class EmailLogRetryTest extends TestCase
         $this->assertDatabaseHas('email_logs', ['id' => $b->id, 'status' => 'pending']);
     }
 
+    public function test_admin_can_queue_all_pending(): void
+    {
+        Queue::fake();
+
+        $admin = User::factory()->create([
+            'is_admin' => true,
+            'is_active' => true,
+        ]);
+        $provider = EmailProvider::factory()->create([
+            'is_default' => true,
+            'is_active' => true,
+        ]);
+
+        $a = EmailLog::query()->create([
+            'email_provider_id' => $provider->id,
+            'to' => 'a@example.com',
+            'subject' => 'A',
+            'status' => 'pending',
+            'driver' => $provider->driver->value,
+            'meta' => ['body' => '<p>A</p>', 'is_html' => true],
+        ]);
+        $b = EmailLog::query()->create([
+            'email_provider_id' => $provider->id,
+            'to' => 'b@example.com',
+            'subject' => 'B',
+            'status' => 'pending',
+            'driver' => $provider->driver->value,
+            'meta' => ['body' => '<p>B</p>', 'is_html' => true],
+        ]);
+        EmailLog::query()->create([
+            'email_provider_id' => $provider->id,
+            'to' => 'c@example.com',
+            'subject' => 'C',
+            'status' => 'pending',
+            'driver' => $provider->driver->value,
+            'meta' => ['source' => 'admin'],
+        ]);
+        EmailLog::query()->create([
+            'email_provider_id' => $provider->id,
+            'to' => 'd@example.com',
+            'subject' => 'D',
+            'status' => 'failed',
+            'driver' => $provider->driver->value,
+            'meta' => ['body' => '<p>D</p>', 'is_html' => true],
+        ]);
+
+        $token = $admin->createToken('admin-panel')->plainTextToken;
+
+        $this->withToken($token)
+            ->postJson('/api/v1/admin/email-logs/retry-pending')
+            ->assertOk()
+            ->assertJsonPath('queued', 2)
+            ->assertJsonPath('skipped', 1);
+
+        Queue::assertPushed(SendEmailJob::class, 2);
+        $this->assertDatabaseHas('email_logs', ['id' => $a->id, 'status' => 'pending']);
+        $this->assertDatabaseHas('email_logs', ['id' => $b->id, 'status' => 'pending']);
+    }
+
     public function test_retry_without_stored_body_is_rejected(): void
     {
         $admin = User::factory()->create([

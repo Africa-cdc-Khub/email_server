@@ -216,6 +216,64 @@ class EmailLogController extends Controller
         return $this->retryFailedResponse($result['queued'], $result['skipped']);
     }
 
+    public function retryPending(Request $request, EmailDispatchService $dispatch): JsonResponse
+    {
+        /** @var User $user */
+        $user = $request->user();
+        $allowedIds = $user->allowedExternalIntegrationIds();
+
+        $client = $request->filled('external_integration_id')
+            ? (string) $request->input('external_integration_id')
+            : null;
+
+        if ($client !== null && $client !== 'none' && $client !== '0') {
+            $id = (int) $client;
+            if ($allowedIds !== null && ! in_array($id, $allowedIds, true)) {
+                return response()->json(['message' => 'You do not have access to that app credential.'], 403);
+            }
+        }
+
+        if ($allowedIds !== null && ($client === null || $client === 'none' || $client === '0')) {
+            if ($allowedIds === []) {
+                return response()->json([
+                    'message' => 'No pending emails found to queue.',
+                    'queued' => 0,
+                    'skipped' => 0,
+                ]);
+            }
+
+            $queued = 0;
+            $skipped = 0;
+            try {
+                foreach ($allowedIds as $integrationId) {
+                    $result = $dispatch->retryAllPending((string) $integrationId);
+                    $queued += $result['queued'];
+                    $skipped += $result['skipped'];
+                }
+            } catch (Throwable $e) {
+                report($e);
+
+                return response()->json([
+                    'message' => 'Could not queue pending emails for send.',
+                ], 500);
+            }
+
+            return $this->retryPendingResponse($queued, $skipped);
+        }
+
+        try {
+            $result = $dispatch->retryAllPending($client);
+        } catch (Throwable $e) {
+            report($e);
+
+            return response()->json([
+                'message' => 'Could not queue pending emails for send.',
+            ], 500);
+        }
+
+        return $this->retryPendingResponse($result['queued'], $result['skipped']);
+    }
+
     /**
      * @param  list<int>|null  $allowedIds
      */
@@ -248,6 +306,25 @@ class EmailLogController extends Controller
             'message' => $skipped > 0
                 ? "Queued {$queued} failed email(s) for resend. Skipped {$skipped} without a stored body."
                 : "Queued {$queued} failed email(s) for resend.",
+            'queued' => $queued,
+            'skipped' => $skipped,
+        ]);
+    }
+
+    private function retryPendingResponse(int $queued, int $skipped): JsonResponse
+    {
+        if ($queued === 0 && $skipped === 0) {
+            return response()->json([
+                'message' => 'No pending emails found to queue.',
+                'queued' => 0,
+                'skipped' => 0,
+            ]);
+        }
+
+        return response()->json([
+            'message' => $skipped > 0
+                ? "Queued {$queued} pending email(s) for send. Skipped {$skipped} without a stored body."
+                : "Queued {$queued} pending email(s) for send.",
             'queued' => $queued,
             'skipped' => $skipped,
         ]);
