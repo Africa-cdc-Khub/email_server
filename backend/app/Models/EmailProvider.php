@@ -35,6 +35,26 @@ class EmailProvider extends Model
         ];
     }
 
+    protected static function booted(): void
+    {
+        static::created(function (EmailProvider $provider): void {
+            $from = trim((string) $provider->from_address);
+            if ($from === '') {
+                return;
+            }
+
+            if ($provider->mailboxes()->exists()) {
+                return;
+            }
+
+            $provider->mailboxes()->create([
+                'email' => strtolower($from),
+                'is_active' => true,
+                'daily_quota' => 10000,
+            ]);
+        });
+    }
+
     public function integrations(): HasMany
     {
         return $this->hasMany(ExternalIntegration::class);
@@ -43,6 +63,65 @@ class EmailProvider extends Model
     public function emailLogs(): HasMany
     {
         return $this->hasMany(EmailLog::class);
+    }
+
+    public function mailboxes(): HasMany
+    {
+        return $this->hasMany(ProviderMailbox::class)->orderBy('id');
+    }
+
+    /**
+     * Keep legacy from_address in sync with the first active mailbox (compatibility).
+     */
+    public function syncLegacyFromAddress(?string $email): void
+    {
+        $this->forceFill(['from_address' => $email])->saveQuietly();
+    }
+
+    /**
+     * @param  list<array{id?: int|null, email: string, is_active?: bool, daily_quota?: int}>  $rows
+     */
+    public function syncMailboxes(array $rows): void
+    {
+        $keepIds = [];
+
+        foreach ($rows as $row) {
+            $email = strtolower(trim((string) ($row['email'] ?? '')));
+            if ($email === '') {
+                continue;
+            }
+
+            $payload = [
+                'email' => $email,
+                'is_active' => array_key_exists('is_active', $row) ? (bool) $row['is_active'] : true,
+                'daily_quota' => max(1, (int) ($row['daily_quota'] ?? 10000)),
+            ];
+
+            $id = isset($row['id']) ? (int) $row['id'] : 0;
+            if ($id > 0) {
+                $mailbox = $this->mailboxes()->whereKey($id)->first();
+                if ($mailbox) {
+                    $mailbox->update($payload);
+                    $keepIds[] = $mailbox->id;
+                    continue;
+                }
+            }
+
+            $mailbox = $this->mailboxes()->updateOrCreate(
+                ['email' => $email],
+                $payload
+            );
+            $keepIds[] = $mailbox->id;
+        }
+
+        if ($keepIds !== []) {
+            $this->mailboxes()->whereNotIn('id', $keepIds)->delete();
+        } else {
+            $this->mailboxes()->delete();
+        }
+
+        $firstActive = $this->mailboxes()->where('is_active', true)->orderBy('id')->value('email');
+        $this->syncLegacyFromAddress($firstActive ? (string) $firstActive : null);
     }
 
     public function configValue(string $key, mixed $default = null): mixed

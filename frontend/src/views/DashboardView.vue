@@ -21,6 +21,18 @@ type DashboardData = {
   stats: Record<string, number>
   email_activity: ActivityDay[]
   default_provider: { id: number; name: string; driver: string } | null
+  mailbox_quotas?: Array<{
+    provider_id: number
+    provider_name: string
+    mailboxes: Array<{
+      id: number
+      email: string
+      is_active: boolean
+      daily_quota: number
+      sent_24h: number
+      remaining_24h: number
+    }>
+  }>
   recent_logs: Array<{
     id: number
     to: string
@@ -140,6 +152,52 @@ onMounted(async () => {
           />
         </v-col>
       </v-row>
+
+      <ParentCard
+        v-if="auth.isAdmin && (data.mailbox_quotas?.length ?? 0) > 0"
+        title="Mailbox quotas (24h)"
+        class="mt-4"
+      >
+        <div
+          v-for="group in data.mailbox_quotas"
+          :key="group.provider_id"
+          class="mb-6"
+        >
+          <div class="text-subtitle-2 mb-3">{{ group.provider_name }}</div>
+          <div
+            v-for="box in group.mailboxes"
+            :key="box.id"
+            class="mb-4"
+          >
+            <div class="d-flex justify-space-between align-center mb-1">
+              <div>
+                <span class="font-weight-medium">{{ box.email }}</span>
+                <v-chip
+                  v-if="!box.is_active"
+                  size="x-small"
+                  class="ml-2"
+                  variant="tonal"
+                >
+                  Off
+                </v-chip>
+              </div>
+              <div class="text-body-2">
+                <strong>{{ box.remaining_24h }}</strong>
+                <span class="text-medium-emphasis"> left / {{ box.daily_quota }}</span>
+              </div>
+            </div>
+            <v-progress-linear
+              :model-value="box.daily_quota > 0 ? (box.sent_24h / box.daily_quota) * 100 : 0"
+              height="8"
+              rounded
+              :color="box.remaining_24h <= 0 ? 'error' : box.remaining_24h < box.daily_quota * 0.15 ? 'warning' : 'primary'"
+            />
+            <div class="text-caption text-medium-emphasis mt-1">
+              {{ box.sent_24h }} sent in the last 24 hours
+            </div>
+          </div>
+        </div>
+      </ParentCard>
 
       <ParentCard title="Recent email activity">
         <template #action>

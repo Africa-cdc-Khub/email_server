@@ -153,15 +153,23 @@ class CaptchaProtectionTest extends TestCase
             'slug' => 'log',
             'driver' => EmailDriver::Log,
             'config' => [],
+            'from_address' => 'noreply@example.com',
             'is_default' => true,
             'is_active' => true,
         ]);
+        $mailbox = $provider->mailboxes()->first()
+            ?? $provider->mailboxes()->create([
+                'email' => 'noreply@example.com',
+                'is_active' => true,
+                'daily_quota' => 10000,
+            ]);
 
         $admin = User::factory()->create(['is_admin' => true, 'is_active' => true]);
 
         $this->withToken($admin->createToken('admin-panel')->plainTextToken)
             ->postJson('/api/v1/admin/email-providers/'.$provider->id.'/test', [
                 'to' => 'recipient@example.com',
+                'from_mailbox_id' => $mailbox->id,
                 'captcha_key' => 'bad-key',
                 'captcha' => 'nope',
             ])

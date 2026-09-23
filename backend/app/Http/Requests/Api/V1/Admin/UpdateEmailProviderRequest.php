@@ -29,6 +29,11 @@ class UpdateEmailProviderRequest extends FormRequest
             'is_active' => ['sometimes', 'boolean'],
             'priority' => ['sometimes', 'integer', 'min:0', 'max:9999'],
             'description' => ['sometimes', 'nullable', 'string'],
+            'mailboxes' => ['sometimes', 'array', 'min:1'],
+            'mailboxes.*.id' => ['sometimes', 'nullable', 'integer'],
+            'mailboxes.*.email' => ['required_with:mailboxes', 'email', 'max:255'],
+            'mailboxes.*.is_active' => ['sometimes', 'boolean'],
+            'mailboxes.*.daily_quota' => ['sometimes', 'integer', 'min:1', 'max:1000000'],
         ];
     }
 }

@@ -8,7 +8,9 @@ use App\Http\Requests\Api\V1\Admin\StoreEmailProviderRequest;
 use App\Http\Requests\Api\V1\Admin\TestEmailProviderRequest;
 use App\Http\Requests\Api\V1\Admin\UpdateEmailProviderRequest;
 use App\Models\EmailProvider;
+use App\Models\ProviderMailbox;
 use App\Services\EmailDispatchService;
+use App\Services\MailboxSelector;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
@@ -76,6 +78,8 @@ class EmailProviderController extends Controller
     public function store(StoreEmailProviderRequest $request): JsonResponse
     {
         $data = $request->validated();
+        $mailboxes = $data['mailboxes'] ?? null;
+        unset($data['mailboxes']);
         $data['slug'] = $this->uniqueSlug($data['slug'] ?? null, $data['name']);
         $data['config'] = $data['config'] ?? [];
 
@@ -102,7 +106,17 @@ class EmailProviderController extends Controller
             throw $e;
         }
 
-        return response()->json(['data' => $this->transform($provider)], 201);
+        if (is_array($mailboxes) && $mailboxes !== []) {
+            $provider->syncMailboxes($mailboxes);
+        } elseif (! empty($provider->from_address) && ! $provider->mailboxes()->exists()) {
+            $provider->syncMailboxes([[
+                'email' => $provider->from_address,
+                'is_active' => true,
+                'daily_quota' => 10000,
+            ]]);
+        }
+
+        return response()->json(['data' => $this->transform($provider->fresh())], 201);
     }
 
     public function show(EmailProvider $emailProvider): JsonResponse
@@ -113,6 +127,8 @@ class EmailProviderController extends Controller
     public function update(UpdateEmailProviderRequest $request, EmailProvider $emailProvider): JsonResponse
     {
         $data = $request->validated();
+        $mailboxes = $data['mailboxes'] ?? null;
+        unset($data['mailboxes']);
 
         if (array_key_exists('is_active', $data) && $data['is_active'] === false && $emailProvider->is_default) {
             return response()->json([
@@ -160,13 +176,39 @@ class EmailProviderController extends Controller
             ], 422);
         }
 
+        if (is_array($mailboxes)) {
+            $emailProvider->syncMailboxes($mailboxes);
+            if ($emailProvider->is_active && ! $emailProvider->mailboxes()->where('is_active', true)->exists()) {
+                return response()->json([
+                    'message' => 'An active provider needs at least one enabled from mailbox.',
+                ], 422);
+            }
+        }
+
         return response()->json(['data' => $this->transform($emailProvider->fresh())]);
     }
 
     public function test(TestEmailProviderRequest $request, EmailProvider $emailProvider, EmailDispatchService $dispatch): JsonResponse
     {
+        $mailboxId = (int) $request->validated('from_mailbox_id');
+        $belongs = ProviderMailbox::query()
+            ->where('email_provider_id', $emailProvider->id)
+            ->whereKey($mailboxId)
+            ->exists();
+
+        if (! $belongs) {
+            return response()->json([
+                'message' => 'From mailbox does not belong to this provider.',
+            ], 422);
+        }
+
         try {
-            $log = $dispatch->testProvider($emailProvider, $request->validated('to'), $request->ip());
+            $log = $dispatch->testProvider(
+                $emailProvider,
+                $request->validated('to'),
+                $request->ip(),
+                $mailboxId,
+            );
         } catch (\Throwable $e) {
             report($e);
 
@@ -208,6 +250,8 @@ class EmailProviderController extends Controller
             unset($config[$key]);
         }
 
+        $mailboxes = app(MailboxSelector::class)->usageFor($provider);
+
         return [
             'id' => $provider->id,
             'name' => $provider->name,
@@ -219,6 +263,7 @@ class EmailProviderController extends Controller
             'config_corrupt' => ! $readable,
             'from_address' => $provider->from_address,
             'from_name' => $provider->from_name,
+            'mailboxes' => $mailboxes,
             'is_default' => $provider->is_default,
             'is_active' => $provider->is_active,
             'priority' => $provider->priority,

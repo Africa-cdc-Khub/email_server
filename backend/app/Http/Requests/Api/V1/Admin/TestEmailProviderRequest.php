@@ -21,6 +21,7 @@ class TestEmailProviderRequest extends FormRequest
 
         return [
             'to' => ['required', 'email'],
+            'from_mailbox_id' => ['required', 'integer', 'exists:provider_mailboxes,id'],
             'captcha_key' => [
                 Rule::requiredIf(fn () => $captcha->enabled()),
                 'nullable',

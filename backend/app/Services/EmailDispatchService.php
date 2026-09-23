@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Enums\EmailDriver;
+use App\Exceptions\MailboxQuotaExhaustedException;
 use App\Exceptions\PermanentEmailDeliveryException;
 use App\Jobs\SendEmailJob;
 use App\Models\EmailLog;
@@ -21,6 +22,7 @@ class EmailDispatchService
         private readonly EmailBrandingService $branding,
         private readonly PhpMailerSmtpMailer $phpMailerSmtp,
         private readonly EmailAttachmentService $attachments,
+        private readonly MailboxSelector $mailboxSelector,
     ) {}
 
     /**
@@ -140,6 +142,7 @@ class EmailDispatchService
             attachmentPayload: $loadedAttachments,
             cleanupAttachmentMeta: $attachmentMeta,
             allowFallback: true,
+            explicitMailboxId: null,
         );
     }
 
@@ -162,6 +165,7 @@ class EmailDispatchService
         ?string $source = null,
         ?string $senderIp = null,
         array $attachmentPayload = [],
+        ?int $explicitMailboxId = null,
     ): EmailLog {
         $provider = $this->mailConfig->resolveProvider($providerId);
 
@@ -216,6 +220,7 @@ class EmailDispatchService
             attachmentPayload: $attachmentPayload,
             cleanupAttachmentMeta: $stored,
             allowFallback: ($source ?? '') !== 'admin_test',
+            explicitMailboxId: $explicitMailboxId,
         );
     }
 
@@ -284,8 +289,12 @@ class EmailDispatchService
         return ['queued' => $queued, 'skipped' => $skipped];
     }
 
-    public function testProvider(EmailProvider $provider, string $to, ?string $senderIp = null): EmailLog
-    {
+    public function testProvider(
+        EmailProvider $provider,
+        string $to,
+        ?string $senderIp = null,
+        ?int $fromMailboxId = null,
+    ): EmailLog {
         $subject = 'Email Server test — '.$provider->name.' — '.now()->toDateTimeString();
         $body = '<p>This is a test email from the <strong>Email Server</strong> admin panel.</p>'
             .'<p>Provider: <code>'.e($provider->name).'</code> ('.e($provider->driver->value).')</p>';
@@ -301,6 +310,7 @@ class EmailDispatchService
             bcc: [],
             source: 'admin_test',
             senderIp: $senderIp,
+            explicitMailboxId: $fromMailboxId,
         );
     }
 
@@ -324,6 +334,7 @@ class EmailDispatchService
         array $attachmentPayload = [],
         array $cleanupAttachmentMeta = [],
         bool $allowFallback = true,
+        ?int $explicitMailboxId = null,
     ): EmailLog {
         $primary = $this->mailConfig->resolveProvider($providerId);
         $candidates = [$primary];
@@ -340,7 +351,24 @@ class EmailDispatchService
 
         foreach ($candidates as $index => $provider) {
             $this->mailConfig->purgeExchangeClient();
+
+            try {
+                $mailbox = $this->mailboxSelector->select(
+                    $provider,
+                    $index === 0 ? $explicitMailboxId : null,
+                );
+            } catch (MailboxQuotaExhaustedException|\InvalidArgumentException $e) {
+                $lastError = $e;
+                $attemptErrors[] = [
+                    'provider_id' => $provider->id,
+                    'driver' => $provider->driver->value,
+                    'error' => $e->getMessage(),
+                ];
+                continue;
+            }
+
             $from = $this->mailConfig->resolveFromIdentity($provider);
+            $from['address'] = $mailbox->email;
             $resolvedFromName = MailHeaderSanitizer::line(
                 (string) ($fromName ?: ($from['name'] ?? '')),
                 255
@@ -367,10 +395,13 @@ class EmailDispatchService
                     $meta['fallback_error'] = $lastError?->getMessage();
                     $meta['fallback_attempts'] = $attemptErrors;
                 }
+                $meta['from_address'] = $mailbox->email;
+                $meta['from_mailbox_id'] = $mailbox->id;
 
                 $log->update([
                     'email_provider_id' => $provider->id,
                     'driver' => $provider->driver->value,
+                    'from_address' => $mailbox->email,
                     'status' => 'sent',
                     'error_message' => null,
                     'meta' => $meta,

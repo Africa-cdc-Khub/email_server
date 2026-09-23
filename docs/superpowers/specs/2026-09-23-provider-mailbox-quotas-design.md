@@ -1,7 +1,7 @@
 # Provider mailbox load balancing & quotas
 
 **Date:** 2026-09-23  
-**Status:** Draft — pending review  
+**Status:** Implemented (2026-09-23)  
 **Surface:** Admin providers edit (`/providers/:id/edit`), dashboard (`/`), send/test paths
 
 ## Problem

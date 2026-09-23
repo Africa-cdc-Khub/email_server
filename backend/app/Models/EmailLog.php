@@ -14,6 +14,7 @@ class EmailLog extends Model
         'email_provider_id',
         'external_integration_id',
         'to',
+        'from_address',
         'subject',
         'status',
         'error_message',
@@ -78,6 +79,7 @@ class EmailLog extends Model
         return [
             'id' => $this->id,
             'to' => $this->to,
+            'from_address' => $this->from_address,
             'subject' => $this->subject,
             'status' => $this->status,
             'driver' => $this->driver,

@@ -7,6 +7,7 @@ use App\Models\EmailLog;
 use App\Models\EmailProvider;
 use App\Models\ExternalIntegration;
 use App\Models\User;
+use App\Services\MailboxSelector;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -54,8 +55,31 @@ class DashboardController extends Controller
                 'name' => $default->name,
                 'driver' => $default->driver->value,
             ] : null,
+            'mailbox_quotas' => $user->is_admin
+                ? $this->mailboxQuotas(app(MailboxSelector::class))
+                : [],
             'recent_logs' => $recent,
         ]);
+    }
+
+    /**
+     * @return list<array{provider_id: int, provider_name: string, mailboxes: list<array<string, mixed>>}>
+     */
+    private function mailboxQuotas(MailboxSelector $selector): array
+    {
+        return EmailProvider::query()
+            ->where('is_active', true)
+            ->orderByDesc('is_default')
+            ->orderBy('priority')
+            ->orderBy('name')
+            ->get()
+            ->map(fn (EmailProvider $provider) => [
+                'provider_id' => $provider->id,
+                'provider_name' => $provider->name,
+                'mailboxes' => $selector->usageFor($provider),
+            ])
+            ->values()
+            ->all();
     }
 
     /**
