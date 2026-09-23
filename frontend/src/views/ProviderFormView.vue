@@ -124,40 +124,44 @@ async function loadProvider() {
     if (form.value.mailboxes.length === 0) addMailbox()
     return
   }
-  const res = await api.get(`/admin/email-providers/${id.value}`)
-  const p = res.data.data
-  storedSecrets.value = { ...(p.config_secrets ?? {}) }
-  configCorrupt.value = Boolean(p.config_corrupt)
+  try {
+    const res = await api.get(`/admin/email-providers/${id.value}`)
+    const p = res.data.data
+    storedSecrets.value = { ...(p.config_secrets ?? {}) }
+    configCorrupt.value = Boolean(p.config_corrupt)
 
-  const config: Record<string, string | number> = { ...(p.config ?? {}) }
-  for (const key of SECRET_KEYS) {
-    delete config[key]
+    const config: Record<string, string | number> = { ...(p.config ?? {}) }
+    for (const key of SECRET_KEYS) {
+      delete config[key]
+    }
+
+    const mailboxes: MailboxRow[] = (p.mailboxes ?? []).map((m: MailboxRow) => ({
+      id: m.id,
+      email: m.email,
+      is_active: m.is_active !== false,
+      daily_quota: m.daily_quota ?? 10000,
+      sent_24h: m.sent_24h ?? 0,
+      remaining_24h: m.remaining_24h ?? m.daily_quota ?? 10000,
+    }))
+
+    form.value = {
+      name: p.name,
+      driver: p.driver,
+      from_name: p.from_name ?? '',
+      is_active: p.is_active,
+      is_default: p.is_default,
+      priority: p.priority,
+      description: p.description ?? '',
+      config,
+      mailboxes: mailboxes.length
+        ? mailboxes
+        : [{ id: null, email: p.from_address ?? '', is_active: true, daily_quota: p.default_mailbox_quota ?? defaultMailboxQuota() }],
+    }
+
+    testMailboxId.value = testMailboxItems.value[0]?.value ?? null
+  } catch (err) {
+    error.value = apiErrorMessage(err, 'Could not load provider.')
   }
-
-  const mailboxes: MailboxRow[] = (p.mailboxes ?? []).map((m: MailboxRow) => ({
-    id: m.id,
-    email: m.email,
-    is_active: m.is_active !== false,
-    daily_quota: m.daily_quota ?? 10000,
-    sent_24h: m.sent_24h ?? 0,
-    remaining_24h: m.remaining_24h ?? m.daily_quota ?? 10000,
-  }))
-
-  form.value = {
-    name: p.name,
-    driver: p.driver,
-    from_name: p.from_name ?? '',
-    is_active: p.is_active,
-    is_default: p.is_default,
-    priority: p.priority,
-    description: p.description ?? '',
-    config,
-    mailboxes: mailboxes.length
-      ? mailboxes
-      : [{ id: null, email: p.from_address ?? '', is_active: true, daily_quota: p.default_mailbox_quota ?? defaultMailboxQuota() }],
-  }
-
-  testMailboxId.value = testMailboxItems.value[0]?.value ?? null
 }
 
 function buildConfigPayload(): Record<string, string | number> {
@@ -271,9 +275,15 @@ async function sendTest() {
 
 onMounted(async () => {
   loading.value = true
-  await loadDrivers()
-  await loadProvider()
-  loading.value = false
+  error.value = ''
+  try {
+    await loadDrivers()
+    await loadProvider()
+  } catch (err) {
+    error.value = apiErrorMessage(err, 'Could not load provider form.')
+  } finally {
+    loading.value = false
+  }
 })
 </script>
 

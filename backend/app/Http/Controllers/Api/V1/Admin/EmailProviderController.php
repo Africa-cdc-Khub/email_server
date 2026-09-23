@@ -122,7 +122,15 @@ class EmailProviderController extends Controller
 
     public function show(EmailProvider $emailProvider): JsonResponse
     {
-        return response()->json(['data' => $this->transform($emailProvider)]);
+        try {
+            return response()->json(['data' => $this->transform($emailProvider)]);
+        } catch (\Throwable $e) {
+            report($e);
+
+            return response()->json([
+                'message' => 'Could not load provider. If mailbox quotas were just deployed, run migrations (provider_mailboxes / email_logs.from_address).',
+            ], 500);
+        }
     }
 
     public function update(UpdateEmailProviderRequest $request, EmailProvider $emailProvider): JsonResponse
@@ -251,7 +259,23 @@ class EmailProviderController extends Controller
             unset($config[$key]);
         }
 
-        $mailboxes = app(MailboxSelector::class)->usageFor($provider);
+        $mailboxes = [];
+        try {
+            $mailboxes = app(MailboxSelector::class)->usageFor($provider);
+        } catch (\Throwable $e) {
+            report($e);
+        }
+
+        if ($mailboxes === [] && ! empty($provider->from_address)) {
+            $mailboxes = [[
+                'id' => null,
+                'email' => $provider->from_address,
+                'is_active' => true,
+                'daily_quota' => $provider->defaultMailboxQuota(),
+                'sent_24h' => 0,
+                'remaining_24h' => $provider->defaultMailboxQuota(),
+            ]];
+        }
 
         return [
             'id' => $provider->id,
