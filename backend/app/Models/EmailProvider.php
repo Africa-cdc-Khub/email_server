@@ -50,7 +50,7 @@ class EmailProvider extends Model
             $provider->mailboxes()->create([
                 'email' => strtolower($from),
                 'is_active' => true,
-                'daily_quota' => 10000,
+                'daily_quota' => $provider->defaultMailboxQuota(),
             ]);
         });
     }
@@ -68,6 +68,18 @@ class EmailProvider extends Model
     public function mailboxes(): HasMany
     {
         return $this->hasMany(ProviderMailbox::class)->orderBy('id');
+    }
+
+    /**
+     * Suggested per-mailbox daily send cap for this driver.
+     * SMTP defaults to Hostinger's typical 500/day limit; Exchange/others use 10_000.
+     */
+    public function defaultMailboxQuota(): int
+    {
+        return match ($this->driver) {
+            EmailDriver::Smtp => 500,
+            default => 10000,
+        };
     }
 
     /**
@@ -94,7 +106,7 @@ class EmailProvider extends Model
             $payload = [
                 'email' => $email,
                 'is_active' => array_key_exists('is_active', $row) ? (bool) $row['is_active'] : true,
-                'daily_quota' => max(1, (int) ($row['daily_quota'] ?? 10000)),
+                'daily_quota' => max(1, (int) ($row['daily_quota'] ?? $this->defaultMailboxQuota())),
             ];
 
             $id = isset($row['id']) ? (int) $row['id'] : 0;

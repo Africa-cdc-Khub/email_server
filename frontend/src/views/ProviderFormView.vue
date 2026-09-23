@@ -17,7 +17,7 @@ type DriverField = {
   options?: Array<{ value: string; label: string }>
 }
 
-type Driver = { value: string; label: string; fields: DriverField[] }
+type Driver = { value: string; label: string; fields: DriverField[]; default_mailbox_quota?: number }
 
 type MailboxRow = {
   id?: number | null
@@ -86,12 +86,17 @@ function secretHint(field: DriverField): string {
   return ''
 }
 
+function defaultMailboxQuota(): number {
+  return activeDriver.value?.default_mailbox_quota
+    ?? (form.value.driver === 'smtp' ? 500 : 10000)
+}
+
 function addMailbox() {
   form.value.mailboxes.push({
     id: null,
     email: '',
     is_active: true,
-    daily_quota: 10000,
+    daily_quota: defaultMailboxQuota(),
   })
 }
 
@@ -147,7 +152,9 @@ async function loadProvider() {
     priority: p.priority,
     description: p.description ?? '',
     config,
-    mailboxes: mailboxes.length ? mailboxes : [{ id: null, email: p.from_address ?? '', is_active: true, daily_quota: 10000 }],
+    mailboxes: mailboxes.length
+      ? mailboxes
+      : [{ id: null, email: p.from_address ?? '', is_active: true, daily_quota: p.default_mailbox_quota ?? defaultMailboxQuota() }],
   }
 
   testMailboxId.value = testMailboxItems.value[0]?.value ?? null
@@ -180,7 +187,7 @@ async function save() {
         id: m.id ?? undefined,
         email: m.email.trim(),
         is_active: m.is_active,
-        daily_quota: Number(m.daily_quota) || 10000,
+        daily_quota: Number(m.daily_quota) || defaultMailboxQuota(),
       }))
 
     if (mailboxes.length === 0) {
@@ -354,7 +361,13 @@ onMounted(async () => {
         <div>
           <div class="text-subtitle-1 font-weight-bold">From mailboxes</div>
           <div class="text-medium-emphasis text-body-2">
-            Sends rotate to the mailbox with the most remaining 24h quota (default 10,000).
+            Sends rotate to the mailbox with the most remaining 24h quota.
+            <template v-if="form.driver === 'smtp'">
+              SMTP defaults to <strong>500/day</strong> (Hostinger’s typical mailbox cap); change per address if your plan differs.
+            </template>
+            <template v-else>
+              Default is <strong>10,000/day</strong> per mailbox.
+            </template>
           </div>
         </div>
         <v-btn variant="tonal" color="primary" prepend-icon="mdi-plus" @click="addMailbox">Add mailbox</v-btn>

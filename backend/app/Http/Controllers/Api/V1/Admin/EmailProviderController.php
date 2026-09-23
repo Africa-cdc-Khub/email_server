@@ -70,6 +70,7 @@ class EmailProviderController extends Controller
             'value' => $driver->value,
             'label' => $driver->label(),
             'fields' => $this->driverFields($driver),
+            'default_mailbox_quota' => $driver === EmailDriver::Smtp ? 500 : 10000,
         ]);
 
         return response()->json(['data' => $drivers]);
@@ -112,7 +113,7 @@ class EmailProviderController extends Controller
             $provider->syncMailboxes([[
                 'email' => $provider->from_address,
                 'is_active' => true,
-                'daily_quota' => 10000,
+                'daily_quota' => $provider->defaultMailboxQuota(),
             ]]);
         }
 
@@ -264,6 +265,7 @@ class EmailProviderController extends Controller
             'from_address' => $provider->from_address,
             'from_name' => $provider->from_name,
             'mailboxes' => $mailboxes,
+            'default_mailbox_quota' => $provider->defaultMailboxQuota(),
             'is_default' => $provider->is_default,
             'is_active' => $provider->is_active,
             'priority' => $provider->priority,

@@ -45,6 +45,7 @@ class ProviderMailboxQuotaTest extends TestCase
     {
         $provider = EmailProvider::factory()->create([
             'from_address' => 'notifications@example.com',
+            'driver' => EmailDriver::Exchange,
         ]);
 
         $this->assertDatabaseHas('provider_mailboxes', [
@@ -53,6 +54,27 @@ class ProviderMailboxQuotaTest extends TestCase
             'daily_quota' => 10000,
             'is_active' => true,
         ]);
+    }
+
+    public function test_smtp_provider_seeds_mailbox_with_hostinger_default_quota(): void
+    {
+        $provider = EmailProvider::factory()->create([
+            'from_address' => 'smtp@example.com',
+            'driver' => EmailDriver::Smtp,
+            'config' => [
+                'host' => 'smtp.example.com',
+                'port' => 587,
+                'encryption' => 'tls',
+            ],
+        ]);
+
+        $this->assertDatabaseHas('provider_mailboxes', [
+            'email_provider_id' => $provider->id,
+            'email' => 'smtp@example.com',
+            'daily_quota' => 500,
+            'is_active' => true,
+        ]);
+        $this->assertSame(500, $provider->defaultMailboxQuota());
     }
 
     public function test_selects_mailbox_with_most_remaining_quota(): void
