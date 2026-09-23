@@ -18,7 +18,7 @@ Each Microsoft 365 / SMTP mailbox is subject to a daily send quota (typically **
 
 | Topic | Choice |
 |---|---|
-| Selection algorithm | **Least-used** over a rolling **24h** window (most remaining quota wins; ties → lowest mailbox id) |
+| Selection algorithm | Originally **least-used remaining quota**. **Superseded** by [mailbox weights](./2026-09-23-mailbox-weights-design.md): deficit `sent_24h / weight` among boxes with remaining quota (default weight 1 = equal share). |
 | Exhausted provider | Fail that provider attempt → existing **provider fallback** chain continues (e.g. SMTP) **only when mailbox quota is depleted** (or no enabled mailboxes). Transport/API errors on Exchange do **not** fall back to SMTP. |
 | Disabled mailboxes | Never selected for automatic sends; disabled-only providers count as exhausted for fallback. |
 | Scope | **All** provider drivers (Exchange, SMTP, SES, Log) |
@@ -111,7 +111,7 @@ Unique index: `(email_provider_id, email)`.
 ## Out of scope
 
 - Per-mailbox from-name  
-- Weighted / round-robin selection  
+- Weighted selection — **done in** [mailbox weights](./2026-09-23-mailbox-weights-design.md)  
 - Queue-and-wait when exhausted  
 - Soft overrun  
 - Non-admin dashboard mailbox stats  
