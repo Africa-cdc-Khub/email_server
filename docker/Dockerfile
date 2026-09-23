@@ -7,7 +7,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     COMPOSER_ALLOW_SUPERUSER=1 \
     COMPOSER_AUDIT=false
 
-# Faster, reliable extension installer (pdo_mysql, redis, opcache, …)
+# Faster, reliable extension installer (pdo_pgsql, redis, opcache, …)
 COPY --from=mlocati/php-extension-installer:2 /usr/bin/install-php-extensions /usr/local/bin/
 
 RUN apt-get update \
@@ -18,7 +18,7 @@ RUN apt-get update \
         zip \
         ca-certificates \
     && install-php-extensions \
-        pdo_mysql \
+        pdo_pgsql \
         mbstring \
         bcmath \
         opcache \

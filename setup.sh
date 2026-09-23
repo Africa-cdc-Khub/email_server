@@ -26,7 +26,6 @@ DOMAIN="${DOMAIN:-notifications.africacdc.org}"
 ADMIN_EMAIL="${ADMIN_EMAIL:-andrewa@africacdc.org}"
 ADMIN_PASSWORD="${ADMIN_PASSWORD:-}"
 DB_PASSWORD="${DB_PASSWORD:-}"
-MYSQL_ROOT_PASSWORD="${MYSQL_ROOT_PASSWORD:-}"
 JWT_SECRET="${JWT_SECRET:-}"
 JWT_TTL="${JWT_TTL:-60}"
 DATA_PATH="${EMAIL_SERVER_DATA_PATH:-/home/email_serverdata}"
@@ -40,9 +39,9 @@ EXCHANGE_AUTH_METHOD="${EXCHANGE_AUTH_METHOD:-client_credentials}"
 EXCHANGE_SCOPE="${EXCHANGE_SCOPE:-https://graph.microsoft.com/.default}"
 INTEGRATION_CLIENT_SECRET="${INTEGRATION_CLIENT_SECRET:-}"
 QUEUE_SCALE="${QUEUE_SCALE:-1}"
-MYSQL_HOST_PORT="${MYSQL_HOST_PORT:-3309}"
+POSTGRES_HOST_PORT="${POSTGRES_HOST_PORT:-5433}"
 FORCE_VENDOR_REINSTALL="${FORCE_VENDOR_REINSTALL:-false}"
-RESET_MYSQL="${RESET_MYSQL:-false}"
+RESET_POSTGRES="${RESET_POSTGRES:-false}"
 RESET_REDIS="${RESET_REDIS:-false}"
 RUN_SEEDER="${RUN_SEEDER:-true}"
 SKIP_SSL="${SKIP_SSL:-false}"
@@ -73,12 +72,12 @@ setup.sh NEVER overwrites existing docker/.env / backend/.env unless you pass
 Optional flags:
   --env-file=PATH               Load KEY=VALUE into this shell (does not overwrite .env unless --write-env)
   --domain=HOST                 Used with --write-env / nginx site name
-  --data-path=PATH              Persistent MySQL/Redis/storage path
+  --data-path=PATH              Persistent Postgres/Redis/storage path
   --queue-scale=N               docker compose --scale queue=N (default: 1)
-  --mysql-host-port=PORT        Host MySQL port (default: 3309)
+  --postgres-host-port=PORT     Host Postgres port (default: 5433)
   --force-vendor                Wipe backend/vendor and reinstall via composer
-  --reset-mysql                 OPTIONAL wipe of MySQL data (DESTROYS DATA)
-  --reset-redis                 Wipe Redis data dir (queues/cache only — safe vs MySQL)
+  --reset-postgres              OPTIONAL wipe of Postgres data (DESTROYS DATA)
+  --reset-redis                 Wipe Redis data dir (queues/cache only — safe vs Postgres)
   --run-seeder=true|false       Seed admin/providers (default: true)
   --write-env                   Rewrite docker/.env + backend/.env from flags/--env-file
   --skip-ssl                    Skip Certbot TLS setup
@@ -88,7 +87,7 @@ Optional flags:
   -h, --help
 
 Required keys in docker/.env (edit manually):
-  ADMIN_PASSWORD, DB_PASSWORD, MYSQL_ROOT_PASSWORD, JWT_SECRET (>=32 chars)
+  ADMIN_PASSWORD, DB_PASSWORD, JWT_SECRET (>=32 chars)
 EOF
 }
 
@@ -204,7 +203,7 @@ if [[ -n "$ENV_FILE" ]]; then
   DATA_PATH="${EMAIL_SERVER_DATA_PATH:-${DATA_PATH:-/home/email_serverdata}}"
   JWT_TTL="${JWT_TTL:-60}"
   QUEUE_SCALE="${QUEUE_SCALE:-1}"
-  MYSQL_HOST_PORT="${MYSQL_HOST_PORT:-3309}"
+  POSTGRES_HOST_PORT="${POSTGRES_HOST_PORT:-5433}"
   RUN_SEEDER="${RUN_SEEDER:-true}"
   SKIP_SSL="${SKIP_SSL:-false}"
 fi
@@ -217,7 +216,6 @@ while [[ $# -gt 0 ]]; do
     --admin-email=*) ADMIN_EMAIL="${1#*=}" ;;
     --admin-password=*) ADMIN_PASSWORD="${1#*=}" ;;
     --db-password=*) DB_PASSWORD="${1#*=}" ;;
-    --mysql-root-password=*) MYSQL_ROOT_PASSWORD="${1#*=}" ;;
     --jwt-secret=*) JWT_SECRET="${1#*=}" ;;
     --jwt-ttl=*) JWT_TTL="${1#*=}" ;;
     --data-path=*) DATA_PATH="${1#*=}" ;;
@@ -229,9 +227,9 @@ while [[ $# -gt 0 ]]; do
     --exchange-client-secret=*) EXCHANGE_CLIENT_SECRET="${1#*=}" ;;
     --integration-client-secret=*) INTEGRATION_CLIENT_SECRET="${1#*=}" ;;
     --queue-scale=*) QUEUE_SCALE="${1#*=}" ;;
-    --mysql-host-port=*) MYSQL_HOST_PORT="${1#*=}" ;;
+    --postgres-host-port=*) POSTGRES_HOST_PORT="${1#*=}" ;;
     --force-vendor) FORCE_VENDOR_REINSTALL=true ;;
-    --reset-mysql) RESET_MYSQL=true ;;
+    --reset-postgres) RESET_POSTGRES=true ;;
     --reset-redis) RESET_REDIS=true ;;
     --run-seeder=*) RUN_SEEDER="${1#*=}" ;;
     --write-env) WRITE_ENV=true ;;
@@ -252,7 +250,7 @@ if [[ ! -f "$ROOT/docker/.env" ]]; then
   cp "$ROOT/docker/.env.example" "$ROOT/docker/.env"
   chmod 600 "$ROOT/docker/.env"
   warn "Created docker/.env from example — edit secrets, then re-run ./setup.sh"
-  die "Stopped: fill ADMIN_PASSWORD, DB_PASSWORD, MYSQL_ROOT_PASSWORD, JWT_SECRET in docker/.env"
+  die "Stopped: fill ADMIN_PASSWORD, DB_PASSWORD, JWT_SECRET in docker/.env"
 fi
 
 if [[ ! -f "$ROOT/backend/.env" ]]; then
@@ -280,11 +278,10 @@ fi
 ADMIN_EMAIL="$(env_file_get "$ROOT/docker/.env" ADMIN_EMAIL)"; ADMIN_EMAIL="${ADMIN_EMAIL:-andrewa@africacdc.org}"
 ADMIN_PASSWORD="$(env_file_get "$ROOT/docker/.env" ADMIN_PASSWORD)"
 DB_PASSWORD="$(env_file_get "$ROOT/docker/.env" DB_PASSWORD)"
-MYSQL_ROOT_PASSWORD="$(env_file_get "$ROOT/docker/.env" MYSQL_ROOT_PASSWORD)"
 JWT_SECRET="$(env_file_get "$ROOT/docker/.env" JWT_SECRET)"
 JWT_TTL="$(env_file_get "$ROOT/docker/.env" JWT_TTL)"; JWT_TTL="${JWT_TTL:-60}"
 DATA_PATH="$(env_file_get "$ROOT/docker/.env" EMAIL_SERVER_DATA_PATH)"; DATA_PATH="${DATA_PATH:-/home/email_serverdata}"
-MYSQL_HOST_PORT="$(env_file_get "$ROOT/docker/.env" MYSQL_HOST_PORT)"; MYSQL_HOST_PORT="${MYSQL_HOST_PORT:-3309}"
+POSTGRES_HOST_PORT="$(env_file_get "$ROOT/docker/.env" POSTGRES_HOST_PORT)"; POSTGRES_HOST_PORT="${POSTGRES_HOST_PORT:-5433}"
 API_HOST_PORT="$(env_file_get "$ROOT/docker/.env" API_HOST_PORT)"; API_HOST_PORT="${API_HOST_PORT:-8089}"
 RUN_SEEDER="$(env_file_get "$ROOT/docker/.env" RUN_SEEDER)"; RUN_SEEDER="${RUN_SEEDER:-true}"
 APP_ENV="$(env_file_get "$ROOT/docker/.env" APP_ENV)"; APP_ENV="${APP_ENV:-production}"
@@ -316,7 +313,6 @@ is_placeholder() {
 
 is_placeholder "$ADMIN_PASSWORD" && die "Set a real ADMIN_PASSWORD in docker/.env (not a placeholder), then re-run ./setup.sh"
 is_placeholder "$DB_PASSWORD" && die "Set a real DB_PASSWORD in docker/.env, then re-run ./setup.sh"
-is_placeholder "$MYSQL_ROOT_PASSWORD" && die "Set a real MYSQL_ROOT_PASSWORD in docker/.env, then re-run ./setup.sh"
 [[ -n "$JWT_SECRET" ]] || die "Set JWT_SECRET in docker/.env (>=32 chars)"
 [[ "${#JWT_SECRET}" -ge 32 ]] || die "JWT_SECRET in docker/.env must be at least 32 characters"
 [[ "$SKIP_SSL" == "true" ]] || [[ -n "$CERTBOT_EMAIL" ]] || die "Set CERTBOT_EMAIL in the environment or use --skip-ssl (default: ADMIN_EMAIL)"
@@ -355,13 +351,12 @@ if [[ "$WRITE_ENV" == "true" ]]; then
     "APP_URL=${APP_URL}" \
     "FRONTEND_URL=${FRONTEND_URL}" \
     "API_HOST_PORT=${API_HOST_PORT}" \
-    "MYSQL_HOST_PORT=${MYSQL_HOST_PORT}" \
+    "POSTGRES_HOST_PORT=${POSTGRES_HOST_PORT}" \
     "REDIS_CLIENT=predis" \
     "ADMIN_EMAIL=${ADMIN_EMAIL}" \
     "ADMIN_PASSWORD=${ADMIN_PASSWORD}" \
     "ADMIN_RESET_PASSWORD=true" \
     "DB_PASSWORD=${DB_PASSWORD}" \
-    "MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD}" \
     "JWT_SECRET=${JWT_SECRET}" \
     "JWT_TTL=${JWT_TTL}" \
     "API_DOCS_ENABLED=${API_DOCS_ENABLED:-true}" \
@@ -376,7 +371,9 @@ if [[ "$WRITE_ENV" == "true" ]]; then
   set_backend_env "APP_DEBUG" "$APP_DEBUG"
   set_backend_env "APP_URL" "$APP_URL"
   set_backend_env "FRONTEND_URL" "$FRONTEND_URL"
-  set_backend_env "DB_HOST" "mysql"
+  set_backend_env "DB_CONNECTION" "pgsql"
+  set_backend_env "DB_HOST" "postgres"
+  set_backend_env "DB_PORT" "5432"
   set_backend_env "DB_DATABASE" "email_server"
   set_backend_env "DB_USERNAME" "email_server"
   set_backend_env "DB_PASSWORD" "$DB_PASSWORD"
@@ -439,12 +436,12 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 1. Persistent data dirs (MySQL, Redis, Laravel storage)
+# 1. Persistent data dirs (Postgres, Redis, Laravel storage)
 # ---------------------------------------------------------------------------
 log "Creating data directories under $DATA_PATH"
 ensure_data_dirs() {
   mkdir -p \
-    "$DATA_PATH/mysql" \
+    "$DATA_PATH/postgres" \
     "$DATA_PATH/redis" \
     "$DATA_PATH/storage/app/public" \
     "$DATA_PATH/storage/app/private" \
@@ -460,7 +457,7 @@ if ensure_data_dirs 2>/dev/null; then
   :
 else
   run_root bash -c "mkdir -p \
-    '$DATA_PATH/mysql' \
+    '$DATA_PATH/postgres' \
     '$DATA_PATH/redis' \
     '$DATA_PATH/storage/app/public' \
     '$DATA_PATH/storage/app/private' \
@@ -674,23 +671,23 @@ docker_env_get() {
 }
 
 sql_escape() {
-  # Escape \ and ' for MySQL string literals
+  # Escape \ and ' for SQL string literals
   local s="$1"
   s="${s//\\/\\\\}"
   s="${s//\'/\\\'}"
   printf '%s' "$s"
 }
 
-wait_for_mysql_healthy() {
+wait_for_postgres_healthy() {
   local i
-  log "Waiting for MySQL container to be healthy"
+  log "Waiting for Postgres container to be healthy"
   for i in $(seq 1 36); do
-    if "${COMPOSE[@]}" ps mysql 2>/dev/null | grep -qi 'healthy'; then
+    if "${COMPOSE[@]}" ps postgres 2>/dev/null | grep -qi 'healthy'; then
       return 0
     fi
     sleep 5
   done
-  warn "MySQL did not report healthy — continuing anyway"
+  warn "Postgres did not report healthy — continuing anyway"
   return 0
 }
 
@@ -779,7 +776,7 @@ Fix on the server:
   docker compose logs redis --tail 80
 
 Usually caused by bad permissions or corrupt AOF in ${DATA_PATH}/redis.
-Safe recovery (queues/cache only — does NOT touch MySQL):
+Safe recovery (queues/cache only — does NOT touch Postgres):
   cd $ROOT && ./setup.sh --reset-redis
 
 Or manually:
@@ -791,8 +788,7 @@ Or manually:
 }
 
 # Must test with the SAME credentials Laravel uses (container env + backend/.env).
-# Do NOT inject a different password here — that caused false "auth OK" while login 500'd.
-mysql_app_auth_ok() {
+postgres_app_auth_ok() {
   "${COMPOSE[@]}" exec -T app php -r '
     require "vendor/autoload.php";
     $app = require "bootstrap/app.php";
@@ -809,177 +805,105 @@ mysql_app_auth_ok() {
   ' >/dev/null 2>&1
 }
 
-mysql_root_auth_ok() {
-  local root_pass="$1"
-  # Real query — mysqladmin ping can be misleading with auth failures
-  "${COMPOSE[@]}" exec -T -e MYSQL_PWD="$root_pass" mysql \
-    mysql -u root -h 127.0.0.1 -e 'SELECT 1;' >/dev/null 2>&1
-}
-
-reset_mysql_app_user() {
-  local root_pass="$1"
-  local esc_pass="$2"
-  local hosts host
-
-  "${COMPOSE[@]}" exec -T -e MYSQL_PWD="$root_pass" mysql \
-    mysql -u root -h 127.0.0.1 -e "
-CREATE DATABASE IF NOT EXISTS email_server CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-CREATE USER IF NOT EXISTS 'email_server'@'%' IDENTIFIED BY '${esc_pass}';
-ALTER USER 'email_server'@'%' IDENTIFIED BY '${esc_pass}';
-GRANT ALL PRIVILEGES ON email_server.* TO 'email_server'@'%';
-FLUSH PRIVILEGES;
-" || return 1
-
-  # Sync password for every host the user already exists on (localhost, %, etc.)
-  hosts="$("${COMPOSE[@]}" exec -T -e MYSQL_PWD="$root_pass" mysql \
-    mysql -u root -h 127.0.0.1 -N -e "SELECT Host FROM mysql.user WHERE User='email_server';" 2>/dev/null | tr -d '\r')"
-  while IFS= read -r host; do
-    [[ -z "$host" ]] && continue
-    "${COMPOSE[@]}" exec -T -e MYSQL_PWD="$root_pass" mysql \
-      mysql -u root -h 127.0.0.1 -e "ALTER USER 'email_server'@'${host}' IDENTIFIED BY '${esc_pass}'; GRANT ALL PRIVILEGES ON email_server.* TO 'email_server'@'${host}';" \
-      || warn "Could not ALTER email_server@${host}"
-  done <<< "$hosts"
-
-  "${COMPOSE[@]}" exec -T -e MYSQL_PWD="$root_pass" mysql \
-    mysql -u root -h 127.0.0.1 -e "FLUSH PRIVILEGES;" || true
-}
-
-# Wipe bind-mounted MySQL data and recreate the container so MYSQL_* env
-# passwords from docker/.env are applied on first initialization.
-reset_mysql_data_volume() {
+# Wipe bind-mounted Postgres data and recreate so POSTGRES_PASSWORD from docker/.env applies.
+reset_postgres_data_volume() {
   local data_path="${EMAIL_SERVER_DATA_PATH:-$DATA_PATH}"
-  # Prefer path written into docker/.env (what the container actually mounts)
   local env_path
   env_path="$(docker_env_get EMAIL_SERVER_DATA_PATH || true)"
   [[ -n "$env_path" ]] && data_path="$env_path"
 
-  log "RESET MYSQL: stopping mysql and wiping ${data_path}/mysql (DESTROYS DB DATA)"
+  log "RESET POSTGRES: stopping postgres and wiping ${data_path}/postgres (DESTROYS DB DATA)"
   (
     cd "$ROOT/docker"
-    "${COMPOSE[@]}" stop mysql || true
-    "${COMPOSE[@]}" rm -f mysql || true
+    "${COMPOSE[@]}" stop postgres || true
+    "${COMPOSE[@]}" rm -f postgres || true
   )
-  if [[ -d "${data_path}/mysql" ]]; then
-    run_root rm -rf "${data_path}/mysql"
+  if [[ -d "${data_path}/postgres" ]]; then
+    run_root rm -rf "${data_path}/postgres"
   fi
-  run_root mkdir -p "${data_path}/mysql"
-  # MySQL image needs write access as mysql uid (typically 999)
-  run_root chown -R 999:999 "${data_path}/mysql" 2>/dev/null || true
+  run_root mkdir -p "${data_path}/postgres"
+  # Official postgres image runs as uid 70 (alpine) or 999 — allow either
+  run_root chown -R 70:70 "${data_path}/postgres" 2>/dev/null || true
+  run_root chown -R 999:999 "${data_path}/postgres" 2>/dev/null || true
 
-  log "Starting fresh MySQL with passwords from docker/.env"
+  log "Starting fresh Postgres with passwords from docker/.env"
   (
     cd "$ROOT/docker"
-    "${COMPOSE[@]}" up -d --force-recreate mysql
+    "${COMPOSE[@]}" up -d --force-recreate postgres
   )
-  wait_for_mysql_healthy
+  wait_for_postgres_healthy
 
-  local db_pass root_pass tries
-  db_pass="$(docker_env_get DB_PASSWORD)"
-  root_pass="$(docker_env_get MYSQL_ROOT_PASSWORD)"
-
-  # First-boot init can take a while on empty datadir
-  tries=1
+  local tries=1
   while [[ "$tries" -le 30 ]]; do
-    if mysql_root_auth_ok "$root_pass"; then
+    if postgres_app_auth_ok; then
       break
     fi
     tries=$((tries + 1))
     sleep 2
   done
 
-  if ! mysql_root_auth_ok "$root_pass"; then
-    die "Fresh MySQL still rejects MYSQL_ROOT_PASSWORD — check docker/.env secrets match MYSQL_ROOT_PASSWORD used to create the container"
-  fi
-  if ! mysql_app_auth_ok; then
-    warn "Fresh MySQL app user not ready yet — ensuring email_server@%"
-    reset_mysql_app_user "$root_pass" "$(sql_escape "$db_pass")" || true
-    sleep 3
-    mysql_app_auth_ok || die "Fresh MySQL email_server auth still failing"
+  if ! postgres_app_auth_ok; then
+    # App may not be up yet during first boot — check via psql inside postgres
+    if ! "${COMPOSE[@]}" exec -T postgres pg_isready -U email_server -d email_server >/dev/null 2>&1; then
+      die "Fresh Postgres is not ready — check docker compose logs postgres"
+    fi
   fi
 
-  # Recreate app/queue so container env matches docker/.env after a wipe
-  log "Recreating app + queue after MySQL reset"
+  log "Recreating app + queue after Postgres reset"
   (
     cd "$ROOT/docker"
     "${COMPOSE[@]}" up -d --force-recreate --no-deps app
     "${COMPOSE[@]}" up -d --force-recreate --no-deps --scale "queue=${QUEUE_SCALE:-1}" queue
   )
   sleep 5
-  mysql_app_auth_ok || die "Laravel still cannot connect to MySQL after app recreate"
-  log "Fresh MySQL ready with current DB_PASSWORD / MYSQL_ROOT_PASSWORD"
+  postgres_app_auth_ok || die "Laravel still cannot connect to Postgres after app recreate"
+  log "Fresh Postgres ready with current DB_PASSWORD"
 }
 
-# MySQL only applies MYSQL_PASSWORD on first volume init. If secrets change later,
-# the volume keeps old passwords. Prefer ALTER via root (keeps data).
-# Never auto-wipe — that destroyed admins on every re-setup. Use --reset-mysql explicitly.
-sync_mysql_volume_password() {
-  local db_pass root_pass esc_pass
+# Postgres only applies POSTGRES_PASSWORD on first volume init.
+# Never auto-wipe — use --reset-postgres explicitly.
+sync_postgres_volume_password() {
+  local db_pass
   db_pass="$(docker_env_get DB_PASSWORD)"
-  root_pass="$(docker_env_get MYSQL_ROOT_PASSWORD)"
   [[ -n "$db_pass" ]] || die "DB_PASSWORD missing from docker/.env"
-  [[ -n "$root_pass" ]] || die "MYSQL_ROOT_PASSWORD missing from docker/.env"
 
-  if [[ "$RESET_MYSQL" == "true" ]]; then
-    warn "--reset-mysql set: wiping MySQL data and re-initializing (DESTROYS DB DATA)"
-    reset_mysql_data_volume
+  if [[ "$RESET_POSTGRES" == "true" ]]; then
+    warn "--reset-postgres set: wiping Postgres data and re-initializing (DESTROYS DB DATA)"
+    reset_postgres_data_volume
     sync_backend_db_password
-    log "Running migrations after MySQL reset"
+    log "Running migrations after Postgres reset"
     "${COMPOSE[@]}" exec -T app php artisan migrate --force \
       || warn "migrate still failing — check app logs"
     return 0
   fi
 
-  wait_for_mysql_healthy
+  wait_for_postgres_healthy
 
-  # Ensure app container is up enough for the PDO network check
   if ! "${COMPOSE[@]}" ps app 2>/dev/null | grep -qi 'Up'; then
     warn "App container not Up yet — waiting briefly for network auth check"
     sleep 5
   fi
 
-  if mysql_app_auth_ok; then
-    log "MySQL app user auth OK (Laravel → mysql:3306)"
+  if postgres_app_auth_ok; then
+    log "Postgres app auth OK (Laravel → postgres:5432)"
     return 0
   fi
 
-  warn "Laravel cannot connect to MySQL with current DB_PASSWORD"
+  warn "Laravel cannot connect to Postgres with current DB_PASSWORD"
 
-  if mysql_root_auth_ok "$root_pass"; then
-    warn "Resetting email_server password via root (data preserved)"
-    esc_pass="$(sql_escape "$db_pass")"
-    if reset_mysql_app_user "$root_pass" "$esc_pass"; then
-      sync_backend_db_password
-      (
-        cd "$ROOT/docker"
-        "${COMPOSE[@]}" up -d --force-recreate --no-deps app
-      )
-      sleep 4
-      if mysql_app_auth_ok; then
-        log "MySQL email_server@% password reset to match DB_PASSWORD (no data wipe)"
-        log "Running migrations after MySQL password sync"
-        "${COMPOSE[@]}" exec -T app php artisan migrate --force \
-          || warn "migrate still failing — check app logs"
-        return 0
-      fi
-    fi
-    warn "Root ALTER did not fix app auth"
-  else
-    warn "MYSQL_ROOT_PASSWORD also does not match the volume"
-  fi
-
-  die "MySQL credentials in docker/.env do not match the existing data volume.
+  die "Postgres credentials in docker/.env do not match the existing data volume.
 
 Data was NOT wiped. Fix (pick one):
 
-  A) Put the ORIGINAL DB_PASSWORD + MYSQL_ROOT_PASSWORD back into docker/.env
-     and backend/.env, then re-run ./setup.sh (preserves data).
+  A) Put the ORIGINAL DB_PASSWORD back into docker/.env and backend/.env,
+     then re-run ./setup.sh (preserves data).
 
   B) Explicitly wipe and re-seed (DESTROYS DATA — only if you accept losing DB):
-       ./setup.sh --reset-mysql
+       ./setup.sh --reset-postgres
 
   C) Manual wipe:
-       cd $ROOT/docker && docker compose stop mysql
-       sudo rm -rf ${DATA_PATH}/mysql && sudo mkdir -p ${DATA_PATH}/mysql
+       cd $ROOT/docker && docker compose stop postgres
+       sudo rm -rf ${DATA_PATH}/postgres && sudo mkdir -p ${DATA_PATH}/postgres
        docker compose up -d
 "
 }
@@ -1022,7 +946,7 @@ wait_for_api() {
     [[ -z "$code" ]] && code="000"
 
     if [[ "$code" == "200" ]]; then
-      # /up does NOT check MySQL — also require API health DB=ok before continuing
+      # /up does NOT check Postgres — also require API health DB=ok before continuing
       health="$(curl -fsS --connect-timeout 2 --max-time 5 "$API_HEALTH_URL" 2>/dev/null || true)"
       if printf '%s' "$health" | grep -q '"database":{"status":"ok"}'; then
         log "API is up (attempt ${i}/${max_attempts}) — /up=200 and database ok"
@@ -1074,8 +998,8 @@ ensure_redis_ready
   RUN_SEEDER=false "${COMPOSE[@]}" up -d --build --remove-orphans --scale "queue=${QUEUE_SCALE}"
 )
 
-# Align MySQL volume passwords with docker/.env BEFORE health/seed
-sync_mysql_volume_password
+# Align Postgres volume with docker/.env BEFORE health/seed
+sync_postgres_volume_password
 
 if ! wait_for_api 45; then
   die "API did not become healthy.
@@ -1085,12 +1009,9 @@ Try these on the server:
   docker compose logs app --tail 100
   docker compose ps
 
-If DB auth fails, either set DB_PASSWORD / MYSQL_ROOT_PASSWORD in docker/.env +
-backend/.env to the ORIGINAL MySQL volume passwords, or reset the volume
-(DESTROYS DATA):
-  docker compose down
-  sudo rm -rf ${DATA_PATH}/mysql/*
-  docker compose up -d
+If DB auth fails, set DB_PASSWORD in docker/.env + backend/.env to the ORIGINAL
+Postgres volume password, or reset the volume (DESTROYS DATA):
+  ./setup.sh --reset-postgres
 "
 fi
 
@@ -1145,9 +1066,9 @@ if [[ "$RUN_SEEDER" == "true" ]]; then
 );
 echo 'admin='.\$u->email.PHP_EOL;
 "; then
-      die "Could not seed/upsert admin — MySQL auth or migrate likely still failing.
-Re-run with matching DB_PASSWORD/MYSQL_ROOT_PASSWORD, or:
-  cd $ROOT && ./setup.sh --env-file=... --reset-mysql
+      die "Could not seed/upsert admin — Postgres auth or migrate likely still failing.
+Re-run with matching DB_PASSWORD, or:
+  cd $ROOT && ./setup.sh --reset-postgres
 "
     fi
   fi
@@ -1301,7 +1222,7 @@ cat <<EOF
     ${ROOT}/backend/.env
 
   Data path:
-    ${DATA_PATH}/{mysql,redis,storage}
+    ${DATA_PATH}/{postgres,redis,storage}
     (Laravel storage is bind-mounted from ${DATA_PATH}/storage)
 
   Certbot certificate (if SSL enabled):

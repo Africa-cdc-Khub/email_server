@@ -67,7 +67,7 @@ wait_for_tcp() {
 }
 
 wait_for_tcp Redis "${REDIS_HOST:-redis}" "${REDIS_PORT:-6379}" 45
-wait_for_tcp MySQL "${DB_HOST:-mysql}" "${DB_PORT:-3306}" 60
+wait_for_tcp Postgres "${DB_HOST:-postgres}" "${DB_PORT:-5432}" 60
 
 # Clear cached config that may force phpredis / wrong DB password
 rm -f bootstrap/cache/config.php \
@@ -161,7 +161,7 @@ fi
 
 echo "==> Running migrations (non-fatal)..."
 if ! php artisan migrate --force; then
-  echo "WARNING: migrate failed — check DB_PASSWORD matches the MySQL volume" >&2
+  echo "WARNING: migrate failed — check DB_PASSWORD matches the Postgres volume" >&2
   php artisan migrate --force -v 2>&1 | tail -40 || true
 fi
 

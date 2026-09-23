@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Fix branding images on production: /storage/ must hit Laravel, not the Vue SPA.
-# Safe to re-run. Does not wipe MySQL/Redis.
+# Safe to re-run. Does not wipe Postgres/Redis.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"

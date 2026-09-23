@@ -29,8 +29,8 @@ Host Nginx :443  (notifications.africacdc.org) + Certbot TLS
    ├── /          → 127.0.0.1:3006  (Admin UI container)
    └── /api/      → 127.0.0.1:8089  (API container)
                         │
-              Docker: app, queue, redis, mysql
-              Data:   /home/email_serverdata/{mysql,redis,storage}
+              Docker: app, queue, redis, postgres
+              Data:   /home/email_serverdata/{postgres,redis,storage}
 ```
 
 ### Prerequisites
@@ -56,7 +56,7 @@ cp -n docker/.env.example docker/.env
 cp -n backend/.env.example backend/.env
 chmod 600 docker/.env backend/.env
 
-# Put real secrets here (ADMIN_PASSWORD, DB_PASSWORD, MYSQL_ROOT_PASSWORD, JWT_SECRET, …)
+# Put real secrets here (ADMIN_PASSWORD, DB_PASSWORD, JWT_SECRET, …)
 nano docker/.env
 # Exchange / mail / APP_URL etc.
 nano backend/.env
@@ -67,9 +67,9 @@ nano backend/.env
 What `setup.sh` does:
 
 1. Reads existing `docker/.env` + `backend/.env` (never overwrites unless `--write-env`)
-2. Creates `/home/email_serverdata/{mysql,redis,storage}`
+2. Creates `/home/email_serverdata/{postgres,redis,storage}`
 3. Builds the Vue admin UI (**Docker `node` image if host `npm` is missing**)
-4. Starts Docker (`app`, `queue`, `nginx`, `frontend`, `mysql`, `redis`)
+4. Starts Docker (`app`, `queue`, `nginx`, `frontend`, `postgres`, `redis`)
 5. Seeds admin user from `ADMIN_PASSWORD` in `docker/.env`, then sets `RUN_SEEDER=false`
 6. Installs host Nginx site + security headers for the domain
 7. Issues/installs Let’s Encrypt TLS with Certbot (`--nginx --redirect`)
@@ -79,7 +79,7 @@ What `setup.sh` does:
 ./setup.sh --help
 ```
 
-Useful flags: `--skip-ssl`, `--skip-nginx`, `--skip-frontend-build`, `--frontend-build=docker`, `--run-seeder=false`, `--force-vendor`, `--reset-mysql` (destroys DB data).
+Useful flags: `--skip-ssl`, `--skip-nginx`, `--skip-frontend-build`, `--frontend-build=docker`, `--run-seeder=false`, `--force-vendor`, `--reset-postgres` (destroys DB data).
 
 After deploy:
 
@@ -101,11 +101,11 @@ cd /var/www/email_server
 #### 2. Create persistent data directories
 
 ```bash
-sudo mkdir -p /home/email_serverdata/{mysql,redis,storage}
+sudo mkdir -p /home/email_serverdata/{postgres,redis,storage}
 sudo chown -R root:root /home/email_serverdata
 ```
 
-MySQL and Redis bind-mount here so `docker compose down` does **not** wipe data.
+Postgres and Redis bind-mount here so `docker compose down` does **not** wipe data.
 
 #### 3. Configure Docker environment
 
@@ -130,7 +130,6 @@ ADMIN_EMAIL=andrewa@africacdc.org
 ADMIN_PASSWORD=<strong-unique-password>
 
 DB_PASSWORD=<strong-db-password>
-MYSQL_ROOT_PASSWORD=<strong-root-password>
 
 JWT_SECRET=<64+-char-random-string>
 JWT_TTL=60
@@ -334,7 +333,7 @@ docker compose exec app php artisan route:cache
 docker compose up -d --scale queue=4
 ```
 
-**Do not** run `docker compose down -v` — that can destroy named volumes. With bind mounts under `/home/email_serverdata`, a normal `down` keeps MySQL/Redis/storage data.
+**Do not** run `docker compose down -v` — that can destroy named volumes. With bind mounts under `/home/email_serverdata`, a normal `down` keeps Postgres/Redis/storage data.
 
 ---
 
@@ -350,7 +349,7 @@ docker compose up -d --scale queue=4
 ```bash
 cp docker/.env.example docker/.env
 cp backend/.env.example backend/.env
-# fill ADMIN_PASSWORD, DB_PASSWORD, MYSQL_ROOT_PASSWORD, JWT_SECRET
+# fill ADMIN_PASSWORD, DB_PASSWORD, JWT_SECRET
 
 cd frontend && npm ci && npm run build && cd ..
 cd docker && docker compose up -d --build
@@ -431,7 +430,7 @@ Do **not** store `EXCHANGE_*` or `MAIL_HOST` / `MAIL_PASSWORD` in `.env`.
 ## Security checklist (production)
 
 - [ ] `APP_ENV=production`, `APP_DEBUG=false`
-- [ ] Strong unique `ADMIN_PASSWORD`, `DB_PASSWORD`, `MYSQL_ROOT_PASSWORD`, `JWT_SECRET`
+- [ ] Strong unique `ADMIN_PASSWORD`, `DB_PASSWORD`, `JWT_SECRET`
 - [ ] No mail/Exchange secrets in `.env` — only in admin Email providers
 - [ ] `RUN_SEEDER=false` after first seed
 - [ ] Host Nginx only; Docker ports bound via Compose to host (`8089`/`3006`) — prefer firewall so they are not public

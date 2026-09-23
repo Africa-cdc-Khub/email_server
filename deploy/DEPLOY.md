@@ -1,4 +1,4 @@
-# Production deployment (Apache + PHP-FPM + MySQL 8)
+# Production deployment (Apache + PHP-FPM + Postgres 16)
 
 > **Preferred production path:** edit `docker/.env` + `backend/.env` on the server, then run **[`./setup.sh`](../setup.sh)** (see **[README.md](../README.md#deploy-with-setupsh-recommended)**).  
 > Template: [`docker/.env.example`](../docker/.env.example) and [`backend/.env.example`](../backend/.env.example).  
@@ -8,7 +8,7 @@
 
 Configs in `deploy/configs/` are copied from the [enterprise optimisation guide](https://github.com/agabaandre/PHP_laravel_Codeigniter_wordpress_server_optimisation_enterprise/blob/main/docs/MANUAL-OPTIMIZATION-PHP82-MYSQL8.md) and adapted for **PHP 8.4** and this Laravel app.
 
-Target capacity: **400+ Apache workers**, **56 PHP-FPM children**, **300 MySQL connections** — suitable for **1000+ concurrent HTTP requests** when combined with **Redis queues** for email (Graph/SMTP never blocks the request thread).
+Target capacity: **400+ Apache workers**, **56 PHP-FPM children**, **Postgres connection pool via app** — suitable for **1000+ concurrent HTTP requests** when combined with **Redis queues** for email (Graph/SMTP never blocks the request thread).
 
 ---
 
@@ -28,7 +28,7 @@ chmod 600 docker/.env backend/.env
 |---------|------|------|
 | nginx | 8089 | API (Swagger only when `APP_ENV` ≠ production) |
 | frontend | 3006 | Admin UI |
-| mysql | 3309 | Host mapping (`MYSQL_HOST_PORT`); containers use `mysql:3306` on the compose network |
+| postgres | 5433 | Host mapping (`POSTGRES_HOST_PORT`); containers use `postgres:5432` on the compose network |
 | queue | — | Async email (`SendEmailJob`) |
 | redis | — | Queue, cache, sessions, rate limits |
 | storage | host path | `${EMAIL_SERVER_DATA_PATH}/storage` → `/var/www/backend/storage` |
@@ -42,7 +42,6 @@ Follow the [manual optimisation guide](https://github.com/agabaandre/PHP_laravel
 ### 1. Copy configs
 
 ```bash
-sudo cp deploy/configs/mysqld-production.cnf /etc/mysql/mysql.conf.d/99-email-server.cnf
 sudo cp deploy/configs/php-production.ini /etc/php/8.4/fpm/conf.d/99-email-server.ini
 sudo cp deploy/configs/php-fpm-www.conf /etc/php/8.4/fpm/pool.d/www.conf
 sudo sed -i 's|127.0.0.1:9000|/run/php/php8.4-fpm.sock|g' /etc/php/8.4/fpm/pool.d/www.conf

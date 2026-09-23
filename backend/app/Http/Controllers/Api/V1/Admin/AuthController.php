@@ -96,7 +96,7 @@ class AuthController extends Controller
             report($e);
 
             return response()->json([
-                'message' => 'Database unavailable. Check MySQL credentials and run migrate/seed.',
+                'message' => 'Database unavailable. Check Postgres credentials and run migrate/seed.',
             ], 503);
         }
 
