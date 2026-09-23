@@ -100,6 +100,39 @@ class ProviderMailboxQuotaTest extends TestCase
         $this->assertNotSame($a->id, $chosen->id);
     }
 
+    public function test_disabled_mailboxes_are_never_selected(): void
+    {
+        $provider = EmailProvider::factory()->create(['from_address' => null, 'is_active' => true]);
+        $provider->mailboxes()->create([
+            'email' => 'disabled@example.com',
+            'daily_quota' => 10000,
+            'is_active' => false,
+        ]);
+        $active = $provider->mailboxes()->create([
+            'email' => 'active@example.com',
+            'daily_quota' => 10000,
+            'is_active' => true,
+        ]);
+
+        $chosen = app(MailboxSelector::class)->select($provider);
+        $this->assertSame($active->id, $chosen->id);
+        $this->assertSame('active@example.com', $chosen->email);
+    }
+
+    public function test_only_disabled_mailboxes_count_as_exhausted_for_fallback(): void
+    {
+        $provider = EmailProvider::factory()->create(['from_address' => null, 'is_active' => true]);
+        $provider->mailboxes()->create([
+            'email' => 'notifications@example.com',
+            'daily_quota' => 10000,
+            'is_active' => false,
+        ]);
+
+        $this->expectException(MailboxQuotaExhaustedException::class);
+        $this->expectExceptionMessage('no enabled from mailboxes');
+        app(MailboxSelector::class)->select($provider);
+    }
+
     public function test_exhausted_mailboxes_throw(): void
     {
         $provider = EmailProvider::factory()->create(['from_address' => null, 'is_active' => true]);

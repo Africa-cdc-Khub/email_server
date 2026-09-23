@@ -337,97 +337,69 @@ class EmailDispatchService
         ?int $explicitMailboxId = null,
     ): EmailLog {
         $primary = $this->mailConfig->resolveProvider($providerId);
-        $candidates = [$primary];
-
-        if ($allowFallback) {
-            foreach ($this->mailConfig->fallbackProviders($primary->id) as $fallback) {
-                $candidates[] = $fallback;
-            }
-        }
-
         $subject = MailHeaderSanitizer::line($subject, 500);
-        $lastError = null;
         $attemptErrors = [];
 
-        foreach ($candidates as $index => $provider) {
-            $this->mailConfig->purgeExchangeClient();
+        $primaryResult = $this->attemptSendWithProvider(
+            log: $log,
+            provider: $primary,
+            to: $to,
+            subject: $subject,
+            body: $body,
+            isHtml: $isHtml,
+            cc: $cc,
+            bcc: $bcc,
+            fromName: $fromName,
+            attachmentPayload: $attachmentPayload,
+            cleanupAttachmentMeta: $cleanupAttachmentMeta,
+            explicitMailboxId: $explicitMailboxId,
+            fallbackMeta: null,
+        );
 
-            try {
-                $mailbox = $this->mailboxSelector->select(
-                    $provider,
-                    $index === 0 ? $explicitMailboxId : null,
-                );
-            } catch (MailboxQuotaExhaustedException|\InvalidArgumentException $e) {
-                $lastError = $e;
-                $attemptErrors[] = [
-                    'provider_id' => $provider->id,
-                    'driver' => $provider->driver->value,
-                    'error' => $e->getMessage(),
-                ];
-                continue;
-            }
+        if ($primaryResult['sent']) {
+            return $primaryResult['log'];
+        }
 
-            $from = $this->mailConfig->resolveFromIdentity($provider);
-            $from['address'] = $mailbox->email;
-            $resolvedFromName = MailHeaderSanitizer::line(
-                (string) ($fromName ?: ($from['name'] ?? '')),
-                255
-            );
+        $lastError = $primaryResult['error'] ?? new RuntimeException('Email delivery failed.');
+        $attemptErrors[] = $primaryResult['attempt'];
 
-            try {
-                $this->sendViaProvider(
-                    provider: $provider,
+        // Cross-provider fallback (e.g. SMTP) only when the primary's enabled
+        // mailboxes are quota-exhausted — not on Graph/SMTP connection errors.
+        $mayFallback = $allowFallback && $lastError instanceof MailboxQuotaExhaustedException;
+
+        if ($mayFallback) {
+            foreach ($this->mailConfig->fallbackProviders($primary->id) as $fallback) {
+                $fallbackResult = $this->attemptSendWithProvider(
+                    log: $log,
+                    provider: $fallback,
                     to: $to,
                     subject: $subject,
                     body: $body,
                     isHtml: $isHtml,
-                    from: $from,
-                    fromName: $resolvedFromName,
                     cc: $cc,
                     bcc: $bcc,
+                    fromName: $fromName,
                     attachmentPayload: $attachmentPayload,
+                    cleanupAttachmentMeta: $cleanupAttachmentMeta,
+                    explicitMailboxId: null,
+                    fallbackMeta: [
+                        'fallback_from_provider_id' => $primary->id,
+                        'fallback_from_driver' => $primary->driver->value,
+                        'fallback_error' => $lastError->getMessage(),
+                        'fallback_attempts' => $attemptErrors,
+                    ],
                 );
 
-                $meta = $log->meta ?? [];
-                if ($index > 0) {
-                    $meta['fallback_from_provider_id'] = $primary->id;
-                    $meta['fallback_from_driver'] = $primary->driver->value;
-                    $meta['fallback_error'] = $lastError?->getMessage();
-                    $meta['fallback_attempts'] = $attemptErrors;
-                }
-                $meta['from_address'] = $mailbox->email;
-                $meta['from_mailbox_id'] = $mailbox->id;
-
-                $log->update([
-                    'email_provider_id' => $provider->id,
-                    'driver' => $provider->driver->value,
-                    'from_address' => $mailbox->email,
-                    'status' => 'sent',
-                    'error_message' => null,
-                    'meta' => $meta,
-                ]);
-
-                if ($cleanupAttachmentMeta !== []) {
-                    $this->attachments->deleteStored($cleanupAttachmentMeta);
-                    $meta = $log->meta ?? [];
-                    unset($meta['attachments']);
-                    $meta['attachment_count'] = count($cleanupAttachmentMeta);
-                    $meta['attachments_delivered'] = true;
-                    $log->update(['meta' => $meta]);
+                if ($fallbackResult['sent']) {
+                    return $fallbackResult['log'];
                 }
 
-                return $log->fresh() ?? $log;
-            } catch (Throwable $e) {
-                $lastError = $e;
-                $attemptErrors[] = [
-                    'provider_id' => $provider->id,
-                    'driver' => $provider->driver->value,
-                    'error' => $e->getMessage(),
-                ];
+                $lastError = $fallbackResult['error'] ?? $lastError;
+                $attemptErrors[] = $fallbackResult['attempt'];
             }
         }
 
-        if ($markFailedOnError && $lastError !== null) {
+        if ($markFailedOnError) {
             $meta = $log->meta ?? [];
             if ($attemptErrors !== []) {
                 $meta['fallback_attempts'] = $attemptErrors;
@@ -440,7 +412,119 @@ class EmailDispatchService
             ]);
         }
 
-        throw $lastError ?? new RuntimeException('Email delivery failed.');
+        throw $lastError;
+    }
+
+    /**
+     * @param  array<int, string>  $cc
+     * @param  array<int, string>  $bcc
+     * @param  list<array{filename: string, content: string, content_type: string, size?: int}>  $attachmentPayload
+     * @param  list<array{path?: string}>  $cleanupAttachmentMeta
+     * @param  array<string, mixed>|null  $fallbackMeta
+     * @return array{
+     *     sent: bool,
+     *     log?: EmailLog,
+     *     error?: Throwable,
+     *     attempt: array{provider_id: int, driver: string, error: string}
+     * }
+     */
+    private function attemptSendWithProvider(
+        EmailLog $log,
+        EmailProvider $provider,
+        string $to,
+        string $subject,
+        string $body,
+        bool $isHtml,
+        array $cc,
+        array $bcc,
+        ?string $fromName,
+        array $attachmentPayload,
+        array $cleanupAttachmentMeta,
+        ?int $explicitMailboxId,
+        ?array $fallbackMeta,
+    ): array {
+        $this->mailConfig->purgeExchangeClient();
+
+        try {
+            $mailbox = $this->mailboxSelector->select($provider, $explicitMailboxId);
+        } catch (MailboxQuotaExhaustedException|\InvalidArgumentException $e) {
+            return [
+                'sent' => false,
+                'error' => $e,
+                'attempt' => [
+                    'provider_id' => $provider->id,
+                    'driver' => $provider->driver->value,
+                    'error' => $e->getMessage(),
+                ],
+            ];
+        }
+
+        $from = $this->mailConfig->resolveFromIdentity($provider);
+        $from['address'] = $mailbox->email;
+        $resolvedFromName = MailHeaderSanitizer::line(
+            (string) ($fromName ?: ($from['name'] ?? '')),
+            255
+        );
+
+        try {
+            $this->sendViaProvider(
+                provider: $provider,
+                to: $to,
+                subject: $subject,
+                body: $body,
+                isHtml: $isHtml,
+                from: $from,
+                fromName: $resolvedFromName,
+                cc: $cc,
+                bcc: $bcc,
+                attachmentPayload: $attachmentPayload,
+            );
+
+            $meta = $log->meta ?? [];
+            if (is_array($fallbackMeta)) {
+                $meta = array_merge($meta, $fallbackMeta);
+            }
+            $meta['from_address'] = $mailbox->email;
+            $meta['from_mailbox_id'] = $mailbox->id;
+
+            $log->update([
+                'email_provider_id' => $provider->id,
+                'driver' => $provider->driver->value,
+                'from_address' => $mailbox->email,
+                'status' => 'sent',
+                'error_message' => null,
+                'meta' => $meta,
+            ]);
+
+            if ($cleanupAttachmentMeta !== []) {
+                $this->attachments->deleteStored($cleanupAttachmentMeta);
+                $meta = $log->meta ?? [];
+                unset($meta['attachments']);
+                $meta['attachment_count'] = count($cleanupAttachmentMeta);
+                $meta['attachments_delivered'] = true;
+                $log->update(['meta' => $meta]);
+            }
+
+            return [
+                'sent' => true,
+                'log' => $log->fresh() ?? $log,
+                'attempt' => [
+                    'provider_id' => $provider->id,
+                    'driver' => $provider->driver->value,
+                    'error' => '',
+                ],
+            ];
+        } catch (Throwable $e) {
+            return [
+                'sent' => false,
+                'error' => $e,
+                'attempt' => [
+                    'provider_id' => $provider->id,
+                    'driver' => $provider->driver->value,
+                    'error' => $e->getMessage(),
+                ],
+            ];
+        }
     }
 
     /**

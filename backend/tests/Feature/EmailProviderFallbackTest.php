@@ -17,7 +17,7 @@ class EmailProviderFallbackTest extends TestCase
 {
     use RefreshDatabase;
 
-    public function test_delivery_falls_back_to_next_active_provider_when_default_fails(): void
+    public function test_delivery_does_not_fall_back_on_provider_send_failure(): void
     {
         $primary = EmailProvider::query()->create([
             'name' => 'Default Exchange (simulated)',
@@ -48,7 +48,7 @@ class EmailProviderFallbackTest extends TestCase
                 'username' => 'user',
                 'password' => 'secret',
             ],
-            'from_address' => 'notifications@example.com',
+            'from_address' => 'smtp@example.com',
             'from_name' => 'Mailer',
             'is_default' => false,
             'is_active' => true,
@@ -60,16 +60,14 @@ class EmailProviderFallbackTest extends TestCase
             ->once()
             ->withArgs(fn (EmailProvider $p) => $p->id === $primary->id)
             ->andThrow(new RuntimeException('Primary provider unavailable'));
-        $smtpMock->shouldReceive('send')
-            ->once()
-            ->withArgs(fn (EmailProvider $p) => $p->id === $fallback->id)
-            ->andReturnNull();
+        $smtpMock->shouldNotReceive('send')
+            ->withArgs(fn (EmailProvider $p) => $p->id === $fallback->id);
         $this->app->instance(PhpMailerSmtpMailer::class, $smtpMock);
 
         $log = EmailLog::query()->create([
             'email_provider_id' => $primary->id,
             'to' => 'recipient@example.com',
-            'subject' => 'Fallback test',
+            'subject' => 'No transport fallback',
             'status' => 'pending',
             'driver' => EmailDriver::Smtp->value,
             'meta' => [
@@ -81,15 +79,17 @@ class EmailProviderFallbackTest extends TestCase
             ],
         ]);
 
-        $job = new SendEmailJob($log->id);
-        $job->handle(app(EmailDispatchService::class));
+        try {
+            (new SendEmailJob($log->id))->handle(app(EmailDispatchService::class));
+            $this->fail('Expected primary send failure to propagate.');
+        } catch (RuntimeException $e) {
+            $this->assertSame('Primary provider unavailable', $e->getMessage());
+        }
 
         $fresh = $log->fresh();
-        $this->assertSame('sent', $fresh->status);
-        $this->assertSame($fallback->id, $fresh->email_provider_id);
-        $this->assertSame(EmailDriver::Smtp->value, $fresh->driver);
-        $this->assertSame($primary->id, $fresh->meta['fallback_from_provider_id'] ?? null);
-        $this->assertStringContainsString('Primary provider unavailable', (string) ($fresh->meta['fallback_error'] ?? ''));
+        $this->assertSame('pending', $fresh->status);
+        $this->assertSame($primary->id, $fresh->email_provider_id);
+        $this->assertArrayNotHasKey('fallback_from_provider_id', $fresh->meta ?? []);
     }
 
     public function test_inactive_providers_are_not_used_as_fallback(): void

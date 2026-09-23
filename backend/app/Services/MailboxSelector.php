@@ -33,9 +33,9 @@ class MailboxSelector
             return $mailbox;
         }
 
-        if (! $provider->mailboxes()->exists()) {
+        if (! $provider->mailboxes()->where('is_active', true)->exists()) {
             throw new MailboxQuotaExhaustedException(
-                'Provider "'.$provider->name.'" has no from mailboxes configured.'
+                'Provider "'.$provider->name.'" has no enabled from mailboxes.'
             );
         }
 
@@ -50,11 +50,13 @@ class MailboxSelector
 
         if ($usage->isEmpty()) {
             throw new MailboxQuotaExhaustedException(
-                'All mailboxes for provider "'.$provider->name.'" have reached their 24h quota.'
+                'All enabled mailboxes for provider "'.$provider->name.'" have reached their 24h quota.'
             );
         }
 
-        return ProviderMailbox::query()->findOrFail((int) $usage->first()['id']);
+        return ProviderMailbox::query()
+            ->where('is_active', true)
+            ->findOrFail((int) $usage->first()['id']);
     }
 
     /**

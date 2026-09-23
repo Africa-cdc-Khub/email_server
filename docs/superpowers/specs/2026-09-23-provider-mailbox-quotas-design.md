@@ -19,7 +19,8 @@ Each Microsoft 365 / SMTP mailbox is subject to a daily send quota (typically **
 | Topic | Choice |
 |---|---|
 | Selection algorithm | **Least-used** over a rolling **24h** window (most remaining quota wins; ties → lowest mailbox id) |
-| Exhausted provider | Fail that provider attempt → existing **provider fallback** chain continues (e.g. SMTP) |
+| Exhausted provider | Fail that provider attempt → existing **provider fallback** chain continues (e.g. SMTP) **only when mailbox quota is depleted** (or no enabled mailboxes). Transport/API errors on Exchange do **not** fall back to SMTP. |
+| Disabled mailboxes | Never selected for automatic sends; disabled-only providers count as exhausted for fallback. |
 | Scope | **All** provider drivers (Exchange, SMTP, SES, Log) |
 | Display name | **One shared** `from_name` on the provider |
 | Storage | Dedicated **`provider_mailboxes`** table; usage counted from **`email_logs`** |
