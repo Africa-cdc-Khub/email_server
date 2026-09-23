@@ -29,8 +29,12 @@ type DashboardData = {
       email: string
       is_active: boolean
       daily_quota: number
+      hourly_quota?: number | null
+      weight: number
       sent_24h: number
+      sent_1h?: number
       remaining_24h: number
+      remaining_1h?: number | null
     }>
   }>
   recent_logs: Array<{
@@ -173,6 +177,13 @@ onMounted(async () => {
               <div>
                 <span class="font-weight-medium">{{ box.email }}</span>
                 <v-chip
+                  size="x-small"
+                  class="ml-2"
+                  variant="tonal"
+                >
+                  weight {{ box.weight ?? 1 }}
+                </v-chip>
+                <v-chip
                   v-if="!box.is_active"
                   size="x-small"
                   class="ml-2"
@@ -183,17 +194,23 @@ onMounted(async () => {
               </div>
               <div class="text-body-2">
                 <strong>{{ box.remaining_24h }}</strong>
-                <span class="text-medium-emphasis"> left / {{ box.daily_quota }}</span>
+                <span class="text-medium-emphasis"> left / {{ box.daily_quota }} day</span>
+                <template v-if="box.hourly_quota != null">
+                  <span class="text-medium-emphasis"> · </span>
+                  <strong>{{ box.remaining_1h ?? 0 }}</strong>
+                  <span class="text-medium-emphasis"> / {{ box.hourly_quota }} hr</span>
+                </template>
               </div>
             </div>
             <v-progress-linear
               :model-value="box.daily_quota > 0 ? (box.sent_24h / box.daily_quota) * 100 : 0"
               height="8"
               rounded
-              :color="box.remaining_24h <= 0 ? 'error' : box.remaining_24h < box.daily_quota * 0.15 ? 'warning' : 'primary'"
+              :color="box.remaining_24h <= 0 || (box.remaining_1h != null && box.remaining_1h <= 0) ? 'error' : box.remaining_24h < box.daily_quota * 0.15 ? 'warning' : 'primary'"
             />
             <div class="text-caption text-medium-emphasis mt-1">
-              {{ box.sent_24h }} sent in the last 24 hours
+              {{ box.sent_24h }} sent in 24h
+              <template v-if="box.hourly_quota != null"> · {{ box.sent_1h ?? 0 }} in the last hour</template>
             </div>
           </div>
         </div>

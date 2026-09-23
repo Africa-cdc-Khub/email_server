@@ -1,7 +1,7 @@
 # Mailbox send weights
 
 **Date:** 2026-09-23  
-**Status:** Approved (pending implementation)  
+**Status:** Implemented (2026-09-23)  
 **Depends on:** [Provider mailbox load balancing & quotas](./2026-09-23-provider-mailbox-quotas-design.md)  
 **Surface:** `MailboxSelector`, provider API/UI, dashboard mailbox stats
 

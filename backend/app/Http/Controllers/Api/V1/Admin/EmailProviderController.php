@@ -70,7 +70,8 @@ class EmailProviderController extends Controller
             'value' => $driver->value,
             'label' => $driver->label(),
             'fields' => $this->driverFields($driver),
-            'default_mailbox_quota' => $driver === EmailDriver::Smtp ? 500 : 10000,
+            'default_mailbox_quota' => 10000,
+            'default_mailbox_hourly_quota' => $driver === EmailDriver::Smtp ? 400 : null,
         ]);
 
         return response()->json(['data' => $drivers]);
@@ -114,6 +115,7 @@ class EmailProviderController extends Controller
                 'email' => $provider->from_address,
                 'is_active' => true,
                 'daily_quota' => $provider->defaultMailboxQuota(),
+                'hourly_quota' => $provider->defaultMailboxHourlyQuota(),
             ]]);
         }
 
@@ -272,8 +274,12 @@ class EmailProviderController extends Controller
                 'email' => $provider->from_address,
                 'is_active' => true,
                 'daily_quota' => $provider->defaultMailboxQuota(),
+                'hourly_quota' => $provider->defaultMailboxHourlyQuota(),
+                'weight' => 1,
                 'sent_24h' => 0,
+                'sent_1h' => 0,
                 'remaining_24h' => $provider->defaultMailboxQuota(),
+                'remaining_1h' => $provider->defaultMailboxHourlyQuota(),
             ]];
         }
 
@@ -290,6 +296,7 @@ class EmailProviderController extends Controller
             'from_name' => $provider->from_name,
             'mailboxes' => $mailboxes,
             'default_mailbox_quota' => $provider->defaultMailboxQuota(),
+            'default_mailbox_hourly_quota' => $provider->defaultMailboxHourlyQuota(),
             'is_default' => $provider->is_default,
             'is_active' => $provider->is_active,
             'priority' => $provider->priority,

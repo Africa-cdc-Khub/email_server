@@ -11,8 +11,8 @@ use InvalidArgumentException;
 class MailboxSelector
 {
     /**
-     * Pick the active mailbox with the most remaining 24h quota.
-     * Ties break to the lowest mailbox id.
+     * Pick the active mailbox furthest below its weight share (min sent_24h / weight).
+     * Eligible when remaining daily (and hourly, if set) quota is > 0. Ties → lowest mailbox id.
      */
     public function select(EmailProvider $provider, ?int $explicitMailboxId = null): ProviderMailbox
     {
@@ -42,15 +42,22 @@ class MailboxSelector
         $usage = collect($this->usageFor($provider))
             ->where('is_active', true)
             ->where('remaining_24h', '>', 0)
+            ->filter(fn (array $row) => ($row['remaining_1h'] ?? 1) > 0)
+            ->map(function (array $row): array {
+                $weight = max(1, (int) $row['weight']);
+                $row['score'] = ((int) $row['sent_24h']) / $weight;
+
+                return $row;
+            })
             ->sortBy([
-                ['remaining_24h', 'desc'],
+                ['score', 'asc'],
                 ['id', 'asc'],
             ])
             ->values();
 
         if ($usage->isEmpty()) {
             throw new MailboxQuotaExhaustedException(
-                'All enabled mailboxes for provider "'.$provider->name.'" have reached their 24h quota.'
+                'All enabled mailboxes for provider "'.$provider->name.'" have reached their send quota.'
             );
         }
 
@@ -65,34 +72,55 @@ class MailboxSelector
      *     email: string,
      *     is_active: bool,
      *     daily_quota: int,
+     *     hourly_quota: int|null,
+     *     weight: int,
      *     sent_24h: int,
-     *     remaining_24h: int
+     *     sent_1h: int,
+     *     remaining_24h: int,
+     *     remaining_1h: int|null
      * }>
      */
     public function usageFor(EmailProvider $provider): array
     {
-        $since = now()->subDay();
-        $counts = EmailLog::query()
-            ->selectRaw('from_address, COUNT(*) as sent_24h')
+        $sinceDay = now()->subDay();
+        $sinceHour = now()->subHour();
+
+        $counts24h = EmailLog::query()
+            ->selectRaw('from_address, COUNT(*) as sent_count')
             ->where('status', 'sent')
-            ->where('created_at', '>=', $since)
+            ->where('created_at', '>=', $sinceDay)
             ->whereNotNull('from_address')
             ->groupBy('from_address')
-            ->pluck('sent_24h', 'from_address');
+            ->pluck('sent_count', 'from_address');
+
+        $counts1h = EmailLog::query()
+            ->selectRaw('from_address, COUNT(*) as sent_count')
+            ->where('status', 'sent')
+            ->where('created_at', '>=', $sinceHour)
+            ->whereNotNull('from_address')
+            ->groupBy('from_address')
+            ->pluck('sent_count', 'from_address');
 
         return $provider->mailboxes()
             ->orderBy('id')
             ->get()
-            ->map(function (ProviderMailbox $mailbox) use ($counts) {
-                $sent = (int) ($counts[$mailbox->email] ?? 0);
+            ->map(function (ProviderMailbox $mailbox) use ($counts24h, $counts1h) {
+                $sent24h = (int) ($counts24h[$mailbox->email] ?? 0);
+                $sent1h = (int) ($counts1h[$mailbox->email] ?? 0);
+                $weight = max(1, (int) $mailbox->weight);
+                $hourlyQuota = $mailbox->hourly_quota !== null ? (int) $mailbox->hourly_quota : null;
 
                 return [
                     'id' => $mailbox->id,
                     'email' => $mailbox->email,
                     'is_active' => (bool) $mailbox->is_active,
                     'daily_quota' => (int) $mailbox->daily_quota,
-                    'sent_24h' => $sent,
-                    'remaining_24h' => max(0, (int) $mailbox->daily_quota - $sent),
+                    'hourly_quota' => $hourlyQuota,
+                    'weight' => $weight,
+                    'sent_24h' => $sent24h,
+                    'sent_1h' => $sent1h,
+                    'remaining_24h' => max(0, (int) $mailbox->daily_quota - $sent24h),
+                    'remaining_1h' => $hourlyQuota === null ? null : max(0, $hourlyQuota - $sent1h),
                 ];
             })
             ->all();

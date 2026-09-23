@@ -32,6 +32,8 @@ class StoreEmailProviderRequest extends FormRequest
             'mailboxes.*.email' => ['required_with:mailboxes', 'email', 'max:255'],
             'mailboxes.*.is_active' => ['sometimes', 'boolean'],
             'mailboxes.*.daily_quota' => ['sometimes', 'integer', 'min:1', 'max:1000000'],
+            'mailboxes.*.hourly_quota' => ['sometimes', 'nullable', 'integer', 'min:1', 'max:100000'],
+            'mailboxes.*.weight' => ['sometimes', 'integer', 'min:1', 'max:10000'],
         ];
     }
 }

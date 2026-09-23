@@ -15,6 +15,8 @@ class ProviderMailbox extends Model
         'email',
         'is_active',
         'daily_quota',
+        'hourly_quota',
+        'weight',
     ];
 
     protected function casts(): array
@@ -22,6 +24,8 @@ class ProviderMailbox extends Model
         return [
             'is_active' => 'boolean',
             'daily_quota' => 'integer',
+            'hourly_quota' => 'integer',
+            'weight' => 'integer',
         ];
     }
 

@@ -17,15 +17,19 @@ type DriverField = {
   options?: Array<{ value: string; label: string }>
 }
 
-type Driver = { value: string; label: string; fields: DriverField[]; default_mailbox_quota?: number }
+type Driver = { value: string; label: string; fields: DriverField[]; default_mailbox_quota?: number; default_mailbox_hourly_quota?: number | null }
 
 type MailboxRow = {
   id?: number | null
   email: string
   is_active: boolean
   daily_quota: number
+  hourly_quota: number | null
+  weight: number
   sent_24h?: number
+  sent_1h?: number
   remaining_24h?: number
+  remaining_1h?: number | null
 }
 
 const SECRET_KEYS = new Set(['client_secret', 'password', 'secret'])
@@ -88,7 +92,14 @@ function secretHint(field: DriverField): string {
 
 function defaultMailboxQuota(): number {
   return activeDriver.value?.default_mailbox_quota
-    ?? (form.value.driver === 'smtp' ? 500 : 10000)
+    ?? 10000
+}
+
+function defaultMailboxHourlyQuota(): number | null {
+  if (activeDriver.value && 'default_mailbox_hourly_quota' in activeDriver.value) {
+    return activeDriver.value.default_mailbox_hourly_quota ?? null
+  }
+  return form.value.driver === 'smtp' ? 400 : null
 }
 
 function addMailbox() {
@@ -97,6 +108,8 @@ function addMailbox() {
     email: '',
     is_active: true,
     daily_quota: defaultMailboxQuota(),
+    hourly_quota: defaultMailboxHourlyQuota(),
+    weight: 1,
   })
 }
 
@@ -140,8 +153,12 @@ async function loadProvider() {
       email: m.email,
       is_active: m.is_active !== false,
       daily_quota: m.daily_quota ?? 10000,
+      hourly_quota: m.hourly_quota ?? (p.driver === 'smtp' ? 400 : null),
+      weight: m.weight ?? 1,
       sent_24h: m.sent_24h ?? 0,
+      sent_1h: m.sent_1h ?? 0,
       remaining_24h: m.remaining_24h ?? m.daily_quota ?? 10000,
+      remaining_1h: m.remaining_1h ?? m.hourly_quota ?? null,
     }))
 
     form.value = {
@@ -155,7 +172,14 @@ async function loadProvider() {
       config,
       mailboxes: mailboxes.length
         ? mailboxes
-        : [{ id: null, email: p.from_address ?? '', is_active: true, daily_quota: p.default_mailbox_quota ?? defaultMailboxQuota() }],
+        : [{
+            id: null,
+            email: p.from_address ?? '',
+            is_active: true,
+            daily_quota: p.default_mailbox_quota ?? defaultMailboxQuota(),
+            hourly_quota: p.default_mailbox_hourly_quota ?? defaultMailboxHourlyQuota(),
+            weight: 1,
+          }],
     }
 
     testMailboxId.value = testMailboxItems.value[0]?.value ?? null
@@ -192,6 +216,13 @@ async function save() {
         email: m.email.trim(),
         is_active: m.is_active,
         daily_quota: Number(m.daily_quota) || defaultMailboxQuota(),
+        hourly_quota: (() => {
+          if (m.hourly_quota == null || Number.isNaN(Number(m.hourly_quota))) {
+            return form.value.driver === 'smtp' ? defaultMailboxHourlyQuota() : null
+          }
+          return Math.max(1, Number(m.hourly_quota))
+        })(),
+        weight: Math.max(1, Number(m.weight) || 1),
       }))
 
     if (mailboxes.length === 0) {
@@ -226,8 +257,12 @@ async function save() {
         email: m.email,
         is_active: m.is_active !== false,
         daily_quota: m.daily_quota ?? 10000,
+        hourly_quota: m.hourly_quota ?? null,
+        weight: m.weight ?? 1,
         sent_24h: m.sent_24h ?? 0,
+        sent_1h: m.sent_1h ?? 0,
         remaining_24h: m.remaining_24h ?? m.daily_quota ?? 10000,
+        remaining_1h: m.remaining_1h ?? null,
       }))
       testMailboxId.value = testMailboxItems.value[0]?.value ?? null
       message.value = 'Provider updated.'
@@ -371,12 +406,14 @@ onMounted(async () => {
         <div>
           <div class="text-subtitle-1 font-weight-bold">From mailboxes</div>
           <div class="text-medium-emphasis text-body-2">
-            Sends rotate to the mailbox with the most remaining 24h quota.
+            Sends are shared by weight (higher weight ≈ larger share). Quotas are hard stops per mailbox.
+            Equal weights (default <strong>1</strong>) split traffic evenly.
             <template v-if="form.driver === 'smtp'">
-              SMTP defaults to <strong>500/day</strong> (Hostinger’s typical mailbox cap); change per address if your plan differs.
+              Hostinger SMTP allows about <strong>500/hour</strong> and <strong>12,000/day</strong>;
+              defaults are <strong>400/hour</strong> and <strong>10,000/day</strong> to stay under those caps.
             </template>
             <template v-else>
-              Default is <strong>10,000/day</strong> per mailbox.
+              Default daily quota is <strong>10,000/day</strong> per mailbox (no hourly cap).
             </template>
           </div>
         </div>
@@ -385,7 +422,7 @@ onMounted(async () => {
 
       <div v-for="(box, index) in form.mailboxes" :key="box.id ?? `new-${index}`" class="mailbox-row mb-4">
         <v-row dense align="center">
-          <v-col cols="12" md="5">
+          <v-col cols="12" md="3">
             <v-text-field
               v-model="box.email"
               label="From email"
@@ -406,20 +443,45 @@ onMounted(async () => {
               hide-details
             />
           </v-col>
-          <v-col cols="6" md="3">
-            <div class="text-caption text-medium-emphasis">24h usage</div>
+          <v-col cols="6" md="2">
+            <v-text-field
+              v-model.number="box.hourly_quota"
+              label="Hourly quota"
+              type="number"
+              min="1"
+              variant="outlined"
+              density="comfortable"
+              :hint="form.driver === 'smtp' ? 'Hostinger ~500/hr' : 'Leave blank for none'"
+              persistent-hint
+            />
+          </v-col>
+          <v-col cols="4" md="1">
+            <v-text-field
+              v-model.number="box.weight"
+              label="Weight"
+              type="number"
+              min="1"
+              variant="outlined"
+              density="comfortable"
+              hide-details
+            />
+          </v-col>
+          <v-col cols="8" md="2">
+            <div class="text-caption text-medium-emphasis">Usage</div>
             <div class="text-body-2">
               <template v-if="box.id != null">
-                {{ box.remaining_24h ?? '—' }} left / {{ box.daily_quota }}
-                <span class="text-medium-emphasis">({{ box.sent_24h ?? 0 }} sent)</span>
+                {{ box.remaining_24h ?? '—' }}/{{ box.daily_quota }} day
+                <template v-if="box.hourly_quota != null">
+                  · {{ box.remaining_1h ?? '—' }}/{{ box.hourly_quota }} hr
+                </template>
               </template>
               <template v-else>—</template>
             </div>
           </v-col>
-          <v-col cols="8" md="1">
+          <v-col cols="6" md="1">
             <v-switch v-model="box.is_active" label="On" color="primary" hide-details density="compact" />
           </v-col>
-          <v-col cols="4" md="1" class="d-flex justify-end">
+          <v-col cols="6" md="1" class="d-flex justify-end">
             <v-btn
               icon="mdi-delete-outline"
               variant="text"

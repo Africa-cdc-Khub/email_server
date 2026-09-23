@@ -25,7 +25,7 @@ Each Microsoft 365 / SMTP mailbox is subject to a daily send quota (typically **
 | Display name | **One shared** `from_name` on the provider |
 | Storage | Dedicated **`provider_mailboxes`** table; usage counted from **`email_logs`** |
 | Test send | Admin **must pick** the from mailbox when the provider has mailboxes |
-| Default quota | **10 000** / rolling 24h for Exchange & others; **500** for SMTP (Hostinger’s typical mailbox cap). Editable per mailbox. |
+| Default quota | **10 000** / rolling 24h for Exchange & others; SMTP **10 000/day** and **400/hour** (under Hostinger’s 12 000/day and 500/hour). Editable per mailbox. |
 
 ## Approach
 

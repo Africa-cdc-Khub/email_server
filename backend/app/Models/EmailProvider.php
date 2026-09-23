@@ -51,6 +51,7 @@ class EmailProvider extends Model
                 'email' => strtolower($from),
                 'is_active' => true,
                 'daily_quota' => $provider->defaultMailboxQuota(),
+                'hourly_quota' => $provider->defaultMailboxHourlyQuota(),
             ]);
         });
     }
@@ -71,14 +72,23 @@ class EmailProvider extends Model
     }
 
     /**
-     * Suggested per-mailbox daily send cap for this driver.
-     * SMTP defaults to Hostinger's typical 500/day limit; Exchange/others use 10_000.
+     * Suggested per-mailbox rolling 24h send cap.
+     * SMTP: 10_000 (under Hostinger's 12_000/day). Exchange/others: 10_000.
      */
     public function defaultMailboxQuota(): int
     {
+        return 10000;
+    }
+
+    /**
+     * Suggested per-mailbox rolling 1h send cap, or null when unlimited.
+     * SMTP: 400 (under Hostinger's 500/hour). Other drivers: no hourly cap.
+     */
+    public function defaultMailboxHourlyQuota(): ?int
+    {
         return match ($this->driver) {
-            EmailDriver::Smtp => 500,
-            default => 10000,
+            EmailDriver::Smtp => 400,
+            default => null,
         };
     }
 
@@ -91,7 +101,7 @@ class EmailProvider extends Model
     }
 
     /**
-     * @param  list<array{id?: int|null, email: string, is_active?: bool, daily_quota?: int}>  $rows
+     * @param  list<array{id?: int|null, email: string, is_active?: bool, daily_quota?: int, hourly_quota?: int|null, weight?: int}>  $rows
      */
     public function syncMailboxes(array $rows): void
     {
@@ -107,6 +117,8 @@ class EmailProvider extends Model
                 'email' => $email,
                 'is_active' => array_key_exists('is_active', $row) ? (bool) $row['is_active'] : true,
                 'daily_quota' => max(1, (int) ($row['daily_quota'] ?? $this->defaultMailboxQuota())),
+                'hourly_quota' => $this->resolveHourlyQuota($row),
+                'weight' => max(1, (int) ($row['weight'] ?? 1)),
             ];
 
             $id = isset($row['id']) ? (int) $row['id'] : 0;
@@ -134,6 +146,23 @@ class EmailProvider extends Model
 
         $firstActive = $this->mailboxes()->where('is_active', true)->orderBy('id')->value('email');
         $this->syncLegacyFromAddress($firstActive ? (string) $firstActive : null);
+    }
+
+    /**
+     * @param  array{hourly_quota?: int|null}  $row
+     */
+    private function resolveHourlyQuota(array $row): ?int
+    {
+        if (! array_key_exists('hourly_quota', $row)) {
+            return $this->defaultMailboxHourlyQuota();
+        }
+
+        $value = $row['hourly_quota'];
+        if ($value === null || $value === '') {
+            return null;
+        }
+
+        return max(1, (int) $value);
     }
 
     public function configValue(string $key, mixed $default = null): mixed

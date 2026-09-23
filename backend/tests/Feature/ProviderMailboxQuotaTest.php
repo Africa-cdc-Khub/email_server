@@ -56,7 +56,7 @@ class ProviderMailboxQuotaTest extends TestCase
         ]);
     }
 
-    public function test_smtp_provider_seeds_mailbox_with_hostinger_default_quota(): void
+    public function test_smtp_provider_seeds_mailbox_with_hostinger_default_quotas(): void
     {
         $provider = EmailProvider::factory()->create([
             'from_address' => 'smtp@example.com',
@@ -71,17 +71,67 @@ class ProviderMailboxQuotaTest extends TestCase
         $this->assertDatabaseHas('provider_mailboxes', [
             'email_provider_id' => $provider->id,
             'email' => 'smtp@example.com',
-            'daily_quota' => 500,
+            'daily_quota' => 10000,
+            'hourly_quota' => 400,
             'is_active' => true,
         ]);
-        $this->assertSame(500, $provider->defaultMailboxQuota());
+        $this->assertSame(10000, $provider->defaultMailboxQuota());
+        $this->assertSame(400, $provider->defaultMailboxHourlyQuota());
     }
 
-    public function test_selects_mailbox_with_most_remaining_quota(): void
+    public function test_hourly_quota_exhaustion_skips_mailbox(): void
+    {
+        $provider = EmailProvider::factory()->create([
+            'from_address' => null,
+            'is_active' => true,
+            'driver' => EmailDriver::Smtp,
+        ]);
+        $provider->mailboxes()->create([
+            'email' => 'capped@example.com',
+            'daily_quota' => 10000,
+            'hourly_quota' => 2,
+            'weight' => 1,
+            'is_active' => true,
+        ]);
+        $open = $provider->mailboxes()->create([
+            'email' => 'open@example.com',
+            'daily_quota' => 10000,
+            'hourly_quota' => 400,
+            'weight' => 1,
+            'is_active' => true,
+        ]);
+
+        for ($i = 0; $i < 2; $i++) {
+            EmailLog::query()->create([
+                'email_provider_id' => $provider->id,
+                'to' => "u{$i}@example.com",
+                'from_address' => 'capped@example.com',
+                'subject' => 'x',
+                'status' => 'sent',
+                'driver' => $provider->driver->value,
+                'meta' => [],
+            ]);
+        }
+
+        $chosen = app(MailboxSelector::class)->select($provider);
+        $this->assertSame($open->id, $chosen->id);
+    }
+
+    public function test_equal_weights_prefer_lower_sent_count(): void
     {
         $provider = EmailProvider::factory()->create(['from_address' => null, 'is_active' => true]);
-        $a = $provider->mailboxes()->create(['email' => 'a@example.com', 'daily_quota' => 10, 'is_active' => true]);
-        $b = $provider->mailboxes()->create(['email' => 'b@example.com', 'daily_quota' => 10, 'is_active' => true]);
+        $a = $provider->mailboxes()->create([
+            'email' => 'a@example.com',
+            'daily_quota' => 10,
+            'weight' => 1,
+            'is_active' => true,
+        ]);
+        $b = $provider->mailboxes()->create([
+            'email' => 'b@example.com',
+            'daily_quota' => 10,
+            'weight' => 1,
+            'is_active' => true,
+        ]);
 
         for ($i = 0; $i < 8; $i++) {
             EmailLog::query()->create([
@@ -98,6 +148,83 @@ class ProviderMailboxQuotaTest extends TestCase
         $chosen = app(MailboxSelector::class)->select($provider);
         $this->assertSame($b->id, $chosen->id);
         $this->assertNotSame($a->id, $chosen->id);
+    }
+
+    public function test_selects_by_weight_deficit_not_remaining_quota(): void
+    {
+        $provider = EmailProvider::factory()->create(['from_address' => null, 'is_active' => true]);
+        $heavy = $provider->mailboxes()->create([
+            'email' => 'heavy@example.com',
+            'daily_quota' => 100,
+            'weight' => 3,
+            'is_active' => true,
+        ]);
+        $light = $provider->mailboxes()->create([
+            'email' => 'light@example.com',
+            'daily_quota' => 100,
+            'weight' => 1,
+            'is_active' => true,
+        ]);
+
+        // heavy: sent 3 → remaining 97, score 3/3 = 1
+        // light: sent 2 → remaining 98, score 2/1 = 2
+        // Old least-remaining would pick light; weight deficit picks heavy.
+        for ($i = 0; $i < 3; $i++) {
+            EmailLog::query()->create([
+                'email_provider_id' => $provider->id,
+                'to' => "h{$i}@example.com",
+                'from_address' => 'heavy@example.com',
+                'subject' => 'x',
+                'status' => 'sent',
+                'driver' => $provider->driver->value,
+                'meta' => [],
+            ]);
+        }
+        for ($i = 0; $i < 2; $i++) {
+            EmailLog::query()->create([
+                'email_provider_id' => $provider->id,
+                'to' => "l{$i}@example.com",
+                'from_address' => 'light@example.com',
+                'subject' => 'x',
+                'status' => 'sent',
+                'driver' => $provider->driver->value,
+                'meta' => [],
+            ]);
+        }
+
+        $chosen = app(MailboxSelector::class)->select($provider);
+        $this->assertSame($heavy->id, $chosen->id);
+        $this->assertNotSame($light->id, $chosen->id);
+    }
+
+    public function test_exhausted_high_weight_falls_to_low_weight(): void
+    {
+        $provider = EmailProvider::factory()->create(['from_address' => null, 'is_active' => true]);
+        $provider->mailboxes()->create([
+            'email' => 'heavy@example.com',
+            'daily_quota' => 1,
+            'weight' => 10,
+            'is_active' => true,
+        ]);
+        $light = $provider->mailboxes()->create([
+            'email' => 'light@example.com',
+            'daily_quota' => 10,
+            'weight' => 1,
+            'is_active' => true,
+        ]);
+
+        EmailLog::query()->create([
+            'email_provider_id' => $provider->id,
+            'to' => 'u@example.com',
+            'from_address' => 'heavy@example.com',
+            'subject' => 'x',
+            'status' => 'sent',
+            'driver' => $provider->driver->value,
+            'meta' => [],
+        ]);
+
+        $chosen = app(MailboxSelector::class)->select($provider);
+        $this->assertSame($light->id, $chosen->id);
     }
 
     public function test_disabled_mailboxes_are_never_selected(): void
@@ -224,17 +351,21 @@ class ProviderMailboxQuotaTest extends TestCase
         $this->withToken($this->adminToken())
             ->putJson('/api/v1/admin/email-providers/'.$provider->id, [
                 'mailboxes' => [
-                    ['id' => $existing?->id, 'email' => 'one@example.com', 'is_active' => true, 'daily_quota' => 8000],
+                    ['id' => $existing?->id, 'email' => 'one@example.com', 'is_active' => true, 'daily_quota' => 8000, 'weight' => 5],
                     ['email' => 'two@example.com', 'is_active' => true, 'daily_quota' => 12000],
                 ],
             ])
             ->assertOk()
             ->assertJsonPath('data.mailboxes.0.email', 'one@example.com')
             ->assertJsonPath('data.mailboxes.0.daily_quota', 8000)
-            ->assertJsonPath('data.mailboxes.1.email', 'two@example.com');
+            ->assertJsonPath('data.mailboxes.0.weight', 5)
+            ->assertJsonPath('data.mailboxes.1.email', 'two@example.com')
+            ->assertJsonPath('data.mailboxes.1.weight', 1);
 
         $this->assertSame(2, $provider->fresh()->mailboxes()->count());
         $this->assertSame('one@example.com', $provider->fresh()->from_address);
+        $this->assertSame(5, (int) $provider->fresh()->mailboxes()->where('email', 'one@example.com')->value('weight'));
+        $this->assertSame(1, (int) $provider->fresh()->mailboxes()->where('email', 'two@example.com')->value('weight'));
     }
 
     public function test_provider_test_requires_from_mailbox_id(): void
