@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Enums\UserApprovalStatus;
 use App\Enums\UserRegistrationSource;
 use App\Models\BrandingSetting;
+use App\Models\EmailLog;
 use App\Models\EmailProvider;
 use App\Models\ExternalIntegration;
 use App\Models\User;
@@ -46,6 +47,8 @@ class MigrationExportService
             'external_integrations' => $this->exportClients(),
             'user_client_links' => $this->exportLinks(),
             'branding' => $this->exportBranding(),
+            // Durable undelivered queue — sent logs are intentionally omitted.
+            'pending_email_logs' => $this->exportPendingEmailLogs(),
         ];
     }
 
@@ -227,6 +230,67 @@ class MigrationExportService
             'logo_dark' => $this->exportAsset($branding->logo_dark_path),
             'favicon' => $this->exportAsset($branding->favicon_path),
         ];
+    }
+
+    /**
+     * Pending emails with a stored body (Redis jobs are ephemeral; these survive cutover).
+     * Sent logs are never exported.
+     *
+     * @return list<array<string, mixed>>
+     */
+    private function exportPendingEmailLogs(): array
+    {
+        return EmailLog::query()
+            ->with(['emailProvider:id,slug', 'externalIntegration:id,slug'])
+            ->where('status', 'pending')
+            ->orderBy('id')
+            ->get()
+            ->filter(function (EmailLog $log): bool {
+                $body = $log->meta['body'] ?? null;
+
+                return is_string($body) && $body !== '';
+            })
+            ->map(function (EmailLog $log): array {
+                $meta = is_array($log->meta) ? $log->meta : [];
+                $attachments = [];
+
+                foreach (is_array($meta['attachments'] ?? null) ? $meta['attachments'] : [] as $row) {
+                    if (! is_array($row)) {
+                        continue;
+                    }
+                    $path = (string) ($row['path'] ?? '');
+                    if ($path === '' || ! Storage::disk(EmailAttachmentService::DISK)->exists($path)) {
+                        continue;
+                    }
+                    $bytes = Storage::disk(EmailAttachmentService::DISK)->get($path);
+                    if (! is_string($bytes) || $bytes === '') {
+                        continue;
+                    }
+                    $attachments[] = [
+                        'filename' => (string) ($row['filename'] ?? basename($path)),
+                        'content_type' => (string) ($row['content_type'] ?? 'application/octet-stream'),
+                        'size' => (int) ($row['size'] ?? strlen($bytes)),
+                        'content_base64' => base64_encode($bytes),
+                    ];
+                }
+
+                // Drop filesystem paths — destination will re-store from content_base64.
+                unset($meta['attachments'], $meta['attachment_count']);
+
+                return [
+                    'to' => $log->to,
+                    'from_address' => $log->from_address,
+                    'subject' => $log->subject,
+                    'driver' => $log->driver,
+                    'provider_slug' => $log->emailProvider?->slug,
+                    'client_slug' => $log->externalIntegration?->slug,
+                    'meta' => $meta,
+                    'attachments' => $attachments,
+                    'created_at' => $log->created_at?->toIso8601String(),
+                ];
+            })
+            ->values()
+            ->all();
     }
 
     /**

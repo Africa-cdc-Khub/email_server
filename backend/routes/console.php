@@ -9,3 +9,4 @@ Artisan::command('inspire', function () {
 })->purpose('Display an inspiring quote');
 
 Schedule::command('emails:retry-pending')->everyMinute();
+Schedule::command('emails:prune-logs --days=7')->daily();

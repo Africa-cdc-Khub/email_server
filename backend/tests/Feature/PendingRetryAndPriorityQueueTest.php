@@ -162,4 +162,78 @@ class PendingRetryAndPriorityQueueTest extends TestCase
         Queue::assertPushed(SendEmailJob::class, fn (SendEmailJob $job) => $job->emailLogId === $stale->id);
         Queue::assertNotPushed(SendEmailJob::class, fn (SendEmailJob $job) => $job->emailLogId === $fresh->id);
     }
+
+    public function test_retry_pending_command_also_requeues_stale_failed(): void
+    {
+        Queue::fake();
+
+        SystemSetting::setValue(SystemSetting::MAIL_PENDING_RETRY_SECONDS, 60);
+
+        $provider = EmailProvider::factory()->create([
+            'is_default' => true,
+            'is_active' => true,
+        ]);
+
+        $failed = EmailLog::query()->create([
+            'email_provider_id' => $provider->id,
+            'to' => 'failed@example.com',
+            'subject' => 'Failed send',
+            'status' => 'failed',
+            'driver' => $provider->driver->value,
+            'error_message' => 'boom',
+            'meta' => ['body' => '<p>hello</p>', 'is_html' => true],
+        ]);
+
+        EmailLog::query()->whereKey($failed->id)->toBase()->update([
+            'updated_at' => now()->subMinutes(5),
+        ]);
+
+        Artisan::call('emails:retry-pending');
+
+        Queue::assertPushed(SendEmailJob::class, fn (SendEmailJob $job) => $job->emailLogId === $failed->id);
+        $this->assertDatabaseHas('email_logs', [
+            'id' => $failed->id,
+            'status' => 'pending',
+            'error_message' => null,
+        ]);
+    }
+
+    public function test_prune_logs_deletes_rows_older_than_seven_days(): void
+    {
+        $provider = EmailProvider::factory()->create([
+            'is_default' => true,
+            'is_active' => true,
+        ]);
+
+        $old = EmailLog::query()->create([
+            'email_provider_id' => $provider->id,
+            'to' => 'old@example.com',
+            'subject' => 'Old',
+            'status' => 'sent',
+            'driver' => $provider->driver->value,
+            'meta' => ['body' => '<p>old</p>', 'is_html' => true],
+        ]);
+        $recent = EmailLog::query()->create([
+            'email_provider_id' => $provider->id,
+            'to' => 'recent@example.com',
+            'subject' => 'Recent',
+            'status' => 'sent',
+            'driver' => $provider->driver->value,
+            'meta' => ['body' => '<p>new</p>', 'is_html' => true],
+        ]);
+
+        EmailLog::query()->whereKey($old->id)->toBase()->update([
+            'created_at' => now()->subDays(8),
+            'updated_at' => now()->subDays(8),
+        ]);
+        EmailLog::query()->whereKey($recent->id)->toBase()->update([
+            'created_at' => now()->subDays(2),
+            'updated_at' => now()->subDays(2),
+        ]);
+
+        Artisan::call('emails:prune-logs', ['--days' => 7]);
+
+        $this->assertDatabaseMissing('email_logs', ['id' => $old->id]);
+        $this->assertDatabaseHas('email_logs', ['id' => $recent->id]);
+    }
 }

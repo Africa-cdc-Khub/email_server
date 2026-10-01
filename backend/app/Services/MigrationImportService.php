@@ -5,10 +5,13 @@ namespace App\Services;
 use App\Enums\EmailDriver;
 use App\Enums\UserApprovalStatus;
 use App\Enums\UserRegistrationSource;
+use App\Jobs\SendEmailJob;
 use App\Models\BrandingSetting;
+use App\Models\EmailLog;
 use App\Models\EmailProvider;
 use App\Models\ExternalIntegration;
 use App\Models\User;
+use App\Support\EmailPriority;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Storage;
@@ -28,6 +31,7 @@ class MigrationImportService
      *     clients: array{created: int, updated: int},
      *     links_synced: int,
      *     branding_updated: bool,
+     *     pending_email_logs: array{created: int, queued: int, skipped: int},
      *     warnings: list<string>
      * }
      */
@@ -49,6 +53,7 @@ class MigrationImportService
             'clients' => ['created' => 0, 'updated' => 0],
             'links_synced' => 0,
             'branding_updated' => false,
+            'pending_email_logs' => ['created' => 0, 'queued' => 0, 'skipped' => 0],
             'warnings' => [],
         ];
 
@@ -65,6 +70,9 @@ class MigrationImportService
             );
             $summary['branding_updated'] = $this->importBranding($package['branding'] ?? null, $warnings);
         });
+
+        // After commit so queued jobs are not orphaned if the transaction rolls back.
+        $this->importPendingEmailLogs($package['pending_email_logs'] ?? [], $summary, $warnings);
 
         $summary['warnings'] = $warnings;
 
@@ -403,6 +411,113 @@ class MigrationImportService
         $row->save();
 
         return true;
+    }
+
+    /**
+     * Recreate pending email logs and queue delivery. Sent logs are never imported.
+     *
+     * @param  list<array<string, mixed>>  $rows
+     * @param  array<string, mixed>  $summary
+     * @param  list<string>  $warnings
+     */
+    private function importPendingEmailLogs(array $rows, array &$summary, array &$warnings): void
+    {
+        $providerBySlug = EmailProvider::query()->pluck('id', 'slug');
+        $clientBySlug = ExternalIntegration::query()->pluck('id', 'slug');
+        $attachments = app(EmailAttachmentService::class);
+
+        foreach ($rows as $index => $row) {
+            if (! is_array($row)) {
+                $summary['pending_email_logs']['skipped']++;
+                continue;
+            }
+
+            $meta = is_array($row['meta'] ?? null) ? $row['meta'] : [];
+            $body = $meta['body'] ?? null;
+            if (! is_string($body) || $body === '') {
+                $warnings[] = "Pending email #{$index} skipped: missing body.";
+                $summary['pending_email_logs']['skipped']++;
+                continue;
+            }
+
+            // Never import sent (or any non-pending) rows from a package.
+            $status = (string) ($row['status'] ?? 'pending');
+            if ($status === 'sent') {
+                $summary['pending_email_logs']['skipped']++;
+                continue;
+            }
+
+            $providerId = null;
+            $providerSlug = trim((string) ($row['provider_slug'] ?? ''));
+            if ($providerSlug !== '' && isset($providerBySlug[$providerSlug])) {
+                $providerId = (int) $providerBySlug[$providerSlug];
+            } else {
+                $providerId = EmailProvider::query()->where('is_default', true)->value('id');
+                if ($providerSlug !== '') {
+                    $warnings[] = "Pending email to {$row['to']} used default provider (slug “{$providerSlug}” missing).";
+                }
+            }
+
+            if ($providerId === null) {
+                $warnings[] = "Pending email to {$row['to']} skipped: no email provider available.";
+                $summary['pending_email_logs']['skipped']++;
+                continue;
+            }
+
+            $clientId = null;
+            $clientSlug = trim((string) ($row['client_slug'] ?? ''));
+            if ($clientSlug !== '') {
+                if (isset($clientBySlug[$clientSlug])) {
+                    $clientId = (int) $clientBySlug[$clientSlug];
+                } else {
+                    $warnings[] = "Pending email to {$row['to']}: client “{$clientSlug}” not found.";
+                }
+            }
+
+            $log = EmailLog::query()->create([
+                'email_provider_id' => $providerId,
+                'external_integration_id' => $clientId,
+                'to' => (string) ($row['to'] ?? ''),
+                'from_address' => $row['from_address'] ?? null,
+                'subject' => (string) ($row['subject'] ?? ''),
+                'status' => 'pending',
+                'error_message' => null,
+                'driver' => $row['driver'] ?? EmailProvider::query()->find($providerId)?->driver?->value,
+                'meta' => $meta,
+            ]);
+
+            $embedded = is_array($row['attachments'] ?? null) ? $row['attachments'] : [];
+            if ($embedded !== []) {
+                $payload = [];
+                foreach ($embedded as $file) {
+                    if (! is_array($file)) {
+                        continue;
+                    }
+                    $raw = base64_decode((string) ($file['content_base64'] ?? ''), true);
+                    if ($raw === false || $raw === '') {
+                        continue;
+                    }
+                    $payload[] = [
+                        'filename' => (string) ($file['filename'] ?? 'attachment.bin'),
+                        'content' => $raw,
+                        'content_type' => (string) ($file['content_type'] ?? 'application/octet-stream'),
+                        'size' => (int) ($file['size'] ?? strlen($raw)),
+                    ];
+                }
+                if ($payload !== []) {
+                    $stored = $attachments->store($payload, $log->id);
+                    $meta['attachments'] = $stored;
+                    $meta['attachment_count'] = count($stored);
+                    $log->update(['meta' => $meta]);
+                }
+            }
+
+            $queue = EmailPriority::queueForSubject((string) $log->subject);
+            SendEmailJob::dispatch($log->id, $queue);
+
+            $summary['pending_email_logs']['created']++;
+            $summary['pending_email_logs']['queued']++;
+        }
     }
 
     /**

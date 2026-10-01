@@ -25,8 +25,8 @@ Downloaded packages must not leave credentials readable on disk. Each download i
 | Portability | **A** — portable package with **decrypted** provider secrets inside the sealed payload; re-encrypt on import with the destination `APP_KEY`. Client secrets remain **hashes** (existing credentials keep working; secrets cannot be re-displayed). |
 | Package encryption | **Per-download AES-256-GCM** with a fresh 256-bit random key (base64url). Key is returned once with the export response and never stored server-side. Import requires the key. No password KDF — full-entropy key so offline brute-force is infeasible (~2²⁵⁶). |
 | Restore UX | **1** — Admin UI download + upload (app applies upsert). No reliance on a DB CLI import for this flow. |
-| Scope | **C** — users, clients, providers, user↔client links, branding (including logo/favicon bytes). |
-| Excluded | Email logs, audit logs, blocked IPs/emails, password-reset tokens, Sanctum personal access tokens. |
+| Scope | **C** — users, clients, providers, user↔client links, branding (including logo/favicon bytes), **pending email logs** (body + embedded attachments). |
+| Excluded | **Sent** email logs, failed logs (unless later added), audit logs, blocked IPs/emails, password-reset tokens, Sanctum personal access tokens, Redis queue payloads (rebuilt from pending logs on import). |
 
 ## Approach
 

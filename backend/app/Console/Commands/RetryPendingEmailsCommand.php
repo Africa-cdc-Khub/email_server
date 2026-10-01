@@ -12,7 +12,7 @@ class RetryPendingEmailsCommand extends Command
     protected $signature = 'emails:retry-pending
                             {--force : Ignore interval throttle and settings disable}';
 
-    protected $description = 'Re-queue stuck pending emails that still have a stored body';
+    protected $description = 'Re-queue stuck pending and failed emails that still have a stored body';
 
     public function handle(EmailDispatchService $dispatch): int
     {
@@ -20,7 +20,7 @@ class RetryPendingEmailsCommand extends Command
         $interval = SystemSetting::mailPendingRetrySeconds();
 
         if (! $force && $interval === 0) {
-            $this->info('Pending auto-retry is disabled (mail_pending_retry_seconds=0).');
+            $this->info('Email auto-retry is disabled (mail_pending_retry_seconds=0).');
 
             return self::SUCCESS;
         }
@@ -37,14 +37,16 @@ class RetryPendingEmailsCommand extends Command
         }
 
         $staleSeconds = $force ? 0 : max($interval, 45);
-        $result = $dispatch->retryAllPending(null, $staleSeconds);
+        $pending = $dispatch->retryAllPending(null, $staleSeconds);
+        $failed = $dispatch->retryAllFailed(null, $staleSeconds);
 
         Cache::put($cacheKey, time(), max(3600, $interval * 10));
 
         $this->info(sprintf(
-            'Re-queued %d pending email(s); skipped %d.',
-            $result['queued'],
-            $result['skipped'],
+            'Re-queued %d pending and %d failed email(s); skipped %d.',
+            $pending['queued'],
+            $failed['queued'],
+            $pending['skipped'] + $failed['skipped'],
         ));
 
         return self::SUCCESS;

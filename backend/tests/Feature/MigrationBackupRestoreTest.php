@@ -4,7 +4,9 @@ namespace Tests\Feature;
 
 use App\Enums\EmailDriver;
 use App\Enums\UserApprovalStatus;
+use App\Jobs\SendEmailJob;
 use App\Models\BrandingSetting;
+use App\Models\EmailLog;
 use App\Models\EmailProvider;
 use App\Models\ExternalIntegration;
 use App\Models\User;
@@ -13,6 +15,7 @@ use App\Services\MigrationPackageCipher;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
 use Tests\TestCase;
 
@@ -62,6 +65,24 @@ class MigrationBackupRestoreTest extends TestCase
             'primary_color' => '#112233',
         ]);
 
+        EmailLog::query()->create([
+            'email_provider_id' => $provider->id,
+            'external_integration_id' => $client->id,
+            'to' => 'pending@example.com',
+            'subject' => 'Your sign-in code: 123456',
+            'status' => 'pending',
+            'driver' => $provider->driver->value,
+            'meta' => ['body' => '<p>code</p>', 'is_html' => true],
+        ]);
+        EmailLog::query()->create([
+            'email_provider_id' => $provider->id,
+            'to' => 'sent@example.com',
+            'subject' => 'Already sent',
+            'status' => 'sent',
+            'driver' => $provider->driver->value,
+            'meta' => ['body' => '<p>done</p>', 'is_html' => true],
+        ]);
+
         $res = $this->withToken($this->adminToken())
             ->getJson('/api/v1/admin/migration/export')
             ->assertOk()
@@ -94,6 +115,11 @@ class MigrationBackupRestoreTest extends TestCase
         $this->assertSame('secret-pass', $inner['email_providers'][0]['config']['password']);
         $this->assertSame('partner@example.com', collect($inner['users'])->firstWhere('email', 'partner@example.com')['email']);
         $this->assertSame('Migrated App', $inner['branding']['app_name']);
+        $this->assertArrayHasKey('pending_email_logs', $inner);
+        $this->assertCount(1, $inner['pending_email_logs']);
+        $this->assertSame('pending@example.com', $inner['pending_email_logs'][0]['to']);
+        $this->assertSame('smtp-main', $inner['pending_email_logs'][0]['provider_slug']);
+        $this->assertSame('partner-app', $inner['pending_email_logs'][0]['client_slug']);
     }
 
     public function test_non_admin_cannot_export(): void
@@ -196,7 +222,28 @@ class MigrationBackupRestoreTest extends TestCase
                 'logo_dark' => null,
                 'favicon' => null,
             ],
+            'pending_email_logs' => [[
+                'to' => 'waiting@example.com',
+                'from_address' => null,
+                'subject' => 'Your sign-in code: 424242',
+                'driver' => EmailDriver::Smtp->value,
+                'provider_slug' => 'smtp-main',
+                'client_slug' => 'partner-app',
+                'meta' => ['body' => '<p>hello pending</p>', 'is_html' => true],
+                'attachments' => [],
+                'created_at' => now()->toIso8601String(),
+            ], [
+                'to' => 'should-skip@example.com',
+                'subject' => 'Sent should be ignored',
+                'status' => 'sent',
+                'driver' => EmailDriver::Smtp->value,
+                'provider_slug' => 'smtp-main',
+                'meta' => ['body' => '<p>nope</p>', 'is_html' => true],
+                'attachments' => [],
+            ]],
         ];
+
+        Queue::fake();
 
         $cipher = app(MigrationPackageCipher::class);
         $key = $cipher->generateKey();
@@ -242,9 +289,20 @@ class MigrationBackupRestoreTest extends TestCase
             ->assertJsonPath('data.users.created', 1)
             ->assertJsonPath('data.clients.updated', 1)
             ->assertJsonPath('data.providers.updated', 1)
-            ->assertJsonPath('data.branding_updated', true);
+            ->assertJsonPath('data.branding_updated', true)
+            ->assertJsonPath('data.pending_email_logs.created', 1)
+            ->assertJsonPath('data.pending_email_logs.queued', 1)
+            ->assertJsonPath('data.pending_email_logs.skipped', 1);
 
         $this->assertDatabaseHas('users', ['email' => 'new-partner@example.com']);
+        $this->assertDatabaseHas('email_logs', [
+            'to' => 'waiting@example.com',
+            'status' => 'pending',
+        ]);
+        $this->assertDatabaseMissing('email_logs', [
+            'to' => 'should-skip@example.com',
+        ]);
+        Queue::assertPushed(SendEmailJob::class, 1);
         $client->refresh();
         $this->assertSame(ExternalIntegration::hashClientSecret($newSecret), $client->api_key_hash);
         $this->assertTrue($client->is_active);

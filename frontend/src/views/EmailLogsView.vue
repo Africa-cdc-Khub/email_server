@@ -210,7 +210,7 @@ onMounted(async () => {
   <div>
     <PageHeader
       title="Email logs"
-      subtitle="Delivery history — filter by client, status, or sending driver"
+      subtitle="Delivery history — filter by client, status, or sending driver. Logs older than 7 days are pruned automatically."
     >
       <template #actions>
         <v-btn

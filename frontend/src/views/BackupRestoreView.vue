@@ -121,7 +121,7 @@ async function restorePackage() {
   }
   if (
     !confirm(
-      'Restore this encrypted migration package? Matching users (by email), clients (by slug), and providers (by slug) will be created or updated.',
+      'Restore this encrypted migration package? Matching users (by email), clients (by slug), and providers (by slug) will be created or updated. Pending emails will be re-created and queued; sent logs in the package are ignored.',
     )
   ) {
     return
@@ -154,13 +154,13 @@ async function restorePackage() {
   <div>
     <PageHeader
       title="Backup / Restore"
-      subtitle="Export encrypted users, clients, providers, and branding for migration to another server"
+      subtitle="Export encrypted users, clients, providers, branding, and pending emails for migration to another server"
     />
 
     <v-alert type="warning" variant="tonal" class="mb-4" border="start">
       Each download is encrypted with a unique 256-bit key generated for that file only. The key is shown
       once after download — copy it and store it separately. Without the key, the package cannot be restored
-      (including by brute force).
+      (including by brute force). Pending emails (with body) are included and re-queued on restore; sent logs are omitted.
     </v-alert>
 
     <v-alert v-if="message" type="success" variant="tonal" class="mb-4" closable @click:close="message = ''">

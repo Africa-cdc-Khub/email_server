@@ -199,10 +199,11 @@ onMounted(async () => {
     <v-alert v-if="message" type="success" variant="tonal" class="mb-4">{{ message }}</v-alert>
     <v-alert v-if="error" type="error" variant="tonal" class="mb-4">{{ error }}</v-alert>
 
-    <ParentCard v-if="auth.isAdmin" title="Pending email auto-retry" class="mb-4">
+    <ParentCard v-if="auth.isAdmin" title="Email auto-retry & retention" class="mb-4">
       <p class="text-body-2 text-medium-emphasis mb-4">
-        Re-queue stuck pending emails on a schedule. Set to 0 to disable. Default is 60 seconds.
-        Sign-in and verification-code subjects are sent on a priority queue.
+        Re-queue stuck pending and failed emails on a schedule (when a stored body exists).
+        Set to 0 to disable. Default is 60 seconds. Sign-in and verification-code subjects use a priority queue.
+        Email logs older than 7 days are pruned automatically.
       </p>
       <v-row>
         <v-col cols="12" md="4">

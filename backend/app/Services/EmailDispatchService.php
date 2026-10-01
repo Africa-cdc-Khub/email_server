@@ -270,9 +270,9 @@ class EmailDispatchService
      *
      * @return array{queued: int, skipped: int}
      */
-    public function retryAllFailed(?string $externalIntegrationId = null): array
+    public function retryAllFailed(?string $externalIntegrationId = null, int $staleSeconds = 0): array
     {
-        return $this->retryAllByStatus('failed', $externalIntegrationId);
+        return $this->retryAllByStatus('failed', $externalIntegrationId, $staleSeconds);
     }
 
     /**
@@ -302,7 +302,7 @@ class EmailDispatchService
             ->where('status', $status)
             ->orderBy('id');
 
-        if ($status === 'pending' && $staleSeconds > 0) {
+        if ($staleSeconds > 0) {
             $query->where('updated_at', '<=', now()->subSeconds($staleSeconds));
         }
 
