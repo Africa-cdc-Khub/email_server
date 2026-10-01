@@ -121,6 +121,10 @@ class DatabaseSeeder extends Seeder
                 'password' => Hash::make($adminPassword),
                 'is_admin' => true,
                 'is_active' => true,
+                'approval_status' => \App\Enums\UserApprovalStatus::Approved,
+                'approved_at' => now(),
+                'rejected_at' => null,
+                'rejection_reason' => null,
             ],
         );
 

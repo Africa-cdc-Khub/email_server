@@ -162,5 +162,12 @@ fi
 
 php artisan storage:link --force || echo "WARNING: storage:link failed" >&2
 
+if [ -n "${ADMIN_PASSWORD:-}" ]; then
+  echo "==> Ensuring admin user matches ADMIN_EMAIL / ADMIN_PASSWORD..."
+  php artisan app:ensure-admin || echo "WARNING: app:ensure-admin failed" >&2
+else
+  echo "WARNING: ADMIN_PASSWORD empty — skipping app:ensure-admin" >&2
+fi
+
 echo "==> Starting php-fpm..."
 exec php-fpm

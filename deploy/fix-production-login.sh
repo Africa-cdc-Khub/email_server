@@ -82,8 +82,9 @@ if [[ -z "$ADMIN_PASSWORD" ]]; then
 fi
 docker compose exec -T \
   -e ADMIN_EMAIL="$ADMIN_EMAIL" \
-  -e ADMIN_PASSWORD="${ADMIN_PASSWORD:-$ADMIN_PASSWORD}" \
+  -e ADMIN_PASSWORD="${ADMIN_PASSWORD}" \
   -e ADMIN_RESET_PASSWORD=true \
-  app php artisan db:seed --force
+  app php artisan app:ensure-admin --force-password
 
 echo "==> Done. Try logging in as ${ADMIN_EMAIL}"
+echo "    Remember: captcha is required on the login page when CAPTCHA_ENABLED=true."
