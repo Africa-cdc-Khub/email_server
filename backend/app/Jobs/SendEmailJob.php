@@ -5,6 +5,7 @@ namespace App\Jobs;
 use App\Exceptions\PermanentEmailDeliveryException;
 use App\Models\EmailLog;
 use App\Services\EmailDispatchService;
+use App\Support\EmailPriority;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Queue\InteractsWithQueue;
@@ -26,8 +27,9 @@ class SendEmailJob implements ShouldQueue
 
     public function __construct(
         public readonly int $emailLogId,
+        ?string $queue = null,
     ) {
-        $this->onQueue('emails');
+        $this->onQueue($queue ?? EmailPriority::QUEUE_DEFAULT);
     }
 
     public function handle(EmailDispatchService $dispatch): void

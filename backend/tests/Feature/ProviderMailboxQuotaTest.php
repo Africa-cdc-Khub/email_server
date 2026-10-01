@@ -410,6 +410,8 @@ class ProviderMailboxQuotaTest extends TestCase
                 'mailbox_quotas' => [[
                     'provider_id',
                     'provider_name',
+                    'total_remaining_24h',
+                    'total_daily_quota',
                     'mailboxes' => [['email', 'daily_quota', 'sent_24h', 'remaining_24h']],
                 ]],
             ])
@@ -418,6 +420,8 @@ class ProviderMailboxQuotaTest extends TestCase
                 'daily_quota' => 100,
                 'sent_24h' => 1,
                 'remaining_24h' => 99,
-            ]);
+            ])
+            ->assertJsonPath('mailbox_quotas.0.total_remaining_24h', 99)
+            ->assertJsonPath('mailbox_quotas.0.total_daily_quota', 100);
     }
 }

@@ -29,8 +29,10 @@ class DashboardController extends Controller
 
         $sentToday = EmailLog::query()->where('status', 'sent')->whereDate('created_at', today());
         $failedToday = EmailLog::query()->where('status', 'failed')->whereDate('created_at', today());
+        $pending = EmailLog::query()->where('status', 'pending');
         $this->scopeLogs($sentToday, $allowedIds);
         $this->scopeLogs($failedToday, $allowedIds);
+        $this->scopeLogs($pending, $allowedIds);
 
         $recent = EmailLog::query()
             ->with(['emailProvider:id,name', 'externalIntegration:id,name'])
@@ -48,6 +50,7 @@ class DashboardController extends Controller
                 'integrations' => $integrationsQuery->count(),
                 'emails_sent_today' => $sentToday->count(),
                 'emails_failed_today' => $failedToday->count(),
+                'emails_pending' => $pending->count(),
             ],
             'email_activity' => $this->emailActivityLastSevenDays($allowedIds),
             'default_provider' => $default ? [
@@ -63,7 +66,15 @@ class DashboardController extends Controller
     }
 
     /**
-     * @return list<array{provider_id: int, provider_name: string, mailboxes: list<array<string, mixed>>}>
+     * @return list<array{
+     *     provider_id: int,
+     *     provider_name: string,
+     *     total_remaining_24h: int,
+     *     total_daily_quota: int,
+     *     total_remaining_1h: int|null,
+     *     total_hourly_quota: int|null,
+     *     mailboxes: list<array<string, mixed>>
+     * }>
      */
     private function mailboxQuotas(MailboxSelector $selector): array
     {
@@ -73,11 +84,34 @@ class DashboardController extends Controller
             ->orderBy('priority')
             ->orderBy('name')
             ->get()
-            ->map(fn (EmailProvider $provider) => [
-                'provider_id' => $provider->id,
-                'provider_name' => $provider->name,
-                'mailboxes' => $selector->usageFor($provider),
-            ])
+            ->map(function (EmailProvider $provider) use ($selector) {
+                $mailboxes = $selector->usageFor($provider);
+                $totalRemaining24h = 0;
+                $totalDailyQuota = 0;
+                $totalRemaining1h = 0;
+                $totalHourlyQuota = 0;
+                $hasHourly = false;
+
+                foreach ($mailboxes as $box) {
+                    $totalRemaining24h += (int) ($box['remaining_24h'] ?? 0);
+                    $totalDailyQuota += (int) ($box['daily_quota'] ?? 0);
+                    if (array_key_exists('hourly_quota', $box) && $box['hourly_quota'] !== null) {
+                        $hasHourly = true;
+                        $totalHourlyQuota += (int) $box['hourly_quota'];
+                        $totalRemaining1h += (int) ($box['remaining_1h'] ?? 0);
+                    }
+                }
+
+                return [
+                    'provider_id' => $provider->id,
+                    'provider_name' => $provider->name,
+                    'total_remaining_24h' => $totalRemaining24h,
+                    'total_daily_quota' => $totalDailyQuota,
+                    'total_remaining_1h' => $hasHourly ? $totalRemaining1h : null,
+                    'total_hourly_quota' => $hasHourly ? $totalHourlyQuota : null,
+                    'mailboxes' => $mailboxes,
+                ];
+            })
             ->values()
             ->all();
     }

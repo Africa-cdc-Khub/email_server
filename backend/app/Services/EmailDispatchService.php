@@ -9,8 +9,10 @@ use App\Jobs\SendEmailJob;
 use App\Models\EmailLog;
 use App\Models\EmailProvider;
 use App\Models\ExternalIntegration;
+use App\Support\EmailPriority;
 use App\Support\MailHeaderSanitizer;
 use Illuminate\Mail\Message;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Mail;
 use RuntimeException;
 use Throwable;
@@ -79,7 +81,7 @@ class EmailDispatchService
             $log->update(['meta' => $meta]);
         }
 
-        SendEmailJob::dispatch($log->id);
+        $this->dispatchSendJob($log);
 
         return $log->fresh() ?? $log;
     }
@@ -89,61 +91,71 @@ class EmailDispatchService
      */
     public function deliver(int $emailLogId): EmailLog
     {
-        $log = EmailLog::query()->findOrFail($emailLogId);
+        $lock = Cache::lock('email-deliver:'.$emailLogId, 180);
 
-        if ($log->status === 'sent') {
-            return $log;
+        if (! $lock->get()) {
+            return EmailLog::query()->findOrFail($emailLogId);
         }
 
-        $meta = $log->meta ?? [];
-        $body = (string) ($meta['body'] ?? '');
-        $isHtml = (bool) ($meta['is_html'] ?? true);
-        $cc = $meta['cc'] ?? [];
-        $bcc = $meta['bcc'] ?? [];
-        $attachmentMeta = is_array($meta['attachments'] ?? null) ? $meta['attachments'] : [];
+        try {
+            $log = EmailLog::query()->findOrFail($emailLogId);
 
-        if ($body === '') {
-            $log->update([
-                'status' => 'failed',
-                'error_message' => 'Missing email body in queue payload.',
-            ]);
+            if ($log->status === 'sent') {
+                return $log;
+            }
 
-            throw new PermanentEmailDeliveryException('Missing email body in queue payload.');
+            $meta = $log->meta ?? [];
+            $body = (string) ($meta['body'] ?? '');
+            $isHtml = (bool) ($meta['is_html'] ?? true);
+            $cc = $meta['cc'] ?? [];
+            $bcc = $meta['bcc'] ?? [];
+            $attachmentMeta = is_array($meta['attachments'] ?? null) ? $meta['attachments'] : [];
+
+            if ($body === '') {
+                $log->update([
+                    'status' => 'failed',
+                    'error_message' => 'Missing email body in queue payload.',
+                ]);
+
+                throw new PermanentEmailDeliveryException('Missing email body in queue payload.');
+            }
+
+            $log->loadMissing('externalIntegration');
+
+            if ($isHtml) {
+                $body = $this->branding->wrapHtml($body, $log->externalIntegration);
+            } else {
+                $body = $this->branding->wrapPlainText($body, $log->externalIntegration);
+            }
+
+            $loadedAttachments = $attachmentMeta === []
+                ? []
+                : $this->attachments->load($attachmentMeta);
+
+            return $this->transmit(
+                log: $log,
+                to: $log->to,
+                subject: $log->subject,
+                body: $body,
+                isHtml: $isHtml,
+                providerId: $log->email_provider_id,
+                cc: is_array($cc) ? $cc : [],
+                bcc: is_array($bcc) ? $bcc : [],
+                fromName: $this->branding->resolveFromName(
+                    $log->externalIntegration,
+                    $this->mailConfig->resolveFromIdentity(
+                        $this->mailConfig->resolveProvider($log->email_provider_id),
+                    )['name'],
+                ),
+                markFailedOnError: false,
+                attachmentPayload: $loadedAttachments,
+                cleanupAttachmentMeta: $attachmentMeta,
+                allowFallback: true,
+                explicitMailboxId: null,
+            );
+        } finally {
+            $lock->release();
         }
-
-        $log->loadMissing('externalIntegration');
-
-        if ($isHtml) {
-            $body = $this->branding->wrapHtml($body, $log->externalIntegration);
-        } else {
-            $body = $this->branding->wrapPlainText($body, $log->externalIntegration);
-        }
-
-        $loadedAttachments = $attachmentMeta === []
-            ? []
-            : $this->attachments->load($attachmentMeta);
-
-        return $this->transmit(
-            log: $log,
-            to: $log->to,
-            subject: $log->subject,
-            body: $body,
-            isHtml: $isHtml,
-            providerId: $log->email_provider_id,
-            cc: is_array($cc) ? $cc : [],
-            bcc: is_array($bcc) ? $bcc : [],
-            fromName: $this->branding->resolveFromName(
-                $log->externalIntegration,
-                $this->mailConfig->resolveFromIdentity(
-                    $this->mailConfig->resolveProvider($log->email_provider_id),
-                )['name'],
-            ),
-            markFailedOnError: false,
-            attachmentPayload: $loadedAttachments,
-            cleanupAttachmentMeta: $attachmentMeta,
-            allowFallback: true,
-            explicitMailboxId: null,
-        );
     }
 
     /**
@@ -247,7 +259,7 @@ class EmailDispatchService
             'error_message' => null,
         ]);
 
-        SendEmailJob::dispatch($log->id);
+        $this->dispatchSendJob($log->fresh() ?? $log);
 
         return $log->fresh() ?? $log;
     }
@@ -268,17 +280,20 @@ class EmailDispatchService
      *
      * @return array{queued: int, skipped: int}
      */
-    public function retryAllPending(?string $externalIntegrationId = null): array
+    public function retryAllPending(?string $externalIntegrationId = null, int $staleSeconds = 0): array
     {
-        return $this->retryAllByStatus('pending', $externalIntegrationId);
+        return $this->retryAllByStatus('pending', $externalIntegrationId, $staleSeconds);
     }
 
     /**
      * @param  'failed'|'pending'  $status
      * @return array{queued: int, skipped: int}
      */
-    public function retryAllByStatus(string $status, ?string $externalIntegrationId = null): array
-    {
+    public function retryAllByStatus(
+        string $status,
+        ?string $externalIntegrationId = null,
+        int $staleSeconds = 0,
+    ): array {
         if (! in_array($status, ['failed', 'pending'], true)) {
             throw new RuntimeException('Unsupported email log status for bulk retry.');
         }
@@ -286,6 +301,10 @@ class EmailDispatchService
         $query = EmailLog::query()
             ->where('status', $status)
             ->orderBy('id');
+
+        if ($status === 'pending' && $staleSeconds > 0) {
+            $query->where('updated_at', '<=', now()->subSeconds($staleSeconds));
+        }
 
         if ($externalIntegrationId !== null && $externalIntegrationId !== '') {
             if ($externalIntegrationId === 'none' || $externalIntegrationId === '0') {
@@ -310,6 +329,13 @@ class EmailDispatchService
         });
 
         return ['queued' => $queued, 'skipped' => $skipped];
+    }
+
+    private function dispatchSendJob(EmailLog $log): void
+    {
+        $queue = EmailPriority::queueForSubject((string) $log->subject);
+
+        SendEmailJob::dispatch($log->id, $queue);
     }
 
     public function testProvider(

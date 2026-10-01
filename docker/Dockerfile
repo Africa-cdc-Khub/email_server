@@ -17,6 +17,7 @@ RUN apt-get update \
         curl \
         zip \
         ca-certificates \
+        supervisor \
     && install-php-extensions \
         pdo_pgsql \
         mbstring \
@@ -25,11 +26,12 @@ RUN apt-get update \
         redis \
     && rm -rf /var/lib/apt/lists/*
 
-RUN mkdir -p /var/log/php /var/log/php-fpm \
+RUN mkdir -p /var/log/php /var/log/php-fpm /var/log/supervisor \
     && chown -R www-data:www-data /var/log/php /var/log/php-fpm
 
 COPY deploy/configs/php-production.ini /usr/local/etc/php/conf.d/99-production.ini
 COPY deploy/configs/php-fpm-www.conf /usr/local/etc/php-fpm.d/zz-email-server.conf
+COPY docker/supervisord-queue.conf /etc/supervisor/conf.d/email-queue.conf
 
 COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
 

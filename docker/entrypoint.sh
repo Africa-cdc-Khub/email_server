@@ -150,13 +150,8 @@ if [ "$CONTAINER_ROLE" = "queue" ]; then
     dump_artisan_error
     exit 1
   fi
-  echo "==> Starting queue worker (emails,default)..."
-  exec php artisan queue:work \
-    --queue=emails,default \
-    --sleep=1 \
-    --tries=5 \
-    --timeout=120 \
-    --verbose
+  echo "==> Starting Supervisor (4 queue workers + scheduler)..."
+  exec /usr/bin/supervisord -n -c /etc/supervisor/conf.d/email-queue.conf
 fi
 
 echo "==> Running migrations (non-fatal)..."

@@ -24,6 +24,10 @@ type DashboardData = {
   mailbox_quotas?: Array<{
     provider_id: number
     provider_name: string
+    total_remaining_24h?: number
+    total_daily_quota?: number
+    total_remaining_1h?: number | null
+    total_hourly_quota?: number | null
     mailboxes: Array<{
       id: number
       email: string
@@ -60,6 +64,14 @@ const statCards = computed(() => {
 
   return [
     {
+      key: 'emails_pending',
+      title: 'Pending',
+      value: stats.emails_pending ?? 0,
+      icon: 'mdi-email-sync-outline',
+      color: 'warning',
+      subtitle: 'Waiting to send',
+    },
+    {
       key: 'emails_sent_today',
       title: 'Sent today',
       value: stats.emails_sent_today ?? 0,
@@ -82,14 +94,6 @@ const statCards = computed(() => {
       icon: 'mdi-server-network',
       color: 'primary',
       subtitle: `${stats.active_providers ?? 0} active`,
-    },
-    {
-      key: 'integrations',
-      title: 'Integrations',
-      value: stats.integrations ?? 0,
-      icon: 'mdi-connection',
-      color: 'secondary',
-      subtitle: 'External systems',
     },
   ]
 })
@@ -159,7 +163,7 @@ onMounted(async () => {
 
       <ParentCard
         v-if="auth.isAdmin && (data.mailbox_quotas?.length ?? 0) > 0"
-        title="Mailbox quotas (24h)"
+        title="Quota remaining by provider"
         class="mt-4"
       >
         <div
@@ -167,7 +171,23 @@ onMounted(async () => {
           :key="group.provider_id"
           class="mb-6"
         >
-          <div class="text-subtitle-2 mb-3">{{ group.provider_name }}</div>
+          <div class="d-flex flex-wrap justify-space-between align-center mb-3 ga-2">
+            <div class="text-subtitle-2">{{ group.provider_name }}</div>
+            <div class="text-body-2">
+              <strong>{{ group.total_remaining_24h ?? group.mailboxes.reduce((n, b) => n + b.remaining_24h, 0) }}</strong>
+              <span class="text-medium-emphasis">
+                remaining today
+                <template v-if="(group.total_daily_quota ?? 0) > 0">
+                  / {{ group.total_daily_quota }}
+                </template>
+              </span>
+              <template v-if="group.total_hourly_quota != null">
+                <span class="text-medium-emphasis"> · </span>
+                <strong>{{ group.total_remaining_1h ?? 0 }}</strong>
+                <span class="text-medium-emphasis"> left this hour / {{ group.total_hourly_quota }}</span>
+              </template>
+            </div>
+          </div>
           <div
             v-for="box in group.mailboxes"
             :key="box.id"

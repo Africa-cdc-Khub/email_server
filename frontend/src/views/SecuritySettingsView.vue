@@ -3,6 +3,7 @@ import { onMounted, ref } from 'vue'
 import FormField from '@/components/forms/FormField.vue'
 import PageHeader from '@/components/shared/PageHeader.vue'
 import ParentCard from '@/components/shared/ParentCard.vue'
+import { api } from '@/lib/api'
 import { apiErrorMessage } from '@/lib/apiError'
 import { useAuthStore, type TwoFactorStatus } from '@/stores/auth'
 
@@ -31,12 +32,47 @@ const newPassword = ref('')
 const newPasswordConfirmation = ref('')
 const passwordBusy = ref(false)
 
+const mailPendingRetrySeconds = ref(60)
+const mailSettingsBusy = ref(false)
+const mailSettingsLoading = ref(false)
+
 async function loadStatus() {
   loading.value = true
   try {
     status.value = await auth.fetch2faStatus()
   } finally {
     loading.value = false
+  }
+}
+
+async function loadMailSettings() {
+  if (!auth.isAdmin) return
+  mailSettingsLoading.value = true
+  try {
+    const res = await api.get<{ data: { mail_pending_retry_seconds: number } }>('/admin/mail-settings')
+    mailPendingRetrySeconds.value = res.data.data.mail_pending_retry_seconds
+  } catch {
+    // keep default
+  } finally {
+    mailSettingsLoading.value = false
+  }
+}
+
+async function saveMailSettings() {
+  mailSettingsBusy.value = true
+  error.value = ''
+  message.value = ''
+  try {
+    const res = await api.put<{ message: string; data: { mail_pending_retry_seconds: number } }>(
+      '/admin/mail-settings',
+      { mail_pending_retry_seconds: mailPendingRetrySeconds.value },
+    )
+    mailPendingRetrySeconds.value = res.data.data.mail_pending_retry_seconds
+    message.value = res.data.message
+  } catch (err) {
+    error.value = apiErrorMessage(err, 'Could not save mail settings.')
+  } finally {
+    mailSettingsBusy.value = false
   }
 }
 
@@ -148,7 +184,9 @@ async function disableTotp() {
   }
 }
 
-onMounted(loadStatus)
+onMounted(async () => {
+  await Promise.all([loadStatus(), loadMailSettings()])
+})
 </script>
 
 <template>
@@ -160,6 +198,31 @@ onMounted(loadStatus)
 
     <v-alert v-if="message" type="success" variant="tonal" class="mb-4">{{ message }}</v-alert>
     <v-alert v-if="error" type="error" variant="tonal" class="mb-4">{{ error }}</v-alert>
+
+    <ParentCard v-if="auth.isAdmin" title="Pending email auto-retry" class="mb-4">
+      <p class="text-body-2 text-medium-emphasis mb-4">
+        Re-queue stuck pending emails on a schedule. Set to 0 to disable. Default is 60 seconds.
+        Sign-in and verification-code subjects are sent on a priority queue.
+      </p>
+      <v-row>
+        <v-col cols="12" md="4">
+          <FormField label="Retry interval (seconds)" required>
+            <v-text-field
+              v-model.number="mailPendingRetrySeconds"
+              type="number"
+              min="0"
+              max="3600"
+              variant="outlined"
+              hide-details
+              :disabled="mailSettingsLoading"
+            />
+          </FormField>
+        </v-col>
+      </v-row>
+      <v-btn color="primary" class="mt-4" :loading="mailSettingsBusy" @click="saveMailSettings">
+        Save mail settings
+      </v-btn>
+    </ParentCard>
 
     <ParentCard title="Change password" class="mb-4">
       <p class="text-body-2 text-medium-emphasis mb-4">

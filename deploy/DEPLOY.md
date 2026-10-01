@@ -110,13 +110,25 @@ REDIS_HOST=127.0.0.1
 ```ini
 [program:email-server-queue]
 process_name=%(program_name)s_%(process_num)02d
-command=php /var/www/email_server/backend/artisan queue:work redis --queue=emails,default --sleep=1 --tries=3 --timeout=120
+command=php /var/www/email_server/backend/artisan queue:work redis --queue=emails-priority,emails,default --sleep=1 --tries=5 --timeout=120
 autostart=true
 autorestart=true
 numprocs=4
 user=www-data
 redirect_stderr=true
 stdout_logfile=/var/log/email-server/queue.log
+```
+
+Also run the Laravel scheduler (for pending auto-retry):
+
+```ini
+[program:email-server-scheduler]
+command=php /var/www/email_server/backend/artisan schedule:work
+autostart=true
+autorestart=true
+user=www-data
+redirect_stderr=true
+stdout_logfile=/var/log/email-server/scheduler.log
 ```
 
 ```bash

@@ -3,6 +3,7 @@
 use App\Http\Controllers\Api\V1\Admin\AuditLogController;
 use App\Http\Controllers\Api\V1\Admin\BlockedIpController;
 use App\Http\Controllers\Api\V1\Admin\MailController;
+use App\Http\Controllers\Api\V1\Admin\MailSettingsController;
 use App\Http\Controllers\Api\V1\Admin\MigrationController;
 use App\Http\Controllers\Api\V1\Admin\AuthController;
 use App\Http\Controllers\Api\V1\Admin\BrandingController as AdminBrandingController;
@@ -104,6 +105,9 @@ Route::prefix('v1')->group(function () {
                 Route::get('/branding', [AdminBrandingController::class, 'show']);
                 Route::post('/branding', [AdminBrandingController::class, 'update']);
                 Route::put('/branding', [AdminBrandingController::class, 'update']);
+
+                Route::get('/mail-settings', [MailSettingsController::class, 'show']);
+                Route::put('/mail-settings', [MailSettingsController::class, 'update']);
 
                 Route::post('/email-providers/{email_provider}/test', [EmailProviderController::class, 'test']);
                 Route::post('/email-providers/{email_provider}/set-default', [EmailProviderController::class, 'setDefault']);
