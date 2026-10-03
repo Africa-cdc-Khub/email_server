@@ -1832,14 +1832,7 @@ fi
 
 # Persist reverse-proxy choice for next runs (docker/.env)
 if [[ -f "$ROOT/docker/.env" ]]; then
-  if grep -qE '^REVERSE_PROXY=' "$ROOT/docker/.env"; then
-    awk -v v="$REVERSE_PROXY" 'BEGIN{done=0} /^REVERSE_PROXY=/{print "REVERSE_PROXY=" v; done=1; next} {print} END{if(!done) print "REVERSE_PROXY=" v}' \
-      "$ROOT/docker/.env" > "$ROOT/docker/.env.tmp"
-    mv "$ROOT/docker/.env.tmp" "$ROOT/docker/.env"
-  else
-    printf '\nREVERSE_PROXY=%s\n' "$REVERSE_PROXY" >> "$ROOT/docker/.env"
-  fi
-  chmod 600 "$ROOT/docker/.env" || true
+  set_docker_env "REVERSE_PROXY" "$REVERSE_PROXY"
 fi
 
 # ---------------------------------------------------------------------------
