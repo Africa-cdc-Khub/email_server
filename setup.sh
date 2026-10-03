@@ -795,6 +795,8 @@ sync_git_updates
 # ---------------------------------------------------------------------------
 # Ensure .env templates exist (never overwrite existing files)
 # ---------------------------------------------------------------------------
+BACKEND_ENV_JUST_CREATED=false
+
 if [[ ! -f "$ROOT/docker/.env" ]]; then
   [[ -f "$ROOT/docker/.env.example" ]] || die "docker/.env.example missing"
   cp "$ROOT/docker/.env.example" "$ROOT/docker/.env"
@@ -808,8 +810,8 @@ if [[ ! -f "$ROOT/backend/.env" ]]; then
   umask 077
   cp "$ROOT/backend/.env.example" "$ROOT/backend/.env"
   chmod 600 "$ROOT/backend/.env"
-  warn "Created backend/.env from example — edit DB/JWT/Exchange values to match docker/.env"
-  die "Stopped: fill backend/.env (at least DB_PASSWORD, JWT_SECRET, APP_KEY after first boot), then re-run ./setup.sh"
+  BACKEND_ENV_JUST_CREATED=true
+  log "Created backend/.env from example — syncing secrets from docker/.env (no manual edit required)"
 fi
 
 # Load operator-edited docker/.env as source of truth
@@ -954,8 +956,13 @@ if [[ "$WRITE_ENV" == "true" ]]; then
     set_backend_env "APP_KEY" "base64:$(openssl rand -base64 32 | tr -d '\n')"
   fi
 else
-  log "Leaving docker/.env and backend/.env unchanged (manual edit mode)"
-  # Keep Laravel DB password in sync with docker/.env only (safe one-key patch)
+  if [[ "$BACKEND_ENV_JUST_CREATED" == "true" ]]; then
+    log "First-time backend/.env — syncing core keys from docker/.env"
+  else
+    log "Leaving docker/.env and backend/.env as operator-edited (syncing shared secrets only)"
+  fi
+
+  # Keep Laravel secrets in sync with docker/.env (source of truth for deploy)
   _be_db="$(env_file_get "$ROOT/backend/.env" DB_PASSWORD)"
   if [[ "$_be_db" != "$DB_PASSWORD" ]]; then
     log "Syncing DB_PASSWORD from docker/.env → backend/.env"
@@ -965,6 +972,33 @@ else
   if [[ -z "$_be_jwt" || "$_be_jwt" != "$JWT_SECRET" ]]; then
     log "Syncing JWT_SECRET from docker/.env → backend/.env"
     set_backend_env "JWT_SECRET" "$JWT_SECRET"
+  fi
+  _be_admin_pw="$(env_file_get "$ROOT/backend/.env" ADMIN_PASSWORD)"
+  if [[ -n "$ADMIN_PASSWORD" && "$_be_admin_pw" != "$ADMIN_PASSWORD" ]]; then
+    log "Syncing ADMIN_PASSWORD from docker/.env → backend/.env"
+    set_backend_env "ADMIN_PASSWORD" "$ADMIN_PASSWORD"
+  fi
+  _be_admin_email="$(env_file_get "$ROOT/backend/.env" ADMIN_EMAIL)"
+  if [[ -n "$ADMIN_EMAIL" && "$_be_admin_email" != "$ADMIN_EMAIL" ]]; then
+    set_backend_env "ADMIN_EMAIL" "$ADMIN_EMAIL"
+  fi
+
+  # First boot from example: align APP_* URLs/env with docker/.env
+  if [[ "$BACKEND_ENV_JUST_CREATED" == "true" ]]; then
+    set_backend_env "APP_ENV" "$APP_ENV"
+    set_backend_env "APP_DEBUG" "$APP_DEBUG"
+    set_backend_env "APP_URL" "${APP_URL:-https://${DOMAIN}}"
+    set_backend_env "FRONTEND_URL" "${FRONTEND_URL:-https://${DOMAIN}}"
+    set_backend_env "JWT_TTL" "$JWT_TTL"
+    set_backend_env "DB_CONNECTION" "pgsql"
+    set_backend_env "DB_HOST" "postgres"
+    set_backend_env "DB_PORT" "5432"
+    set_backend_env "DB_DATABASE" "email_server"
+    set_backend_env "DB_USERNAME" "email_server"
+    set_backend_env "REDIS_CLIENT" "predis"
+    if [[ -n "$INTEGRATION_CLIENT_SECRET" ]]; then
+      set_backend_env "INTEGRATION_CLIENT_SECRET" "$INTEGRATION_CLIENT_SECRET"
+    fi
   fi
 
   # Swagger: Compose injects API_DOCS_ENABLED into the app container (overrides backend/.env)
@@ -989,7 +1023,7 @@ else
   cd $ROOT/docker && docker compose up -d --force-recreate --no-deps app"
   fi
 
-  # Ensure APP_KEY exists
+  # Ensure APP_KEY exists (entrypoint can also generate; do it here for first-time)
   _be_key="$(env_file_get "$ROOT/backend/.env" APP_KEY)"
   if [[ "$_be_key" != base64:* ]]; then
     log "Generating APP_KEY in backend/.env"
