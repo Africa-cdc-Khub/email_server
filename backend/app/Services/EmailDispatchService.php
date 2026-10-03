@@ -152,6 +152,7 @@ class EmailDispatchService
                 cleanupAttachmentMeta: $attachmentMeta,
                 allowFallback: true,
                 explicitMailboxId: null,
+                preferredMailboxId: $log->externalIntegration?->provider_mailbox_id,
             );
         } finally {
             $lock->release();
@@ -233,6 +234,9 @@ class EmailDispatchService
             cleanupAttachmentMeta: $stored,
             allowFallback: ($source ?? '') !== 'admin_test',
             explicitMailboxId: $explicitMailboxId,
+            preferredMailboxId: $explicitMailboxId === null
+                ? $integration?->provider_mailbox_id
+                : null,
         );
     }
 
@@ -384,6 +388,7 @@ class EmailDispatchService
         array $cleanupAttachmentMeta = [],
         bool $allowFallback = true,
         ?int $explicitMailboxId = null,
+        ?int $preferredMailboxId = null,
     ): EmailLog {
         $primary = $this->mailConfig->resolveProvider($providerId);
         $subject = MailHeaderSanitizer::line($subject, 500);
@@ -402,6 +407,7 @@ class EmailDispatchService
             attachmentPayload: $attachmentPayload,
             cleanupAttachmentMeta: $cleanupAttachmentMeta,
             explicitMailboxId: $explicitMailboxId,
+            preferredMailboxId: $preferredMailboxId,
             fallbackMeta: null,
         );
 
@@ -431,6 +437,7 @@ class EmailDispatchService
                     attachmentPayload: $attachmentPayload,
                     cleanupAttachmentMeta: $cleanupAttachmentMeta,
                     explicitMailboxId: null,
+                    preferredMailboxId: null,
                     fallbackMeta: [
                         'fallback_from_provider_id' => $primary->id,
                         'fallback_from_driver' => $primary->driver->value,
@@ -490,12 +497,19 @@ class EmailDispatchService
         array $attachmentPayload,
         array $cleanupAttachmentMeta,
         ?int $explicitMailboxId,
+        ?int $preferredMailboxId,
         ?array $fallbackMeta,
     ): array {
         $this->mailConfig->purgeExchangeClient();
 
         try {
-            $mailbox = $this->mailboxSelector->select($provider, $explicitMailboxId);
+            $log->loadMissing('externalIntegration');
+            $mailbox = $this->mailboxSelector->select(
+                $provider,
+                $explicitMailboxId ?? $preferredMailboxId,
+                $log->externalIntegration,
+                strictMailbox: $explicitMailboxId !== null,
+            );
         } catch (MailboxQuotaExhaustedException|\InvalidArgumentException $e) {
             return [
                 'sent' => false,

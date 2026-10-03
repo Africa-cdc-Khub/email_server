@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\Api\V1\Admin\StoreExternalIntegrationRequest;
 use App\Http\Requests\Api\V1\Admin\UpdateExternalIntegrationRequest;
 use App\Models\ExternalIntegration;
+use App\Models\ProviderMailbox;
 use App\Models\User;
 use App\Services\ApprovalNotifier;
 use Illuminate\Http\JsonResponse;
@@ -22,7 +23,7 @@ class ExternalIntegrationController extends Controller
         $user = $request->user();
 
         $query = ExternalIntegration::query()
-            ->with('emailProvider:id,name,driver')
+            ->with(['emailProvider:id,name,driver', 'providerMailbox:id,email'])
             ->orderBy('name');
 
         if (! $user->is_admin) {
@@ -65,6 +66,7 @@ class ExternalIntegrationController extends Controller
             'api_key_hash' => ExternalIntegration::hashClientSecret($clientSecret),
             'api_key_prefix' => ExternalIntegration::clientSecretHint($clientSecret),
             'email_provider_id' => $data['email_provider_id'] ?? null,
+            'provider_mailbox_id' => $data['provider_mailbox_id'] ?? null,
             'allowed_ips' => $data['allowed_ips'] ?? [],
             'settings' => $data['settings'] ?? [],
             'is_active' => $isActive,
@@ -76,7 +78,7 @@ class ExternalIntegrationController extends Controller
         }
 
         return response()->json([
-            'data' => $this->transform($integration->load('emailProvider:id,name,driver')),
+            'data' => $this->transform($integration->load(['emailProvider:id,name,driver', 'providerMailbox:id,email'])),
             'message' => $user->is_admin
                 ? 'Integration created. Share client_id and client_secret with the connecting system.'
                 : 'Client created. It stays inactive until an administrator activates it. Share client_id and client_secret with the connecting system.',
@@ -88,7 +90,7 @@ class ExternalIntegrationController extends Controller
     {
         $this->authorize('view', $externalIntegration);
 
-        $externalIntegration->load('emailProvider:id,name,driver');
+        $externalIntegration->load(['emailProvider:id,name,driver', 'providerMailbox:id,email']);
 
         return response()->json(['data' => $this->transform($externalIntegration)]);
     }
@@ -119,6 +121,24 @@ class ExternalIntegrationController extends Controller
 
         unset($data['client_secret'], $data['generate_secret']);
 
+        if (array_key_exists('email_provider_id', $data) && $data['email_provider_id'] === null) {
+            $data['provider_mailbox_id'] = null;
+        } elseif (array_key_exists('email_provider_id', $data) && ! array_key_exists('provider_mailbox_id', $data)) {
+            $newProviderId = $data['email_provider_id'];
+            $currentMailboxId = $externalIntegration->provider_mailbox_id;
+            if ($currentMailboxId && $newProviderId) {
+                $ok = ProviderMailbox::query()
+                    ->whereKey($currentMailboxId)
+                    ->where('email_provider_id', $newProviderId)
+                    ->exists();
+                if (! $ok) {
+                    $data['provider_mailbox_id'] = null;
+                }
+            } elseif ($currentMailboxId && ! $newProviderId) {
+                $data['provider_mailbox_id'] = null;
+            }
+        }
+
         $externalIntegration->update($data);
         $externalIntegration->refresh();
 
@@ -131,7 +151,7 @@ class ExternalIntegrationController extends Controller
         }
 
         $response = [
-            'data' => $this->transform($externalIntegration->load('emailProvider:id,name,driver')),
+            'data' => $this->transform($externalIntegration->load(['emailProvider:id,name,driver', 'providerMailbox:id,email'])),
         ];
 
         if ($clientSecret !== null) {
@@ -189,6 +209,11 @@ class ExternalIntegrationController extends Controller
                 'id' => $integration->emailProvider->id,
                 'name' => $integration->emailProvider->name,
                 'driver' => $integration->emailProvider->driver->value,
+            ] : null,
+            'provider_mailbox_id' => $integration->provider_mailbox_id,
+            'provider_mailbox' => $integration->providerMailbox ? [
+                'id' => $integration->providerMailbox->id,
+                'email' => $integration->providerMailbox->email,
             ] : null,
             'allowed_ips' => $integration->allowed_ips ?? [],
             'settings' => $integration->settings ?? [],

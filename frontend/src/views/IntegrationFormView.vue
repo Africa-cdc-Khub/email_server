@@ -9,6 +9,7 @@ import { generateClientSecret } from '@/lib/secrets'
 import { useAuthStore } from '@/stores/auth'
 
 type ProviderOption = { id: number; name: string; driver: string }
+type MailboxOption = { id: number; email: string; is_active: boolean }
 
 const route = useRoute()
 const router = useRouter()
@@ -18,6 +19,8 @@ const isEdit = computed(() => route.name === 'integration-edit')
 const id = computed(() => route.params.id as string | undefined)
 
 const providers = ref<ProviderOption[]>([])
+const mailboxes = ref<MailboxOption[]>([])
+const hydrating = ref(false)
 const loading = ref(false)
 const saving = ref(false)
 const created = ref(false)
@@ -31,6 +34,7 @@ const form = ref({
   client_id: '',
   client_secret: '',
   email_provider_id: null as number | null,
+  provider_mailbox_id: null as number | null,
   allowed_ips: '' as string,
   description: '',
   is_active: true,
@@ -54,18 +58,34 @@ async function loadProviders() {
   providers.value = res.data.data
 }
 
+async function loadMailboxes(providerId: number | null) {
+  mailboxes.value = []
+  if (!providerId) return
+  const res = await api.get(`/admin/email-providers/${providerId}`)
+  mailboxes.value = (res.data.data.mailboxes ?? []).filter(
+    (m: MailboxOption) => m.id != null,
+  )
+}
+
 async function loadIntegration() {
   if (!isEdit.value || !id.value) return
   const res = await api.get(`/admin/external-integrations/${id.value}`)
   const i = res.data.data
-  form.value = {
-    name: i.name,
-    client_id: i.client_id ?? i.slug,
-    client_secret: '',
-    email_provider_id: i.email_provider_id,
-    allowed_ips: (i.allowed_ips ?? []).join('\n'),
-    description: i.description ?? '',
-    is_active: i.is_active,
+  hydrating.value = true
+  try {
+    form.value = {
+      name: i.name,
+      client_id: i.client_id ?? i.slug,
+      client_secret: '',
+      email_provider_id: i.email_provider_id,
+      provider_mailbox_id: i.provider_mailbox_id ?? null,
+      allowed_ips: (i.allowed_ips ?? []).join('\n'),
+      description: i.description ?? '',
+      is_active: i.is_active,
+    }
+    await loadMailboxes(form.value.email_provider_id)
+  } finally {
+    hydrating.value = false
   }
 }
 
@@ -77,6 +97,7 @@ async function save() {
     slug: form.value.client_id,
     client_id: form.value.client_id,
     email_provider_id: form.value.email_provider_id,
+    provider_mailbox_id: form.value.provider_mailbox_id,
     allowed_ips: form.value.allowed_ips
       .split('\n')
       .map((s) => s.trim())
@@ -131,6 +152,20 @@ watch(autoGenerateSecret, (auto) => {
     generateSecret()
   }
 })
+
+watch(
+  () => form.value.email_provider_id,
+  async (providerId, prev) => {
+    await loadMailboxes(providerId)
+    if (hydrating.value) return
+    if (prev !== undefined && providerId !== prev) {
+      const stillValid = mailboxes.value.some((m) => m.id === form.value.provider_mailbox_id)
+      if (!stillValid) {
+        form.value.provider_mailbox_id = null
+      }
+    }
+  },
+)
 
 onMounted(async () => {
   if (!isEdit.value && !isAdmin.value && !auth.user?.two_factor_totp_enabled) {
@@ -236,6 +271,22 @@ onMounted(async () => {
                 hide-details
                 clearable
               />
+            </FormField>
+            <FormField label="Preferred from mailbox">
+              <v-select
+                v-model="form.provider_mailbox_id"
+                :items="mailboxes"
+                item-title="email"
+                item-value="id"
+                variant="outlined"
+                hide-details
+                clearable
+                :disabled="!form.email_provider_id"
+                :placeholder="form.email_provider_id ? 'Any mailbox (weighted)' : 'Select a provider first'"
+              />
+              <div class="text-caption text-medium-emphasis mt-1">
+                This client uses the selected mailbox when quota remains. Other clients can still use it at a reduced share.
+              </div>
             </FormField>
             <FormField label="Allowed IPs (one per line)">
               <v-textarea v-model="form.allowed_ips" rows="3" variant="outlined" hide-details />

@@ -19,6 +19,7 @@ class ExternalIntegration extends Model
         'api_key_hash',
         'api_key_prefix',
         'email_provider_id',
+        'provider_mailbox_id',
         'allowed_ips',
         'settings',
         'is_active',
@@ -39,6 +40,11 @@ class ExternalIntegration extends Model
     public function emailProvider(): BelongsTo
     {
         return $this->belongsTo(EmailProvider::class);
+    }
+
+    public function providerMailbox(): BelongsTo
+    {
+        return $this->belongsTo(ProviderMailbox::class, 'provider_mailbox_id');
     }
 
     public function emailLogs(): HasMany

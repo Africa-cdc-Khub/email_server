@@ -23,6 +23,22 @@ class UpdateExternalIntegrationRequest extends FormRequest
             'client_secret' => ['sometimes', 'nullable', 'string', 'min:16', 'max:255'],
             'generate_secret' => ['sometimes', 'boolean'],
             'email_provider_id' => ['sometimes', 'nullable', 'integer', 'exists:email_providers,id'],
+            'provider_mailbox_id' => [
+                'sometimes',
+                'nullable',
+                'integer',
+                Rule::exists('provider_mailboxes', 'id')->where(function ($q) {
+                    $providerId = $this->input('email_provider_id');
+                    if ($providerId === null && $this->route('external_integration')) {
+                        $providerId = $this->route('external_integration')->email_provider_id;
+                    }
+                    if ($providerId) {
+                        $q->where('email_provider_id', $providerId);
+                    } else {
+                        $q->whereRaw('1 = 0');
+                    }
+                }),
+            ],
             'allowed_ips' => ['sometimes', 'nullable', 'array'],
             'allowed_ips.*' => ['string', 'max:45', 'ip'],
             'settings' => ['sometimes', 'nullable', 'array'],

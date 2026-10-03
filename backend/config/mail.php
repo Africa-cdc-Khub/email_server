@@ -101,4 +101,17 @@ return [
         'name' => null,
     ],
 
+    /*
+    |--------------------------------------------------------------------------
+    | Bound mailbox shared traffic percent
+    |--------------------------------------------------------------------------
+    |
+    | When an active integration is bound to a mailbox, other clients that
+    | auto-select among mailboxes treat that mailbox's weight as this percent
+    | of its configured weight (default 30 ≈ 70% less shared traffic).
+    |
+    */
+
+    'bound_mailbox_shared_traffic_percent' => (int) env('MAIL_BOUND_MAILBOX_SHARED_TRAFFIC_PERCENT', 30),
+
 ];

@@ -5,46 +5,104 @@ namespace App\Services;
 use App\Exceptions\MailboxQuotaExhaustedException;
 use App\Models\EmailLog;
 use App\Models\EmailProvider;
+use App\Models\ExternalIntegration;
 use App\Models\ProviderMailbox;
 use InvalidArgumentException;
 
 class MailboxSelector
 {
     /**
-     * Pick the active mailbox furthest below its weight share (min sent_24h / weight).
-     * Eligible when remaining daily (and hourly, if set) quota is > 0. Ties → lowest mailbox id.
+     * Pick a from-mailbox for the provider.
+     *
+     * - strictMailbox=true: hard-pick (admin tests); throws if missing/disabled.
+     * - mailboxId set, strict=false: prefer that mailbox while quota remains; else weighted.
+     * - otherwise: weighted deficit among eligible mailboxes (soft-weighting bound boxes).
      */
-    public function select(EmailProvider $provider, ?int $explicitMailboxId = null): ProviderMailbox
-    {
-        if ($explicitMailboxId !== null) {
-            $mailbox = ProviderMailbox::query()
-                ->where('email_provider_id', $provider->id)
-                ->whereKey($explicitMailboxId)
-                ->first();
-
-            if ($mailbox === null) {
-                throw new InvalidArgumentException('From mailbox not found for this provider.');
-            }
-
-            if (! $mailbox->is_active) {
-                throw new InvalidArgumentException('From mailbox is disabled.');
-            }
-
-            return $mailbox;
+    public function select(
+        EmailProvider $provider,
+        ?int $mailboxId = null,
+        ?ExternalIntegration $integration = null,
+        bool $strictMailbox = false,
+    ): ProviderMailbox {
+        if ($mailboxId !== null && $strictMailbox) {
+            return $this->selectStrict($provider, $mailboxId);
         }
 
+        if ($mailboxId !== null && ! $strictMailbox) {
+            $preferred = $this->tryPreferred($provider, $mailboxId);
+            if ($preferred !== null) {
+                return $preferred;
+            }
+        }
+
+        return $this->selectWeighted($provider, $integration);
+    }
+
+    private function selectStrict(EmailProvider $provider, int $mailboxId): ProviderMailbox
+    {
+        $mailbox = ProviderMailbox::query()
+            ->where('email_provider_id', $provider->id)
+            ->whereKey($mailboxId)
+            ->first();
+
+        if ($mailbox === null) {
+            throw new InvalidArgumentException('From mailbox not found for this provider.');
+        }
+
+        if (! $mailbox->is_active) {
+            throw new InvalidArgumentException('From mailbox is disabled.');
+        }
+
+        return $mailbox;
+    }
+
+    private function tryPreferred(EmailProvider $provider, int $mailboxId): ?ProviderMailbox
+    {
+        $mailbox = ProviderMailbox::query()
+            ->where('email_provider_id', $provider->id)
+            ->whereKey($mailboxId)
+            ->first();
+
+        if ($mailbox === null || ! $mailbox->is_active) {
+            return null;
+        }
+
+        $usage = collect($this->usageFor($provider))->firstWhere('id', $mailbox->id);
+        if ($usage === null) {
+            return null;
+        }
+
+        if ((int) $usage['remaining_24h'] <= 0) {
+            return null;
+        }
+
+        if (array_key_exists('remaining_1h', $usage) && $usage['remaining_1h'] !== null && (int) $usage['remaining_1h'] <= 0) {
+            return null;
+        }
+
+        return $mailbox;
+    }
+
+    private function selectWeighted(EmailProvider $provider, ?ExternalIntegration $integration): ProviderMailbox
+    {
         if (! $provider->mailboxes()->where('is_active', true)->exists()) {
             throw new MailboxQuotaExhaustedException(
                 'Provider "'.$provider->name.'" has no enabled from mailboxes.'
             );
         }
 
+        $boundIds = $this->mailboxIdsBoundByOthers($provider->id, $integration?->id);
+        $factor = $this->sharedTrafficPercent() / 100.0;
+
         $usage = collect($this->usageFor($provider))
             ->where('is_active', true)
             ->where('remaining_24h', '>', 0)
             ->filter(fn (array $row) => ($row['remaining_1h'] ?? 1) > 0)
-            ->map(function (array $row): array {
+            ->map(function (array $row) use ($boundIds, $factor): array {
                 $weight = max(1, (int) $row['weight']);
+                if (isset($boundIds[(int) $row['id']])) {
+                    $weight = max(1, (int) round($weight * $factor));
+                }
                 $row['score'] = ((int) $row['sent_24h']) / $weight;
 
                 return $row;
@@ -64,6 +122,32 @@ class MailboxSelector
         return ProviderMailbox::query()
             ->where('is_active', true)
             ->findOrFail((int) $usage->first()['id']);
+    }
+
+    /**
+     * @return array<int, true>
+     */
+    private function mailboxIdsBoundByOthers(int $providerId, ?int $exceptIntegrationId): array
+    {
+        $query = ExternalIntegration::query()
+            ->where('is_active', true)
+            ->whereNotNull('provider_mailbox_id')
+            ->whereHas('providerMailbox', fn ($q) => $q->where('email_provider_id', $providerId));
+
+        if ($exceptIntegrationId !== null) {
+            $query->where('id', '!=', $exceptIntegrationId);
+        }
+
+        return $query->pluck('provider_mailbox_id')
+            ->mapWithKeys(fn ($id) => [(int) $id => true])
+            ->all();
+    }
+
+    private function sharedTrafficPercent(): int
+    {
+        $percent = (int) config('mail.bound_mailbox_shared_traffic_percent', 30);
+
+        return max(1, min(100, $percent));
     }
 
     /**

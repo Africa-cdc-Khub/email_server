@@ -4,6 +4,7 @@ namespace App\Http\Requests\Api\V1\Admin;
 
 use App\Rules\SafeMailHeader;
 use Illuminate\Foundation\Http\FormRequest;
+use Illuminate\Validation\Rule;
 
 class StoreExternalIntegrationRequest extends FormRequest
 {
@@ -21,6 +22,18 @@ class StoreExternalIntegrationRequest extends FormRequest
             'client_secret' => ['required_without:generate_secret', 'nullable', 'string', 'min:16', 'max:255'],
             'generate_secret' => ['sometimes', 'boolean'],
             'email_provider_id' => ['nullable', 'integer', 'exists:email_providers,id'],
+            'provider_mailbox_id' => [
+                'nullable',
+                'integer',
+                Rule::exists('provider_mailboxes', 'id')->where(function ($q) {
+                    $providerId = $this->input('email_provider_id');
+                    if ($providerId) {
+                        $q->where('email_provider_id', $providerId);
+                    } else {
+                        $q->whereRaw('1 = 0');
+                    }
+                }),
+            ],
             'allowed_ips' => ['nullable', 'array'],
             'allowed_ips.*' => ['string', 'max:45', 'ip'],
             'settings' => ['nullable', 'array'],
