@@ -701,6 +701,17 @@ write_env_file() {
   chmod 600 "$target"
 }
 
+# Atomic replace without interactive prompts (aliases like mv -i, or 0640 www-data .env).
+replace_file() {
+  local src="$1"
+  local dest="$2"
+  # command bypasses shell aliases (mv -i); -f never prompts
+  if command mv -f "$src" "$dest" 2>/dev/null; then
+    return 0
+  fi
+  run_root command mv -f "$src" "$dest"
+}
+
 set_env_key() {
   # set_env_key <file> <KEY> <value>  — upsert KEY="value" (quoted)
   local file="$1"
@@ -709,11 +720,13 @@ set_env_key() {
   local escaped="${value//\\/\\\\}"
   escaped="${escaped//\"/\\\"}"
   local line="${key}=\"${escaped}\""
+  local tmp
 
   [[ -f "$file" ]] || die "Cannot set ${key}: missing ${file}"
 
+  tmp="$(mktemp "${file}.XXXXXX")"
   if grep -q "^${key}=" "$file"; then
-    awk -v k="$key" -v line="$line" '
+    if ! awk -v k="$key" -v line="$line" '
       BEGIN { done=0 }
       index($0, k "=") == 1 {
         print line
@@ -722,12 +735,22 @@ set_env_key() {
       }
       { print }
       END { if (!done) print line }
-    ' "$file" > "${file}.tmp"
-    mv "${file}.tmp" "$file"
+    ' "$file" > "$tmp" 2>/dev/null; then
+      run_root bash -c "awk -v k=\"$key\" -v line=\"$line\" '
+        BEGIN { done=0 }
+        index(\$0, k \"=\") == 1 { print line; done=1; next }
+        { print }
+        END { if (!done) print line }
+      ' \"$file\" > \"$tmp\""
+    fi
+    replace_file "$tmp" "$file"
   else
-    printf '%s\n' "$line" >> "$file"
+    rm -f "$tmp"
+    if ! printf '%s\n' "$line" >> "$file" 2>/dev/null; then
+      run_root bash -c "printf '%s\\n' $(printf '%q' "$line") >> $(printf '%q' "$file")"
+    fi
   fi
-  chmod 600 "$file" 2>/dev/null || true
+  try_chmod 640 "$file"
 }
 
 set_backend_env() {
@@ -1328,14 +1351,7 @@ sync_backend_db_password() {
   db_pass="$(env_file_get "$ROOT/docker/.env" DB_PASSWORD)"
   [[ -n "$db_pass" ]] || return 0
   if [[ -f "$ROOT/backend/.env" ]]; then
-    if grep -q '^DB_PASSWORD=' "$ROOT/backend/.env"; then
-      awk -v p="$db_pass" 'BEGIN{done=0} /^DB_PASSWORD=/{print "DB_PASSWORD=\"" p "\""; done=1; next} {print} END{if(!done) print "DB_PASSWORD=\"" p "\""}' \
-        "$ROOT/backend/.env" > "$ROOT/backend/.env.tmp"
-      mv "$ROOT/backend/.env.tmp" "$ROOT/backend/.env"
-      chmod 600 "$ROOT/backend/.env"
-    else
-      printf 'DB_PASSWORD="%s"\n' "$db_pass" >> "$ROOT/backend/.env"
-    fi
+    set_backend_env "DB_PASSWORD" "$db_pass"
     log "Synced DB_PASSWORD into backend/.env"
   fi
 }
@@ -1779,14 +1795,8 @@ fi
 # Disable reseed for subsequent boots
 if [[ "$RUN_SEEDER" == "true" ]]; then
   log "Setting RUN_SEEDER=false for subsequent starts"
-  awk 'BEGIN{done=0} /^RUN_SEEDER=/{print "RUN_SEEDER=false"; done=1; next} {print} END{if(!done) print "RUN_SEEDER=false"}' \
-    "$ROOT/docker/.env" > "$ROOT/docker/.env.tmp"
-  mv "$ROOT/docker/.env.tmp" "$ROOT/docker/.env"
-  chmod 600 "$ROOT/docker/.env"
-  awk 'BEGIN{done=0} /^ADMIN_RESET_PASSWORD=/{print "ADMIN_RESET_PASSWORD=false"; done=1; next} {print} END{if(!done) print "ADMIN_RESET_PASSWORD=false"}' \
-    "$ROOT/docker/.env" > "$ROOT/docker/.env.tmp"
-  mv "$ROOT/docker/.env.tmp" "$ROOT/docker/.env"
-  chmod 600 "$ROOT/docker/.env"
+  set_docker_env "RUN_SEEDER" "false"
+  set_docker_env "ADMIN_RESET_PASSWORD" "false"
 fi
 
 # ---------------------------------------------------------------------------
