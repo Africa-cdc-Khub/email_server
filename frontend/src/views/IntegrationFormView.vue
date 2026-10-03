@@ -26,7 +26,11 @@ const saving = ref(false)
 const created = ref(false)
 const rotatedSecret = ref<string | null>(null)
 const showSecret = ref(false)
+/** On create: auto-generate. On edit: false until user chooses to rotate. */
 const autoGenerateSecret = ref(true)
+/** Edit mode: keep current credentials unless the operator opts to rotate. */
+const preserveClientSecret = ref(true)
+const clientSecretHint = ref('')
 const copyMessage = ref('')
 
 const form = ref({
@@ -39,6 +43,11 @@ const form = ref({
   description: '',
   is_active: true,
 })
+
+const secretModeItems = [
+  { value: true, title: 'Keep existing client secret' },
+  { value: false, title: 'Rotate / set a new client secret' },
+]
 
 function generateSecret() {
   form.value.client_secret = generateClientSecret()
@@ -83,6 +92,9 @@ async function loadIntegration() {
       description: i.description ?? '',
       is_active: i.is_active,
     }
+    clientSecretHint.value = i.client_secret_hint ?? ''
+    preserveClientSecret.value = true
+    autoGenerateSecret.value = false
     await loadMailboxes(form.value.email_provider_id)
   } finally {
     hydrating.value = false
@@ -109,14 +121,19 @@ async function save() {
     payload.is_active = form.value.is_active
   }
 
-  if (autoGenerateSecret.value) {
-    payload.generate_secret = true
-  } else if (form.value.client_secret) {
-    payload.client_secret = form.value.client_secret
-  }
-
   try {
     if (isEdit.value && id.value) {
+      // Default: do not send generate_secret / client_secret → server keeps the hash.
+      if (!preserveClientSecret.value) {
+        if (autoGenerateSecret.value) {
+          payload.generate_secret = true
+        } else if (form.value.client_secret) {
+          payload.client_secret = form.value.client_secret
+        } else {
+          payload.generate_secret = true
+        }
+      }
+
       const res = await api.put(`/admin/external-integrations/${id.value}`, payload)
       if (res.data.client_secret) {
         rotatedSecret.value = res.data.client_secret
@@ -127,7 +144,11 @@ async function save() {
 
       await router.push({ name: 'integrations' })
     } else {
-      if (!autoGenerateSecret.value && !form.value.client_secret) {
+      if (autoGenerateSecret.value) {
+        payload.generate_secret = true
+      } else if (form.value.client_secret) {
+        payload.client_secret = form.value.client_secret
+      } else {
         generateSecret()
         payload.client_secret = form.value.client_secret
       }
@@ -142,7 +163,19 @@ async function save() {
   }
 }
 
+watch(preserveClientSecret, (keep) => {
+  if (!isEdit.value) return
+  if (keep) {
+    form.value.client_secret = ''
+    autoGenerateSecret.value = false
+    return
+  }
+  autoGenerateSecret.value = true
+  form.value.client_secret = ''
+})
+
 watch(autoGenerateSecret, (auto) => {
+  if (isEdit.value && preserveClientSecret.value) return
   if (auto) {
     form.value.client_secret = ''
     return
@@ -176,7 +209,10 @@ onMounted(async () => {
   loading.value = true
   await loadProviders()
   await loadIntegration()
-  autoGenerateSecret.value = !isEdit.value
+  if (!isEdit.value) {
+    autoGenerateSecret.value = true
+    preserveClientSecret.value = false
+  }
   loading.value = false
 })
 </script>
@@ -224,7 +260,34 @@ onMounted(async () => {
                 hide-details
               />
             </FormField>
-            <FormField :label="isEdit ? 'Client secret (optional)' : 'Client secret'" :required="!isEdit && !autoGenerateSecret">
+            <FormField v-if="isEdit" label="Client credentials">
+              <v-radio-group
+                v-model="preserveClientSecret"
+                hide-details
+                class="mt-0"
+              >
+                <v-radio
+                  v-for="item in secretModeItems"
+                  :key="String(item.value)"
+                  :label="item.title"
+                  :value="item.value"
+                  color="primary"
+                />
+              </v-radio-group>
+              <div v-if="preserveClientSecret" class="text-caption text-medium-emphasis mt-1">
+                Existing secret is kept
+                <template v-if="clientSecretHint">
+                  (hint: <code>{{ clientSecretHint }}</code>)
+                </template>
+                so connected apps keep working when you change provider, mailbox, or other settings.
+              </div>
+            </FormField>
+
+            <FormField
+              v-if="!isEdit || !preserveClientSecret"
+              :label="isEdit ? 'New client secret' : 'Client secret'"
+              :required="!isEdit && !autoGenerateSecret"
+            >
               <v-switch
                 v-model="autoGenerateSecret"
                 label="Automatically generate secret"
@@ -256,7 +319,7 @@ onMounted(async () => {
                 </template>
               </v-text-field>
               <div class="text-caption text-medium-emphasis mt-1">
-                Minimum 16 characters. Use generate for a random secret, or let the server create one on save.
+                Minimum 16 characters. Rotating the secret will disconnect apps until they use the new value.
               </div>
             </FormField>
           </v-col>
