@@ -62,11 +62,9 @@ services:
     networks:
       - email-server
 
+  # Reuses the image built by `app` (do NOT add build: here — BuildKit races on the same tag).
   queue:
     image: email-server-app:local
-    build:
-      context: ..
-      dockerfile: docker/Dockerfile
     restart: unless-stopped
     working_dir: /var/www/backend
     volumes:
