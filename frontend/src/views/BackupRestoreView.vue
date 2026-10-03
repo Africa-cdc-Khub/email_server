@@ -13,6 +13,8 @@ type ImportSummary = {
   clients: CountPair
   links_synced: number
   branding_updated: boolean
+  mailboxes_synced?: number
+  pending_email_logs?: { created: number; queued: number; skipped: number }
   warnings: string[]
 }
 
@@ -121,7 +123,7 @@ async function restorePackage() {
   }
   if (
     !confirm(
-      'Restore this encrypted migration package? Matching users (by email), clients (by slug), and providers (by slug) will be created or updated. Pending emails will be re-created and queued; sent logs in the package are ignored.',
+      'Restore this encrypted migration package? Matching users (by email), clients (by slug), and providers (by slug) will be created or updated. From mailboxes and pending emails are restored; sent logs are ignored.',
     )
   ) {
     return
@@ -154,13 +156,13 @@ async function restorePackage() {
   <div>
     <PageHeader
       title="Backup / Restore"
-      subtitle="Export encrypted users, clients, providers, branding, and pending emails for migration to another server"
+      subtitle="Export encrypted users, clients, providers (including From mailboxes), branding, and pending emails"
     />
 
     <v-alert type="warning" variant="tonal" class="mb-4" border="start">
       Each download is encrypted with a unique 256-bit key generated for that file only. The key is shown
       once after download — copy it and store it separately. Without the key, the package cannot be restored
-      (including by brute force). Pending emails (with body) are included and re-queued on restore; sent logs are omitted.
+      (including by brute force). Pending emails and From mailboxes are included; sent logs are omitted.
     </v-alert>
 
     <v-alert v-if="message" type="success" variant="tonal" class="mb-4" closable @click:close="message = ''">
@@ -274,6 +276,16 @@ async function restorePackage() {
         <v-col cols="12" sm="4">
           <div class="text-caption text-medium-emphasis">Branding</div>
           <div>{{ summary.branding_updated ? 'Updated' : 'Unchanged' }}</div>
+        </v-col>
+        <v-col cols="12" sm="4">
+          <div class="text-caption text-medium-emphasis">From mailboxes</div>
+          <div>{{ summary.mailboxes_synced ?? 0 }} synced</div>
+        </v-col>
+        <v-col v-if="summary.pending_email_logs" cols="12" sm="4">
+          <div class="text-caption text-medium-emphasis">Pending emails</div>
+          <div>
+            Created {{ summary.pending_email_logs.created }}, queued {{ summary.pending_email_logs.queued }}
+          </div>
         </v-col>
       </v-row>
       <div v-if="summary.warnings?.length" class="mt-4">

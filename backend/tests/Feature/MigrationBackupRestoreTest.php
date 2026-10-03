@@ -43,6 +43,17 @@ class MigrationBackupRestoreTest extends TestCase
             'is_default' => true,
             'is_active' => true,
         ]);
+        $provider->mailboxes()->updateOrCreate(
+            ['email' => 'noreply@example.com'],
+            ['daily_quota' => 10000, 'weight' => 1, 'is_active' => true],
+        );
+        $provider->mailboxes()->create([
+            'email' => 'notifications@example.com',
+            'daily_quota' => 10000,
+            'hourly_quota' => 400,
+            'weight' => 2,
+            'is_active' => true,
+        ]);
 
         $partner = User::factory()->create([
             'email' => 'partner@example.com',
@@ -115,6 +126,12 @@ class MigrationBackupRestoreTest extends TestCase
         $this->assertSame('secret-pass', $inner['email_providers'][0]['config']['password']);
         $this->assertSame('partner@example.com', collect($inner['users'])->firstWhere('email', 'partner@example.com')['email']);
         $this->assertSame('Migrated App', $inner['branding']['app_name']);
+        $this->assertCount(2, $inner['email_providers'][0]['mailboxes']);
+        $this->assertSame(
+            'notifications@example.com',
+            collect($inner['email_providers'][0]['mailboxes'])->firstWhere('email', 'notifications@example.com')['email'],
+        );
+        $this->assertSame(2, collect($inner['email_providers'][0]['mailboxes'])->firstWhere('email', 'notifications@example.com')['weight']);
         $this->assertArrayHasKey('pending_email_logs', $inner);
         $this->assertCount(1, $inner['pending_email_logs']);
         $this->assertSame('pending@example.com', $inner['pending_email_logs'][0]['to']);
@@ -172,6 +189,22 @@ class MigrationBackupRestoreTest extends TestCase
                 'is_active' => true,
                 'priority' => 50,
                 'description' => null,
+                'mailboxes' => [
+                    [
+                        'email' => 'noreply@example.com',
+                        'is_active' => true,
+                        'daily_quota' => 10000,
+                        'hourly_quota' => null,
+                        'weight' => 1,
+                    ],
+                    [
+                        'email' => 'system@example.com',
+                        'is_active' => true,
+                        'daily_quota' => 5000,
+                        'hourly_quota' => 200,
+                        'weight' => 3,
+                    ],
+                ],
             ]],
             'users' => [[
                 'name' => 'New Partner',
@@ -290,11 +323,19 @@ class MigrationBackupRestoreTest extends TestCase
             ->assertJsonPath('data.clients.updated', 1)
             ->assertJsonPath('data.providers.updated', 1)
             ->assertJsonPath('data.branding_updated', true)
+            ->assertJsonPath('data.mailboxes_synced', 2)
             ->assertJsonPath('data.pending_email_logs.created', 1)
             ->assertJsonPath('data.pending_email_logs.queued', 1)
             ->assertJsonPath('data.pending_email_logs.skipped', 1);
 
         $this->assertDatabaseHas('users', ['email' => 'new-partner@example.com']);
+        $this->assertDatabaseHas('provider_mailboxes', [
+            'email_provider_id' => $provider->id,
+            'email' => 'system@example.com',
+            'daily_quota' => 5000,
+            'weight' => 3,
+        ]);
+        $this->assertSame(2, $provider->mailboxes()->count());
         $this->assertDatabaseHas('email_logs', [
             'to' => 'waiting@example.com',
             'status' => 'pending',

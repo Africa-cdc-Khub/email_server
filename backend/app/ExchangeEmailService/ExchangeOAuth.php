@@ -47,10 +47,12 @@ class ExchangeOAuth
         $this->authMethod = $this->nonEmpty($authMethod) ?? $this->configValue('auth_method') ?? self::AUTH_CLIENT_CREDENTIALS;
         $this->fromEmail = $this->nonEmpty($fromEmail) ?? $this->configValue('from_email');
         $this->fromName = $this->nonEmpty($fromName) ?? $this->configValue('from_name') ?? 'Africa CDC Mailer';
-        
-        // Set token file path
-        $this->tokenFile = storage_path('app/exchange-oauth-tokens.json');
-        
+
+        // Legacy path kept only for one-time migration / purge of plaintext JSON.
+        $this->tokenFile = function_exists('storage_path')
+            ? storage_path('app/exchange-oauth-tokens.json')
+            : null;
+
         $this->loadStoredTokens();
     }
 
@@ -397,62 +399,52 @@ class ExchangeOAuth
     }
 
     /**
-     * Load stored tokens from file
+     * Load stored tokens from encrypted database (legacy plaintext JSON migrated once).
      */
     protected function loadStoredTokens()
     {
         try {
-            if (file_exists($this->tokenFile)) {
-                $tokenData = json_decode(file_get_contents($this->tokenFile), true);
-                
-                if ($tokenData && isset($tokenData[$this->clientId])) {
-                    $tokens = $tokenData[$this->clientId];
-                    $this->accessToken = $tokens['access_token'] ?? null;
-                    $this->refreshToken = $tokens['refresh_token'] ?? null;
-                    $this->tokenExpiresAt = $tokens['expires_at'] ?? null;
-                    $this->authMethod = $tokens['auth_method'] ?? $this->authMethod;
-                }
+            $store = $this->tokenStore();
+            if ($store === null || empty($this->clientId)) {
+                return;
             }
+
+            $tokens = $store->get((string) $this->clientId);
+            if ($tokens === null) {
+                return;
+            }
+
+            $this->accessToken = $tokens['access_token'] ?? null;
+            $this->refreshToken = $tokens['refresh_token'] ?? null;
+            $this->tokenExpiresAt = $tokens['expires_at'] ?? null;
+            $this->authMethod = $tokens['auth_method'] ?? $this->authMethod;
         } catch (\Exception $e) {
-            // Ignore file errors, continue without stored tokens
+            // Continue without stored tokens — a fresh token will be requested.
         }
     }
 
     /**
-     * Store tokens in file
+     * Store tokens encrypted in the database (never plaintext on disk).
      */
     protected function storeTokens()
     {
         try {
-            // Create tokens directory if it doesn't exist
-            $tokenDir = dirname($this->tokenFile);
-            if (!is_dir($tokenDir)) {
-                mkdir($tokenDir, 0755, true);
+            $store = $this->tokenStore();
+            if ($store === null || empty($this->clientId)) {
+                return;
             }
-            
-            // Load existing tokens
-            $tokenData = [];
-            if (file_exists($this->tokenFile)) {
-                $tokenData = json_decode(file_get_contents($this->tokenFile), true) ?: [];
-            }
-            
-            // Update tokens for this client
-            $tokenData[$this->clientId] = [
-                'access_token' => $this->accessToken,
-                'refresh_token' => $this->refreshToken,
-                'expires_at' => $this->tokenExpiresAt,
-                'auth_method' => $this->authMethod,
-                'updated_at' => time()
-            ];
-            
-            // Save to file
-            file_put_contents($this->tokenFile, json_encode($tokenData, JSON_PRETTY_PRINT));
-            
+
+            $store->put(
+                (string) $this->clientId,
+                $this->accessToken,
+                $this->refreshToken,
+                $this->tokenExpiresAt ? (int) $this->tokenExpiresAt : null,
+                $this->authMethod,
+            );
         } catch (\Exception $e) {
-            // Ignore file errors
+            // Ignore persistence errors — sending can still proceed with in-memory token.
         }
     }
-
 
     /**
      * Make HTTP request with enhanced error handling
@@ -545,15 +537,27 @@ class ExchangeOAuth
         $this->accessToken = null;
         $this->refreshToken = null;
         $this->tokenExpiresAt = null;
-        
+
         try {
-            if (file_exists($this->tokenFile)) {
-                $tokenData = json_decode(file_get_contents($this->tokenFile), true) ?: [];
-                unset($tokenData[$this->clientId]);
-                file_put_contents($this->tokenFile, json_encode($tokenData, JSON_PRETTY_PRINT));
+            $store = $this->tokenStore();
+            if ($store !== null && ! empty($this->clientId)) {
+                $store->forget((string) $this->clientId);
             }
         } catch (\Exception $e) {
-            // Ignore file errors
+            // Ignore persistence errors
+        }
+    }
+
+    private function tokenStore(): ?\App\Services\ExchangeOauthTokenStore
+    {
+        if (! function_exists('app')) {
+            return null;
+        }
+
+        try {
+            return app(\App\Services\ExchangeOauthTokenStore::class);
+        } catch (\Throwable $e) {
+            return null;
         }
     }
 

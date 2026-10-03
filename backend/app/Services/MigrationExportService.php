@@ -103,6 +103,7 @@ class MigrationExportService
     private function exportProviders(): array
     {
         return EmailProvider::query()
+            ->with(['mailboxes' => fn ($q) => $q->orderBy('id')])
             ->orderBy('id')
             ->get()
             ->map(function (EmailProvider $provider) {
@@ -119,6 +120,16 @@ class MigrationExportService
                     'is_active' => (bool) $provider->is_active,
                     'priority' => (int) $provider->priority,
                     'description' => $provider->description,
+                    'mailboxes' => $provider->mailboxes
+                        ->map(fn ($box) => [
+                            'email' => (string) $box->email,
+                            'is_active' => (bool) $box->is_active,
+                            'daily_quota' => (int) $box->daily_quota,
+                            'hourly_quota' => $box->hourly_quota !== null ? (int) $box->hourly_quota : null,
+                            'weight' => max(1, (int) ($box->weight ?? 1)),
+                        ])
+                        ->values()
+                        ->all(),
                 ];
             })
             ->values()

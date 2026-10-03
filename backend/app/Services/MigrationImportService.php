@@ -32,6 +32,7 @@ class MigrationImportService
      *     links_synced: int,
      *     branding_updated: bool,
      *     pending_email_logs: array{created: int, queued: int, skipped: int},
+     *     mailboxes_synced: int,
      *     warnings: list<string>
      * }
      */
@@ -54,6 +55,7 @@ class MigrationImportService
             'links_synced' => 0,
             'branding_updated' => false,
             'pending_email_logs' => ['created' => 0, 'queued' => 0, 'skipped' => 0],
+            'mailboxes_synced' => 0,
             'warnings' => [],
         ];
 
@@ -171,7 +173,62 @@ class MigrationImportService
 
             $provider->save();
             $summary['providers'][$isNew ? 'created' : 'updated']++;
+
+            if (array_key_exists('mailboxes', $row) && is_array($row['mailboxes'])) {
+                $summary['mailboxes_synced'] += $this->importProviderMailboxes(
+                    $provider,
+                    $row['mailboxes'],
+                    $warnings,
+                );
+            }
         }
+    }
+
+    /**
+     * Upsert From mailboxes by email; remove mailboxes not present in the package list.
+     *
+     * @param  list<array<string, mixed>>  $mailboxes
+     * @param  list<string>  $warnings
+     */
+    private function importProviderMailboxes(EmailProvider $provider, array $mailboxes, array &$warnings): int
+    {
+        $seen = [];
+        $synced = 0;
+
+        foreach ($mailboxes as $index => $box) {
+            if (! is_array($box)) {
+                continue;
+            }
+
+            $email = strtolower(trim((string) ($box['email'] ?? '')));
+            if ($email === '' || ! filter_var($email, FILTER_VALIDATE_EMAIL)) {
+                $warnings[] = "Provider “{$provider->slug}” mailbox #{$index} skipped: invalid email.";
+
+                continue;
+            }
+
+            $hourly = $box['hourly_quota'] ?? null;
+            $hourlyQuota = $hourly === null || $hourly === '' ? null : max(1, (int) $hourly);
+
+            $provider->mailboxes()->updateOrCreate(
+                ['email' => $email],
+                [
+                    'is_active' => (bool) ($box['is_active'] ?? true),
+                    'daily_quota' => max(1, (int) ($box['daily_quota'] ?? $provider->defaultMailboxQuota())),
+                    'hourly_quota' => $hourlyQuota,
+                    'weight' => max(1, (int) ($box['weight'] ?? 1)),
+                ],
+            );
+
+            $seen[] = $email;
+            $synced++;
+        }
+
+        if ($seen !== []) {
+            $provider->mailboxes()->whereNotIn('email', $seen)->delete();
+        }
+
+        return $synced;
     }
 
     /**

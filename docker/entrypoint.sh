@@ -169,5 +169,8 @@ else
   echo "WARNING: ADMIN_PASSWORD empty — skipping app:ensure-admin" >&2
 fi
 
+echo "==> Migrating plaintext Exchange OAuth tokens into encrypted DB (if present)..."
+php artisan exchange:migrate-oauth-tokens || echo "WARNING: exchange:migrate-oauth-tokens failed" >&2
+
 echo "==> Starting php-fpm..."
 exec php-fpm
