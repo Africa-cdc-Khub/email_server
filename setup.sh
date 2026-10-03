@@ -701,14 +701,18 @@ write_env_file() {
   chmod 600 "$target"
 }
 
-set_backend_env() {
-  local key="$1"
-  local value="$2"
+set_env_key() {
+  # set_env_key <file> <KEY> <value>  — upsert KEY="value" (quoted)
+  local file="$1"
+  local key="$2"
+  local value="$3"
   local escaped="${value//\\/\\\\}"
   escaped="${escaped//\"/\\\"}"
   local line="${key}=\"${escaped}\""
 
-  if grep -q "^${key}=" "$ROOT/backend/.env"; then
+  [[ -f "$file" ]] || die "Cannot set ${key}: missing ${file}"
+
+  if grep -q "^${key}=" "$file"; then
     awk -v k="$key" -v line="$line" '
       BEGIN { done=0 }
       index($0, k "=") == 1 {
@@ -718,12 +722,20 @@ set_backend_env() {
       }
       { print }
       END { if (!done) print line }
-    ' "$ROOT/backend/.env" > "$ROOT/backend/.env.tmp"
-    mv "$ROOT/backend/.env.tmp" "$ROOT/backend/.env"
-    chmod 600 "$ROOT/backend/.env"
+    ' "$file" > "${file}.tmp"
+    mv "${file}.tmp" "$file"
   else
-    printf '%s\n' "$line" >> "$ROOT/backend/.env"
+    printf '%s\n' "$line" >> "$file"
   fi
+  chmod 600 "$file" 2>/dev/null || true
+}
+
+set_backend_env() {
+  set_env_key "$ROOT/backend/.env" "$1" "$2"
+}
+
+set_docker_env() {
+  set_env_key "$ROOT/docker/.env" "$1" "$2"
 }
 
 # ---------------------------------------------------------------------------
@@ -872,11 +884,89 @@ is_placeholder() {
   esac
 }
 
-is_placeholder "$ADMIN_PASSWORD" && die "Set a real ADMIN_PASSWORD in docker/.env (not a placeholder), then re-run ./setup.sh"
-is_placeholder "$DB_PASSWORD" && die "Set a real DB_PASSWORD in docker/.env, then re-run ./setup.sh"
-[[ -n "$JWT_SECRET" ]] || die "Set JWT_SECRET in docker/.env (>=32 chars)"
-[[ "${#JWT_SECRET}" -ge 32 ]] || die "JWT_SECRET in docker/.env must be at least 32 characters"
-[[ "$SKIP_SSL" == "true" ]] || [[ -n "$CERTBOT_EMAIL" ]] || die "Set CERTBOT_EMAIL in the environment or use --skip-ssl (default: ADMIN_EMAIL)"
+# If docker/.env still has example placeholders, prompt (interactive) or auto-generate
+# secrets so first-time deploy can continue without a second manual edit cycle.
+ensure_required_secrets() {
+  local reply gen
+
+  if is_placeholder "$ADMIN_PASSWORD"; then
+    if can_prompt_interactive; then
+      echo
+      echo "========================================================================"
+      echo " Admin password"
+      echo "========================================================================"
+      echo "  docker/.env still has a placeholder ADMIN_PASSWORD."
+      echo "  Enter the password you will use to log into the admin UI."
+      echo
+      while true; do
+        reply="$(prompt_value "ADMIN_PASSWORD (min 8 characters)" "")"
+        if [[ ${#reply} -ge 8 ]] && ! is_placeholder "$reply"; then
+          ADMIN_PASSWORD="$reply"
+          break
+        fi
+        warn "Need a real password at least 8 characters (not change-me…)."
+      done
+      set_docker_env "ADMIN_PASSWORD" "$ADMIN_PASSWORD"
+      log "Saved ADMIN_PASSWORD to docker/.env"
+    else
+      die "Set a real ADMIN_PASSWORD in docker/.env (not a placeholder), then re-run ./setup.sh"
+    fi
+  fi
+
+  if is_placeholder "$DB_PASSWORD"; then
+    if can_prompt_interactive; then
+      echo
+      echo "DB_PASSWORD in docker/.env is missing or still a placeholder."
+      if prompt_yes_no "Auto-generate a strong DB_PASSWORD?" y; then
+        DB_PASSWORD="$(gen_secret 24)"
+        log "Generated DB_PASSWORD"
+      else
+        while true; do
+          reply="$(prompt_value "DB_PASSWORD (min 12 characters)" "")"
+          if [[ ${#reply} -ge 12 ]] && ! is_placeholder "$reply"; then
+            DB_PASSWORD="$reply"
+            break
+          fi
+          warn "Need a real DB password at least 12 characters."
+        done
+      fi
+      set_docker_env "DB_PASSWORD" "$DB_PASSWORD"
+      log "Saved DB_PASSWORD to docker/.env"
+    else
+      die "Set a real DB_PASSWORD in docker/.env, then re-run ./setup.sh"
+    fi
+  fi
+
+  if is_placeholder "$JWT_SECRET" || [[ "${#JWT_SECRET}" -lt 32 ]]; then
+    if can_prompt_interactive; then
+      echo
+      echo "JWT_SECRET in docker/.env is missing, too short, or still a placeholder."
+      if prompt_yes_no "Auto-generate JWT_SECRET (>=64 chars)?" y; then
+        JWT_SECRET="$(gen_secret 48)"
+        log "Generated JWT_SECRET"
+      else
+        while true; do
+          reply="$(prompt_value "JWT_SECRET (>=32 characters)" "")"
+          if [[ ${#reply} -ge 32 ]] && ! is_placeholder "$reply"; then
+            JWT_SECRET="$reply"
+            break
+          fi
+          warn "JWT_SECRET must be at least 32 characters and not a placeholder."
+        done
+      fi
+      set_docker_env "JWT_SECRET" "$JWT_SECRET"
+      log "Saved JWT_SECRET to docker/.env"
+    else
+      [[ -n "$JWT_SECRET" ]] || die "Set JWT_SECRET in docker/.env (>=32 chars)"
+      is_placeholder "$JWT_SECRET" && die "Set a real JWT_SECRET in docker/.env (not a placeholder)"
+      [[ "${#JWT_SECRET}" -ge 32 ]] || die "JWT_SECRET in docker/.env must be at least 32 characters"
+    fi
+  fi
+
+  [[ "$SKIP_SSL" == "true" ]] || [[ -n "$CERTBOT_EMAIL" ]] || die "Set CERTBOT_EMAIL in the environment or use --skip-ssl (default: ADMIN_EMAIL)"
+}
+
+ensure_required_secrets
 
 APP_URL="$(env_file_get "$ROOT/docker/.env" APP_URL)"
 FRONTEND_URL="$(env_file_get "$ROOT/docker/.env" FRONTEND_URL)"
