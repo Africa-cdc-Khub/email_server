@@ -19,6 +19,10 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
 
+# Preserve argv for re-exec after git pull (so the newly pulled setup.sh continues).
+SETUP_ARGV=("$@")
+GIT_PULLED=false
+
 # ---------------------------------------------------------------------------
 # Defaults (non-secret) — overridden by docker/.env once loaded
 # ---------------------------------------------------------------------------
@@ -62,15 +66,19 @@ usage() {
   cat <<'EOF'
 Usage: ./setup.sh [options]
 
-Recommended (production):
-  1. Fill in docker/.env and backend/.env manually (gitignored)
-  2. ./setup.sh
-     → interactive menu: choose host reverse proxy (1=nginx, 2=apache), domain, SSL
+Recommended (production / later deploys):
+  ./setup.sh
+     → git fetch/pull (stash local tracked changes if needed)
+     → re-runs itself so the latest setup.sh/scripts are used
+     → interactive menu: host reverse proxy (1=nginx, 2=apache), domain, SSL
+     → rebuild/restart stack
+
+  Skip code update:  ./setup.sh --skip-git-pull
 
 First-time templates:
   cp docker/.env.example docker/.env
-  cp backend/.env.example backend/.env
-  # edit passwords/secrets, then run ./setup.sh
+  # edit ADMIN_PASSWORD, DB_PASSWORD, JWT_SECRET — then:
+  ./setup.sh
 
 setup.sh NEVER overwrites existing docker/.env / backend/.env unless you pass
   --write-env   (rebuilds them from CLI / --env-file — only for fresh boxes)
@@ -248,7 +256,10 @@ fix_server_permissions() {
 }
 
 # Stash local worktree changes (not gitignored secrets) and fast-forward pull when remote has commits.
+# Sets GIT_PULLED=true when the worktree moved forward (caller should re-exec setup.sh).
 sync_git_updates() {
+  GIT_PULLED=false
+
   if [[ "${SKIP_GIT_PULL}" == "true" ]]; then
     log "Skipping git pull (--skip-git-pull)"
     return 0
@@ -264,13 +275,13 @@ sync_git_updates() {
     return 0
   fi
 
-  log "Checking for git updates"
+  log "Checking for git updates (git fetch + pull)"
   if ! git -C "$ROOT" fetch --prune origin; then
     warn "git fetch failed — continuing with local tree"
     return 0
   fi
 
-  local branch upstream behind ahead stash_msg
+  local branch upstream behind ahead stash_msg before after
   branch="$(git -C "$ROOT" rev-parse --abbrev-ref HEAD)"
   if [[ "$branch" == "HEAD" ]]; then
     warn "Detached HEAD — skipping git pull"
@@ -292,11 +303,12 @@ sync_git_updates() {
   ahead="$(git -C "$ROOT" rev-list --count "${upstream}..HEAD" 2>/dev/null || echo 0)"
 
   if [[ "${behind}" -eq 0 ]]; then
-    log "Git already up to date with ${upstream}"
+    log "Git already up to date with ${upstream} ($(git -C "$ROOT" rev-parse --short HEAD))"
     return 0
   fi
 
-  log "Remote has ${behind} new commit(s) on ${upstream}"
+  log "Remote has ${behind} new commit(s) on ${upstream} — pulling for deploy"
+  before="$(git -C "$ROOT" rev-parse HEAD)"
 
   if ! git -C "$ROOT" diff --quiet \
     || ! git -C "$ROOT" diff --cached --quiet \
@@ -310,14 +322,18 @@ sync_git_updates() {
 
   if [[ "${ahead}" -gt 0 ]]; then
     warn "Local branch is ahead of ${upstream} by ${ahead} commit(s) — pulling with rebase"
-    git -C "$ROOT" pull --rebase origin "${branch}" \
+    git -C "$ROOT" pull --rebase --autostash origin "${branch}" \
       || die "git pull --rebase failed; resolve conflicts, then re-run ./setup.sh"
   else
     git -C "$ROOT" pull --ff-only origin "${branch}" \
       || die "git pull --ff-only failed; resolve manually, then re-run ./setup.sh"
   fi
 
-  log "Git pull complete (now at $(git -C "$ROOT" rev-parse --short HEAD))"
+  after="$(git -C "$ROOT" rev-parse HEAD)"
+  log "Git pull complete ($(git -C "$ROOT" rev-parse --short "$before") → $(git -C "$ROOT" rev-parse --short "$after"))"
+  if [[ "$before" != "$after" ]]; then
+    GIT_PULLED=true
+  fi
   if git -C "$ROOT" stash list 2>/dev/null | head -1 | grep -q 'setup.sh auto-stash'; then
     warn "Local changes were stashed. Review with: git stash list && git stash pop"
   fi
@@ -823,9 +839,18 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
-# Pull remote commits early so the rest of setup uses the latest scripts/code.
-# Local tracked/untracked (non-ignored) changes are stashed when a pull is needed.
-sync_git_updates
+# Pull remote commits early, then re-exec so the rest of this run uses the new setup.sh.
+# After a re-exec, skip a second pull/re-exec loop (SETUP_REEXEC_AFTER_PULL=1).
+if [[ "${SETUP_REEXEC_AFTER_PULL:-}" == "1" ]]; then
+  log "Continuing setup after git pull (at $(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo local))"
+else
+  sync_git_updates
+  if [[ "$GIT_PULLED" == "true" ]]; then
+    log "Re-running ./setup.sh with updated code from git"
+    export SETUP_REEXEC_AFTER_PULL=1
+    exec bash "$ROOT/setup.sh" "${SETUP_ARGV[@]}"
+  fi
+fi
 
 # ---------------------------------------------------------------------------
 # Ensure .env templates exist (never overwrite existing files)
