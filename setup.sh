@@ -335,22 +335,27 @@ ensure_pkg() {
 }
 
 ensure_certbot_renewal() {
-  log "Ensuring Certbot automatic renewal"
+  # Only touch this app's lineage (DOMAIN from docker/.env / --domain). Never renew every
+  # cert on a shared host (other africacdc.org sites share the same Certbot install).
+  local cert_name="${DOMAIN}"
+  log "Ensuring Certbot automatic renewal for ${cert_name}"
   if systemctl list-unit-files 2>/dev/null | grep -q '^certbot.timer'; then
     run_root systemctl enable --now certbot.timer || warn "Could not enable certbot.timer"
     run_root systemctl status certbot.timer --no-pager -l || true
   elif [[ -f /etc/cron.d/certbot ]]; then
     log "Certbot cron found at /etc/cron.d/certbot"
   else
-    # Fallback renew hook timer via systemd user-agnostic cron line
-    run_root tee /etc/cron.d/email-server-certbot-renew >/dev/null <<'CRON'
+    # Fallback: renew only this app's certificate
+    run_root tee /etc/cron.d/email-server-certbot-renew >/dev/null <<CRON
 SHELL=/bin/sh
 PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
-0 */12 * * * root test -x /usr/bin/certbot && perl -e 'sleep int(rand(43200))' && certbot renew -q --deploy-hook "systemctl reload nginx 2>/dev/null; systemctl reload apache2 2>/dev/null; true"
+0 */12 * * * root test -x /usr/bin/certbot && perl -e 'sleep int(rand(43200))' && certbot renew -q --cert-name ${cert_name} --deploy-hook "systemctl reload nginx 2>/dev/null; systemctl reload apache2 2>/dev/null; true"
 CRON
-    log "Installed /etc/cron.d/email-server-certbot-renew"
+    log "Installed /etc/cron.d/email-server-certbot-renew (cert-name=${cert_name})"
   fi
-  run_root certbot renew --dry-run || warn "Certbot renew dry-run reported issues (DNS/HTTP challenge may be pending)"
+  log "Certbot renew dry-run for ${cert_name} only"
+  run_root certbot renew --cert-name "$cert_name" --dry-run \
+    || warn "Certbot renew dry-run for ${cert_name} reported issues (DNS/HTTP challenge may be pending)"
 }
 
 install_nginx_reverse_proxy() {
