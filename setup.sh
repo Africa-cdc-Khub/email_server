@@ -394,6 +394,11 @@ can_prompt_interactive() {
   [[ "$NONINTERACTIVE" != "true" ]] && { [[ -r /dev/tty ]] || [[ -t 0 ]]; }
 }
 
+normalize_reverse_proxy() {
+  # trim whitespace/CR and lowercase
+  printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]' | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
+}
+
 configure_reverse_proxy_interactive() {
   # Honor legacy SKIP_NGINX / new SKIP_REVERSE_PROXY
   if [[ "${SKIP_REVERSE_PROXY}" == "true" || "${SKIP_NGINX}" == "true" ]]; then
@@ -404,7 +409,7 @@ configure_reverse_proxy_interactive() {
   fi
 
   local choice domain_in default_num
-  REVERSE_PROXY="$(printf '%s' "${REVERSE_PROXY:-nginx}" | tr '[:upper:]' '[:lower:]')"
+  REVERSE_PROXY="$(normalize_reverse_proxy "${REVERSE_PROXY:-nginx}")"
   case "$REVERSE_PROXY" in
     apache) default_num=2 ;;
     nginx|*) REVERSE_PROXY=nginx; default_num=1 ;;
@@ -418,16 +423,17 @@ configure_reverse_proxy_interactive() {
     echo "  This app runs in Docker. The host reverse proxy terminates TLS and"
     echo "  forwards traffic to the API (:${API_HOST_PORT:-8089}) and Admin UI (:3006)."
     echo
-    echo "  1) nginx   — default (sites-available / sites-enabled + certbot --nginx)"
+    echo "  1) nginx   — sites-available / sites-enabled + certbot --nginx"
     echo "  2) apache  — email_server_vhost.conf + a2ensite + certbot --apache"
     echo
-    choice="$(prompt_value "Select host server [1=nginx, 2=apache]" "$default_num")"
-    case "$(printf '%s' "$choice" | tr '[:upper:]' '[:lower:]')" in
+    echo "  Current default: ${default_num}) ${REVERSE_PROXY}"
+    echo
+    choice="$(normalize_reverse_proxy "$(prompt_value "Select host server [1=nginx, 2=apache]" "$default_num")")"
+    case "$choice" in
       1|nginx|n) REVERSE_PROXY=nginx ;;
       2|apache|a) REVERSE_PROXY=apache ;;
       *)
-        warn "Invalid choice '${choice}' — using nginx"
-        REVERSE_PROXY=nginx
+        warn "Invalid choice '${choice}' — using ${REVERSE_PROXY}"
         ;;
     esac
 
@@ -449,6 +455,20 @@ configure_reverse_proxy_interactive() {
     fi
   else
     log "Reverse proxy=${REVERSE_PROXY} domain=${DOMAIN} (non-interactive — pass --reverse-proxy= or run in a terminal)"
+  fi
+
+  REVERSE_PROXY="$(normalize_reverse_proxy "$REVERSE_PROXY")"
+  case "$REVERSE_PROXY" in
+    nginx|apache) ;;
+    *) die "Invalid REVERSE_PROXY='${REVERSE_PROXY}' (expected nginx or apache)" ;;
+  esac
+
+  # Persist immediately so a later failure / re-run still honors the choice
+  # (previously only saved at the end — after a failed nginx install).
+  if [[ -f "$ROOT/docker/.env" ]]; then
+    set_docker_env "REVERSE_PROXY" "$REVERSE_PROXY"
+    export REVERSE_PROXY
+    log "Saved REVERSE_PROXY=${REVERSE_PROXY} to docker/.env"
   fi
 }
 
@@ -572,20 +592,25 @@ install_apache_reverse_proxy() {
     run_root a2dissite 000-default >/dev/null || true
   fi
 
-  if command -v nginx >/dev/null 2>&1 && systemctl is-active --quiet nginx 2>/dev/null; then
-    warn "Nginx is active while Apache reverse-proxy was selected — :80 may conflict."
-    if prompt_yes_no "Stop and disable Nginx so Apache can bind :80/:443?" y; then
-      run_root systemctl stop nginx || true
-      run_root systemctl disable nginx || true
+  # Apache was explicitly chosen — free :80/:443 from nginx (common on shared hosts).
+  if command -v nginx >/dev/null 2>&1; then
+    if systemctl is-active --quiet nginx 2>/dev/null \
+      || systemctl is-enabled --quiet nginx 2>/dev/null \
+      || [[ -d /etc/nginx ]]; then
+      log "Stopping/disabling Nginx so Apache can own :80/:443"
+      run_root systemctl stop nginx 2>/dev/null || true
+      run_root systemctl disable nginx 2>/dev/null || true
     fi
   fi
 
   if run_root apache2ctl configtest; then
     run_root systemctl enable apache2 || true
-    run_root systemctl reload apache2 || run_root systemctl restart apache2
+    run_root systemctl restart apache2 \
+      || die "Failed to start apache2 — check: systemctl status apache2 && journalctl -xeu apache2"
   else
     die "apache2ctl configtest failed — fix /etc/apache2/sites-available/${site}"
   fi
+  log "Apache reverse-proxy is active for ${DOMAIN}"
 }
 
 install_host_ssl() {
@@ -1834,13 +1859,25 @@ fi
 if [[ "$SKIP_NGINX" == "true" || "$SKIP_REVERSE_PROXY" == "true" ]]; then
   warn "Skipping host reverse-proxy site install"
 else
-  case "$(printf '%s' "$REVERSE_PROXY" | tr '[:upper:]' '[:lower:]')" in
+  # Prefer persisted choice from docker/.env (set right after the interactive menu)
+  _rp="$(env_file_get "$ROOT/docker/.env" REVERSE_PROXY)"
+  if [[ -n "$_rp" ]]; then
+    REVERSE_PROXY="$(normalize_reverse_proxy "$_rp")"
+  else
+    REVERSE_PROXY="$(normalize_reverse_proxy "${REVERSE_PROXY:-nginx}")"
+  fi
+  export REVERSE_PROXY
+  log "Installing host reverse proxy: ${REVERSE_PROXY} (from docker/.env / menu)"
+
+  case "$REVERSE_PROXY" in
     apache)
       install_apache_reverse_proxy
       ;;
-    nginx|*)
-      REVERSE_PROXY=nginx
+    nginx)
       install_nginx_reverse_proxy
+      ;;
+    *)
+      die "Unknown REVERSE_PROXY='${REVERSE_PROXY}' — set nginx or apache in docker/.env"
       ;;
   esac
 fi
