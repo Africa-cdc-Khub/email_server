@@ -10,6 +10,25 @@ export REDIS_CLIENT="${REDIS_CLIENT:-predis}"
 
 echo "==> Entry role=${CONTAINER_ROLE:-app} env=${APP_ENV:-unknown} redis_client=${REDIS_CLIENT}"
 
+# Bind-mounted storage / cache can arrive root-owned from the host — fix before artisan.
+echo "==> Ensuring writable storage + bootstrap/cache..."
+mkdir -p \
+  storage/framework/cache/data \
+  storage/framework/sessions \
+  storage/framework/views \
+  storage/logs \
+  storage/app/public \
+  storage/app/private \
+  storage/api-docs \
+  bootstrap/cache \
+  2>/dev/null || true
+chown -R www-data:www-data storage bootstrap/cache 2>/dev/null || true
+chmod -R ug+rwX storage bootstrap/cache 2>/dev/null || true
+if [ -f .env ]; then
+  chown www-data:www-data .env 2>/dev/null || true
+  chmod 640 .env 2>/dev/null || true
+fi
+
 # Always sync vendor with composer.lock. Skipping when vendor/ already exists
 # left production without new packages (e.g. phpmailer) after git pull → fatal 500s.
 if [ "$CONTAINER_ROLE" = "queue" ]; then

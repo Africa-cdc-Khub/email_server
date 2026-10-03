@@ -96,6 +96,10 @@ Optional flags:
   --skip-git-pull               Do not stash/pull from git before deploy
   -h, --help
 
+During install, setup.sh repeatedly fixes ownership/permissions for:
+  DATA_PATH storage (www-data), redis (999), backend bootstrap/cache + .env,
+  frontend/dist readability, and again inside the app container after up.
+
 Required keys in docker/.env (edit manually):
   ADMIN_PASSWORD, DB_PASSWORD, JWT_SECRET (>=32 chars)
 EOF
@@ -126,6 +130,121 @@ gen_secret() {
   else
     head -c "$bytes" /dev/urandom | base64 | tr -d '\n'
   fi
+}
+
+# Make path writable by www-data (uid 33) used by php-fpm in the app image.
+try_chown() {
+  # try_chown <uid:gid> <path...>
+  local owner="$1"
+  shift
+  [[ $# -eq 0 ]] && return 0
+  if chown -R "$owner" "$@" 2>/dev/null; then
+    return 0
+  fi
+  run_root chown -R "$owner" "$@" 2>/dev/null || true
+}
+
+try_chmod() {
+  # try_chmod <mode-args...> — last args are paths (chmod-compatible)
+  if chmod "$@" 2>/dev/null; then
+    return 0
+  fi
+  run_root chmod "$@" 2>/dev/null || true
+}
+
+# Fix host + data-path permissions so Docker (php-fpm/nginx/redis/postgres) can read/write.
+# Safe to call multiple times during setup (before and after builds / compose up).
+fix_server_permissions() {
+  local phase="${1:-}"
+  local www_uid=33 www_gid=33
+  local redis_uid=999 redis_gid=999
+  local data_path="${EMAIL_SERVER_DATA_PATH:-$DATA_PATH}"
+
+  log "Fixing server permissions${phase:+ ($phase)}"
+
+  # Persistent Laravel storage (bind-mounted over backend/storage in containers)
+  if [[ -d "$data_path/storage" ]]; then
+    try_chown "${www_uid}:${www_gid}" "$data_path/storage"
+    try_chmod -R ug+rwX "$data_path/storage"
+    # New files inherit group-write where supported
+    run_root find "$data_path/storage" -type d -exec chmod g+s {} \; 2>/dev/null || true
+  fi
+
+  # Redis data dir (official image runs as uid 999)
+  if [[ -d "$data_path/redis" ]]; then
+    try_chown "${redis_uid}:${redis_gid}" "$data_path/redis"
+    try_chmod -R u+rwX "$data_path/redis"
+  fi
+
+  # Postgres data dir (alpine ≈ 70, debian ≈ 999)
+  if [[ -d "$data_path/postgres" ]]; then
+    if [[ -n "$(ls -A "$data_path/postgres" 2>/dev/null || true)" ]]; then
+      # Already initialized — do not force-chown over a running cluster; only ensure dir exists
+      :
+    else
+      run_root chown -R 70:70 "$data_path/postgres" 2>/dev/null \
+        || run_root chown -R 999:999 "$data_path/postgres" 2>/dev/null \
+        || true
+    fi
+  fi
+
+  # Host-mounted backend paths php-fpm / entrypoint need
+  run_root mkdir -p \
+    "$ROOT/backend/bootstrap/cache" \
+    "$ROOT/backend/storage/framework/cache/data" \
+    "$ROOT/backend/storage/framework/sessions" \
+    "$ROOT/backend/storage/framework/views" \
+    "$ROOT/backend/storage/logs" \
+    2>/dev/null || mkdir -p \
+      "$ROOT/backend/bootstrap/cache" \
+      "$ROOT/backend/storage/logs" 2>/dev/null || true
+
+  try_chown "${www_uid}:${www_gid}" "$ROOT/backend/bootstrap/cache"
+  try_chmod -R ug+rwX "$ROOT/backend/bootstrap/cache"
+
+  # Repo storage tree (unused when bind-mounted, but keep writable for local tooling)
+  if [[ -d "$ROOT/backend/storage" ]]; then
+    try_chown "${www_uid}:${www_gid}" "$ROOT/backend/storage"
+    try_chmod -R ug+rwX "$ROOT/backend/storage"
+  fi
+
+  # backend/.env: entrypoint (root) rewrites APP_KEY; php-fpm (www-data) must read it
+  if [[ -f "$ROOT/backend/.env" ]]; then
+    try_chown "${www_uid}:${www_gid}" "$ROOT/backend/.env"
+    try_chmod 640 "$ROOT/backend/.env"
+  fi
+
+  # docker/.env is only for compose on the host — keep private to the deploy user
+  if [[ -f "$ROOT/docker/.env" ]]; then
+    try_chmod 600 "$ROOT/docker/.env"
+  fi
+
+  # Built admin UI must be world-readable for the nginx container
+  if [[ -d "$ROOT/frontend/dist" ]]; then
+    try_chmod -R a+rX "$ROOT/frontend/dist"
+  fi
+
+  # Deploy scripts
+  try_chmod +x "$ROOT/setup.sh"
+  if [[ -f "$ROOT/docker/entrypoint.sh" ]]; then
+    try_chmod +x "$ROOT/docker/entrypoint.sh"
+  fi
+
+  # Optional: inside running app container, normalize storage ownership again
+  if [[ "$phase" == "post-up" ]] && [[ -n "${COMPOSE[*]:-}" ]]; then
+    (
+      cd "$ROOT/docker"
+      "${COMPOSE[@]}" exec -T -u root app sh -c '
+        mkdir -p storage/framework/{cache/data,sessions,views} storage/logs storage/app/{public,private} storage/api-docs bootstrap/cache
+        chown -R www-data:www-data storage bootstrap/cache 2>/dev/null || true
+        chmod -R ug+rwX storage bootstrap/cache 2>/dev/null || true
+        if [ -f .env ]; then chown www-data:www-data .env; chmod 640 .env; fi
+      ' 2>/dev/null
+    ) && log "Container storage/bootstrap permissions OK" \
+      || warn "Could not fix permissions inside app container (may not be up yet)"
+  fi
+
+  log "Server permissions fixed${phase:+ ($phase)}"
 }
 
 # Stash local worktree changes (not gitignored secrets) and fast-forward pull when remote has commits.
@@ -929,13 +1048,7 @@ if [[ ! -f "$DATA_PATH/storage/.initialized" ]]; then
   fi
 fi
 
-# php-fpm in the app image runs as www-data (uid 33)
-if chown -R 33:33 "$DATA_PATH/storage" 2>/dev/null; then
-  :
-else
-  run_root chown -R 33:33 "$DATA_PATH/storage" || true
-fi
-run_root chmod -R ug+rwX "$DATA_PATH/storage" 2>/dev/null || chmod -R ug+rwX "$DATA_PATH/storage" || true
+fix_server_permissions "data-dirs"
 log "Laravel storage → ${DATA_PATH}/storage (bind-mounted in app/queue/nginx)"
 
 ensure_storage_link() {
@@ -977,13 +1090,7 @@ ensure_default_branding_assets() {
 
 ensure_storage_link
 ensure_default_branding_assets
-
-# Redis official image runs as uid 999 — wrong ownership causes crash / unhealthy
-if chown -R 999:999 "$DATA_PATH/redis" 2>/dev/null; then
-  :
-else
-  run_root chown -R 999:999 "$DATA_PATH/redis" || true
-fi
+fix_server_permissions "after-storage-link"
 
 # ---------------------------------------------------------------------------
 # 3. Frontend build (host npm OR Docker node — npm is NOT required on the server)
@@ -1433,6 +1540,7 @@ rm -f "$ROOT/backend/bootstrap/cache/config.php" \
   "$ROOT/backend/bootstrap/cache/routes-v7.php" \
   "$ROOT/backend/bootstrap/cache/routes.php" 2>/dev/null || true
 
+fix_server_permissions "pre-compose"
 log "Starting Docker stack"
 ensure_redis_ready
 (
@@ -1457,6 +1565,8 @@ Postgres volume password, or reset the volume (DESTROYS DATA):
   ./setup.sh --reset-postgres
 "
 fi
+
+fix_server_permissions "post-up"
 
 log "Ensuring Laravel storage:link in app container"
 "${COMPOSE[@]}" exec -T app php artisan storage:link --force \
