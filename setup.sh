@@ -48,10 +48,15 @@ SKIP_SSL="${SKIP_SSL:-false}"
 SKIP_FRONTEND_BUILD="${SKIP_FRONTEND_BUILD:-false}"
 FRONTEND_BUILD="${FRONTEND_BUILD:-auto}"
 SKIP_NGINX="${SKIP_NGINX:-false}"
+SKIP_REVERSE_PROXY="${SKIP_REVERSE_PROXY:-}"
+REVERSE_PROXY="${REVERSE_PROXY:-nginx}"
+SKIP_GIT_PULL="${SKIP_GIT_PULL:-false}"
 APP_ENV="${APP_ENV:-production}"
 APP_DEBUG="${APP_DEBUG:-false}"
 ENV_FILE=""
 WRITE_ENV="${WRITE_ENV:-false}"
+NONINTERACTIVE="${NONINTERACTIVE:-false}"
+REVERSE_PROXY_FROM_CLI="${REVERSE_PROXY_FROM_CLI:-false}"
 
 usage() {
   cat <<'EOF'
@@ -60,6 +65,7 @@ Usage: ./setup.sh [options]
 Recommended (production):
   1. Fill in docker/.env and backend/.env manually (gitignored)
   2. ./setup.sh
+     → interactive menu: choose host reverse proxy (1=nginx, 2=apache), domain, SSL
 
 First-time templates:
   cp docker/.env.example docker/.env
@@ -83,7 +89,11 @@ Optional flags:
   --skip-ssl                    Skip Certbot TLS setup
   --skip-frontend-build         Skip frontend build
   --frontend-build=auto|docker|host
-  --skip-nginx                  Skip installing host Nginx site
+  --skip-nginx                  Skip host reverse-proxy site install (alias: --skip-reverse-proxy)
+  --skip-reverse-proxy          Same as --skip-nginx
+  --reverse-proxy=nginx|apache  Host reverse proxy (default: nginx)
+  --non-interactive             Do not prompt; use flags/env defaults
+  --skip-git-pull               Do not stash/pull from git before deploy
   -h, --help
 
 Required keys in docker/.env (edit manually):
@@ -116,6 +126,412 @@ gen_secret() {
   else
     head -c "$bytes" /dev/urandom | base64 | tr -d '\n'
   fi
+}
+
+# Stash local worktree changes (not gitignored secrets) and fast-forward pull when remote has commits.
+sync_git_updates() {
+  if [[ "${SKIP_GIT_PULL}" == "true" ]]; then
+    log "Skipping git pull (--skip-git-pull)"
+    return 0
+  fi
+
+  if ! command -v git >/dev/null 2>&1; then
+    warn "git not installed — skipping pull"
+    return 0
+  fi
+
+  if ! git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    warn "Not a git repository — skipping pull"
+    return 0
+  fi
+
+  log "Checking for git updates"
+  if ! git -C "$ROOT" fetch --prune origin; then
+    warn "git fetch failed — continuing with local tree"
+    return 0
+  fi
+
+  local branch upstream behind ahead stash_msg
+  branch="$(git -C "$ROOT" rev-parse --abbrev-ref HEAD)"
+  if [[ "$branch" == "HEAD" ]]; then
+    warn "Detached HEAD — skipping git pull"
+    return 0
+  fi
+
+  if upstream="$(git -C "$ROOT" rev-parse --abbrev-ref '@{upstream}' 2>/dev/null)"; then
+    :
+  elif git -C "$ROOT" show-ref --verify --quiet "refs/remotes/origin/${branch}"; then
+    upstream="origin/${branch}"
+  elif git -C "$ROOT" show-ref --verify --quiet "refs/remotes/origin/main"; then
+    upstream="origin/main"
+  else
+    warn "No upstream remote branch — skipping git pull"
+    return 0
+  fi
+
+  behind="$(git -C "$ROOT" rev-list --count "HEAD..${upstream}" 2>/dev/null || echo 0)"
+  ahead="$(git -C "$ROOT" rev-list --count "${upstream}..HEAD" 2>/dev/null || echo 0)"
+
+  if [[ "${behind}" -eq 0 ]]; then
+    log "Git already up to date with ${upstream}"
+    return 0
+  fi
+
+  log "Remote has ${behind} new commit(s) on ${upstream}"
+
+  if ! git -C "$ROOT" diff --quiet \
+    || ! git -C "$ROOT" diff --cached --quiet \
+    || [[ -n "$(git -C "$ROOT" ls-files --others --exclude-standard)" ]]; then
+    stash_msg="setup.sh auto-stash before pull $(date -u +%Y%m%dT%H%M%SZ)"
+    log "Stashing local changes (${stash_msg})"
+    # -u includes untracked files; gitignored secrets (.env) are not stashed
+    git -C "$ROOT" stash push -u -m "${stash_msg}" \
+      || warn "git stash failed — attempting pull anyway"
+  fi
+
+  if [[ "${ahead}" -gt 0 ]]; then
+    warn "Local branch is ahead of ${upstream} by ${ahead} commit(s) — pulling with rebase"
+    git -C "$ROOT" pull --rebase origin "${branch}" \
+      || die "git pull --rebase failed; resolve conflicts, then re-run ./setup.sh"
+  else
+    git -C "$ROOT" pull --ff-only origin "${branch}" \
+      || die "git pull --ff-only failed; resolve manually, then re-run ./setup.sh"
+  fi
+
+  log "Git pull complete (now at $(git -C "$ROOT" rev-parse --short HEAD))"
+  if git -C "$ROOT" stash list 2>/dev/null | head -1 | grep -q 'setup.sh auto-stash'; then
+    warn "Local changes were stashed. Review with: git stash list && git stash pop"
+  fi
+}
+
+prompt_yes_no() {
+  # $1 prompt  $2 default y|n
+  local prompt="$1" default="${2:-y}" reply
+  if [[ "$NONINTERACTIVE" == "true" ]]; then
+    [[ "$default" == "y" ]]
+    return $?
+  fi
+  if [[ -r /dev/tty ]]; then
+    if [[ "$default" == "y" ]]; then
+      read -r -p "${prompt} [Y/n] " reply </dev/tty || reply=""
+      reply="${reply:-y}"
+    else
+      read -r -p "${prompt} [y/N] " reply </dev/tty || reply=""
+      reply="${reply:-n}"
+    fi
+  elif [[ -t 0 ]]; then
+    if [[ "$default" == "y" ]]; then
+      read -r -p "${prompt} [Y/n] " reply || reply=""
+      reply="${reply:-y}"
+    else
+      read -r -p "${prompt} [y/N] " reply || reply=""
+      reply="${reply:-n}"
+    fi
+  else
+    [[ "$default" == "y" ]]
+    return $?
+  fi
+  case "${reply}" in
+    y|Y|yes|YES) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+prompt_value() {
+  # $1 prompt  $2 default → echoes value
+  local prompt="$1" default="$2" reply
+  if [[ "$NONINTERACTIVE" == "true" ]]; then
+    printf '%s\n' "$default"
+    return 0
+  fi
+  if [[ -r /dev/tty ]]; then
+    read -r -p "${prompt} [${default}]: " reply </dev/tty || reply=""
+  elif [[ -t 0 ]]; then
+    read -r -p "${prompt} [${default}]: " reply || reply=""
+  else
+    printf '%s\n' "$default"
+    return 0
+  fi
+  printf '%s\n' "${reply:-$default}"
+}
+
+can_prompt_interactive() {
+  [[ "$NONINTERACTIVE" != "true" ]] && { [[ -r /dev/tty ]] || [[ -t 0 ]]; }
+}
+
+configure_reverse_proxy_interactive() {
+  # Honor legacy SKIP_NGINX / new SKIP_REVERSE_PROXY
+  if [[ "${SKIP_REVERSE_PROXY}" == "true" || "${SKIP_NGINX}" == "true" ]]; then
+    SKIP_NGINX=true
+    SKIP_REVERSE_PROXY=true
+    log "Skipping host reverse-proxy install"
+    return 0
+  fi
+
+  local choice domain_in default_num
+  REVERSE_PROXY="$(printf '%s' "${REVERSE_PROXY:-nginx}" | tr '[:upper:]' '[:lower:]')"
+  case "$REVERSE_PROXY" in
+    apache) default_num=2 ;;
+    nginx|*) REVERSE_PROXY=nginx; default_num=1 ;;
+  esac
+
+  if can_prompt_interactive; then
+    echo
+    echo "========================================================================"
+    echo " Host reverse proxy"
+    echo "========================================================================"
+    echo "  This app runs in Docker. The host reverse proxy terminates TLS and"
+    echo "  forwards traffic to the API (:${API_HOST_PORT:-8089}) and Admin UI (:3006)."
+    echo
+    echo "  1) nginx   — default (sites-available / sites-enabled + certbot --nginx)"
+    echo "  2) apache  — email_server_vhost.conf + a2ensite + certbot --apache"
+    echo
+    choice="$(prompt_value "Select host server [1=nginx, 2=apache]" "$default_num")"
+    case "$(printf '%s' "$choice" | tr '[:upper:]' '[:lower:]')" in
+      1|nginx|n) REVERSE_PROXY=nginx ;;
+      2|apache|a) REVERSE_PROXY=apache ;;
+      *)
+        warn "Invalid choice '${choice}' — using nginx"
+        REVERSE_PROXY=nginx
+        ;;
+    esac
+
+    domain_in="$(prompt_value "Public domain for this host" "$DOMAIN")"
+    DOMAIN="${domain_in:-$DOMAIN}"
+
+    if [[ "$SKIP_SSL" != "true" ]]; then
+      CERTBOT_EMAIL="$(prompt_value "Let's Encrypt / Certbot email" "${CERTBOT_EMAIL:-$ADMIN_EMAIL}")"
+    fi
+
+    echo
+    echo "  Host server   : ${REVERSE_PROXY}"
+    echo "  Domain        : ${DOMAIN}"
+    echo "  SSL (Certbot) : $([[ "$SKIP_SSL" == "true" ]] && echo disabled || echo enabled)"
+    echo "  Certbot email : ${CERTBOT_EMAIL:-$ADMIN_EMAIL}"
+    echo
+    if ! prompt_yes_no "Proceed with these settings?" y; then
+      die "Aborted by operator. Re-run ./setup.sh and choose nginx or apache again."
+    fi
+  else
+    log "Reverse proxy=${REVERSE_PROXY} domain=${DOMAIN} (non-interactive — pass --reverse-proxy= or run in a terminal)"
+  fi
+}
+
+ensure_pkg() {
+  # ensure_pkg <apt-packages...>
+  local missing=()
+  local p
+  for p in "$@"; do
+    if ! dpkg -s "$p" >/dev/null 2>&1; then
+      missing+=("$p")
+    fi
+  done
+  if [[ "${#missing[@]}" -eq 0 ]]; then
+    return 0
+  fi
+  log "Installing packages: ${missing[*]}"
+  run_root apt-get update -qq
+  DEBIAN_FRONTEND=noninteractive run_root apt-get install -y "${missing[@]}"
+}
+
+ensure_certbot_renewal() {
+  log "Ensuring Certbot automatic renewal"
+  if systemctl list-unit-files 2>/dev/null | grep -q '^certbot.timer'; then
+    run_root systemctl enable --now certbot.timer || warn "Could not enable certbot.timer"
+    run_root systemctl status certbot.timer --no-pager -l || true
+  elif [[ -f /etc/cron.d/certbot ]]; then
+    log "Certbot cron found at /etc/cron.d/certbot"
+  else
+    # Fallback renew hook timer via systemd user-agnostic cron line
+    run_root tee /etc/cron.d/email-server-certbot-renew >/dev/null <<'CRON'
+SHELL=/bin/sh
+PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
+0 */12 * * * root test -x /usr/bin/certbot && perl -e 'sleep int(rand(43200))' && certbot renew -q --deploy-hook "systemctl reload nginx 2>/dev/null; systemctl reload apache2 2>/dev/null; true"
+CRON
+    log "Installed /etc/cron.d/email-server-certbot-renew"
+  fi
+  run_root certbot renew --dry-run || warn "Certbot renew dry-run reported issues (DNS/HTTP challenge may be pending)"
+}
+
+install_nginx_reverse_proxy() {
+  local api_port ui_port src tmp
+  api_port="${API_HOST_PORT:-8089}"
+  ui_port="3006"
+
+  ensure_pkg nginx
+  need_cmd nginx
+
+  log "Installing Nginx site for ${DOMAIN} (API :${api_port}, UI :${ui_port})"
+  run_root mkdir -p /etc/nginx/snippets /etc/nginx/conf.d /var/www/html
+
+  run_root cp "$ROOT/deploy/configs/nginx-http-rate-limit.conf" \
+    /etc/nginx/conf.d/email-server-rate-limit.conf
+  run_root cp "$ROOT/deploy/configs/nginx-security-headers.conf" \
+    /etc/nginx/snippets/email-server-security-headers.conf
+
+  src="$ROOT/deploy/configs/nginx-notifications.africacdc.org.conf"
+  tmp="$(mktemp)"
+  sed \
+    -e "s/notifications\.africacdc\.org/${DOMAIN}/g" \
+    -e "s/127\.0\.0\.1:8089/127.0.0.1:${api_port}/g" \
+    -e "s/127\.0\.0\.1:3006/127.0.0.1:${ui_port}/g" \
+    "$src" > "$tmp"
+  run_root cp "$tmp" "/etc/nginx/sites-available/${DOMAIN}.conf"
+  rm -f "$tmp"
+  run_root ln -sfn "/etc/nginx/sites-available/${DOMAIN}.conf" "/etc/nginx/sites-enabled/${DOMAIN}.conf"
+
+  # Avoid default site stealing the domain
+  if [[ -L /etc/nginx/sites-enabled/default ]]; then
+    run_root rm -f /etc/nginx/sites-enabled/default || true
+  fi
+
+  if run_root nginx -t; then
+    run_root systemctl enable nginx || true
+    run_root systemctl reload nginx || run_root systemctl restart nginx
+  else
+    warn "nginx -t failed — check /etc/nginx/sites-available/${DOMAIN}.conf"
+  fi
+}
+
+install_apache_reverse_proxy() {
+  local api_port ui_port src tmp site="email_server_vhost.conf"
+  api_port="${API_HOST_PORT:-8089}"
+  ui_port="3006"
+
+  ensure_pkg apache2
+  need_cmd apache2
+  need_cmd a2ensite
+  need_cmd a2enmod
+
+  log "Installing Apache reverse-proxy vhost (${site}) for ${DOMAIN}"
+  run_root a2enmod proxy proxy_http headers rewrite ssl socache_shmcb remoteip >/dev/null
+
+  run_root mkdir -p /var/www/html/.well-known/acme-challenge
+  run_root chown -R www-data:www-data /var/www/html || true
+
+  src="$ROOT/deploy/configs/email_server_vhost.conf"
+  [[ -f "$src" ]] || die "Missing ${src}"
+  tmp="$(mktemp)"
+  sed \
+    -e "s/__DOMAIN__/${DOMAIN}/g" \
+    -e "s/__API_UPSTREAM__/127.0.0.1:${api_port}/g" \
+    -e "s/__UI_UPSTREAM__/127.0.0.1:${ui_port}/g" \
+    "$src" > "$tmp"
+
+  if [[ ! -f "/etc/apache2/sites-available/${site}" ]]; then
+    log "Creating /etc/apache2/sites-available/${site}"
+  else
+    log "Updating /etc/apache2/sites-available/${site}"
+  fi
+  run_root cp "$tmp" "/etc/apache2/sites-available/${site}"
+  rm -f "$tmp"
+
+  run_root a2ensite "$site" >/dev/null
+  # Prefer this vhost over the default site on :80
+  if [[ -f /etc/apache2/sites-enabled/000-default.conf ]]; then
+    run_root a2dissite 000-default >/dev/null || true
+  fi
+
+  if command -v nginx >/dev/null 2>&1 && systemctl is-active --quiet nginx 2>/dev/null; then
+    warn "Nginx is active while Apache reverse-proxy was selected — :80 may conflict."
+    if prompt_yes_no "Stop and disable Nginx so Apache can bind :80/:443?" y; then
+      run_root systemctl stop nginx || true
+      run_root systemctl disable nginx || true
+    fi
+  fi
+
+  if run_root apache2ctl configtest; then
+    run_root systemctl enable apache2 || true
+    run_root systemctl reload apache2 || run_root systemctl restart apache2
+  else
+    die "apache2ctl configtest failed — fix /etc/apache2/sites-available/${site}"
+  fi
+}
+
+install_host_ssl() {
+  if [[ "$SKIP_SSL" == "true" ]]; then
+    warn "Skipping SSL (--skip-ssl)"
+    return 0
+  fi
+
+  local email="${CERTBOT_EMAIL:-$ADMIN_EMAIL}"
+  [[ -n "$email" ]] || die "CERTBOT_EMAIL / ADMIN_EMAIL required for SSL"
+
+  ensure_pkg certbot
+  need_cmd certbot
+
+  log "Issuing/installing SSL certificate with Certbot for ${DOMAIN} (${REVERSE_PROXY})"
+
+  if [[ "$REVERSE_PROXY" == "apache" ]]; then
+    ensure_pkg python3-certbot-apache
+    if ! run_root certbot --apache \
+      -d "$DOMAIN" \
+      --agree-tos \
+      --redirect \
+      -m "$email" \
+      --non-interactive \
+      --keep-until-expiring; then
+      warn "Certbot --apache failed — trying webroot HTTP-01"
+      run_root mkdir -p /var/www/html
+      run_root certbot certonly --webroot \
+        -w /var/www/html \
+        -d "$DOMAIN" \
+        --agree-tos \
+        -m "$email" \
+        --non-interactive \
+        --keep-until-expiring \
+        || warn "Certbot webroot also failed — check DNS A/AAAA for ${DOMAIN} and that :80 reaches this host"
+    fi
+  else
+    ensure_pkg python3-certbot-nginx
+    # Ensure rate-limit zones exist
+    if [[ -f "$ROOT/deploy/configs/nginx-http-rate-limit.conf" ]]; then
+      run_root mkdir -p /etc/nginx/conf.d
+      run_root cp "$ROOT/deploy/configs/nginx-http-rate-limit.conf" \
+        /etc/nginx/conf.d/email-server-rate-limit.conf
+      run_root nginx -t && run_root systemctl reload nginx || warn "nginx -t still failing before certbot"
+    fi
+
+    if ! run_root certbot --nginx \
+      -d "$DOMAIN" \
+      --agree-tos \
+      --redirect \
+      -m "$email" \
+      --non-interactive \
+      --keep-until-expiring; then
+      warn "Certbot --nginx failed — trying webroot HTTP-01 instead"
+      run_root mkdir -p /var/www/html
+      run_root certbot certonly --webroot \
+        -w /var/www/html \
+        -d "$DOMAIN" \
+        --agree-tos \
+        -m "$email" \
+        --non-interactive \
+        --keep-until-expiring \
+        || warn "Certbot webroot also failed — fix reverse proxy then re-run certbot"
+    fi
+  fi
+
+  log "Verifying HTTPS"
+  curl -fsSI "https://${DOMAIN}/api/v1/health" | head -n 1 || warn "HTTPS health check failed — DNS/firewall may need attention"
+
+  local login_probe
+  login_probe="$(curl -sS -o /tmp/email_server_login_probe.json -w '%{http_code}' \
+    -X POST "https://${DOMAIN}/api/v1/admin/auth/login" \
+    -H 'Content-Type: application/json' \
+    -H 'Accept: application/json' \
+    -H "Origin: https://${DOMAIN}" \
+    -H "Referer: https://${DOMAIN}/login" \
+    -d '{"email":"probe@example.com","password":"invalid-password-probe"}' 2>/dev/null || true)"
+  if [[ "$login_probe" == "422" ]] || [[ "$login_probe" == "401" ]]; then
+    log "HTTPS login endpoint OK (HTTP ${login_probe} with browser Origin)"
+  else
+    warn "HTTPS login probe returned HTTP ${login_probe} (expected 422). Body:"
+    cat /tmp/email_server_login_probe.json 2>/dev/null | head -c 400 || true
+    echo
+  fi
+
+  ensure_certbot_renewal
 }
 
 # Load an external KEY=VALUE file without executing it.
@@ -236,11 +652,21 @@ while [[ $# -gt 0 ]]; do
     --skip-ssl) SKIP_SSL=true ;;
     --skip-frontend-build) SKIP_FRONTEND_BUILD=true ;;
     --frontend-build=*) FRONTEND_BUILD="${1#*=}" ;;
-    --skip-nginx) SKIP_NGINX=true ;;
+    --skip-nginx|--skip-reverse-proxy) SKIP_NGINX=true; SKIP_REVERSE_PROXY=true ;;
+    --reverse-proxy=*)
+      REVERSE_PROXY="${1#*=}"
+      REVERSE_PROXY_FROM_CLI=true
+      ;;
+    --non-interactive) NONINTERACTIVE=true ;;
+    --skip-git-pull) SKIP_GIT_PULL=true ;;
     *) die "Unknown option: $1 (try --help)" ;;
   esac
   shift
 done
+
+# Pull remote commits early so the rest of setup uses the latest scripts/code.
+# Local tracked/untracked (non-ignored) changes are stashed when a pull is needed.
+sync_git_updates
 
 # ---------------------------------------------------------------------------
 # Ensure .env templates exist (never overwrite existing files)
@@ -302,6 +728,15 @@ EXCHANGE_SCOPE="$(env_file_get "$ROOT/backend/.env" EXCHANGE_SCOPE)"
 EXCHANGE_SCOPE="${EXCHANGE_SCOPE:-https://graph.microsoft.com/.default}"
 CERTBOT_EMAIL="${CERTBOT_EMAIL:-$ADMIN_EMAIL}"
 
+# Ask reverse-proxy engine + domain (defaults: nginx + DOMAIN from env)
+# Skip with --skip-nginx / --skip-reverse-proxy / --non-interactive
+if [[ "${REVERSE_PROXY_FROM_CLI}" != "true" ]]; then
+  _rp="$(env_file_get "$ROOT/docker/.env" REVERSE_PROXY)"
+  [[ -n "$_rp" ]] && REVERSE_PROXY="$_rp"
+fi
+REVERSE_PROXY="$(printf '%s' "${REVERSE_PROXY:-nginx}" | tr '[:upper:]' '[:lower:]')"
+configure_reverse_proxy_interactive
+
 [[ -n "$MAIL_FROM_ADDRESS" ]] || MAIL_FROM_ADDRESS="notifications@${DOMAIN}"
 
 is_placeholder() {
@@ -324,11 +759,14 @@ FRONTEND_URL="$(env_file_get "$ROOT/docker/.env" FRONTEND_URL)"
 
 need_cmd docker
 need_cmd openssl
-if [[ "$SKIP_NGINX" != "true" ]]; then
-  need_cmd nginx
+if [[ "$SKIP_NGINX" != "true" && "$SKIP_REVERSE_PROXY" != "true" ]]; then
+  case "$(printf '%s' "$REVERSE_PROXY" | tr '[:upper:]' '[:lower:]')" in
+    apache) : ;; # packages installed in install_apache_reverse_proxy
+    nginx|*) : ;;
+  esac
 fi
 if [[ "$SKIP_SSL" != "true" ]]; then
-  need_cmd certbot
+  : # certbot installed in install_host_ssl
 fi
 
 if docker compose version >/dev/null 2>&1; then
@@ -1113,93 +1551,46 @@ if [[ "$RUN_SEEDER" == "true" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-# 5. Host Nginx
+# 5. Host reverse proxy (nginx default, or apache)
 # ---------------------------------------------------------------------------
-if [[ "$SKIP_NGINX" != "true" ]]; then
-  log "Installing Nginx site + security headers for ${DOMAIN}"
-  run_root mkdir -p /etc/nginx/snippets /etc/nginx/conf.d
-
-  # Shared memory zones (http{}) — required before any site uses limit_req zone=api_limit
-  run_root cp "$ROOT/deploy/configs/nginx-http-rate-limit.conf" \
-    /etc/nginx/conf.d/email-server-rate-limit.conf
-
-  run_root cp "$ROOT/deploy/configs/nginx-security-headers.conf" \
-    /etc/nginx/snippets/email-server-security-headers.conf
-
-  SRC="$ROOT/deploy/configs/nginx-notifications.africacdc.org.conf"
-  TMP="$(mktemp)"
-  sed "s/notifications\.africacdc\.org/${DOMAIN}/g" "$SRC" > "$TMP"
-  # Preserve an existing Certbot-managed SSL server block if present; replace HTTP+shared bits carefully.
-  # Always install the hardened template; Certbot --keep-until-expiring will re-attach SSL afterward.
-  run_root cp "$TMP" "/etc/nginx/sites-available/${DOMAIN}.conf"
-  rm -f "$TMP"
-  run_root ln -sfn "/etc/nginx/sites-available/${DOMAIN}.conf" "/etc/nginx/sites-enabled/${DOMAIN}.conf"
-  if run_root nginx -t; then
-    run_root systemctl reload nginx
-  else
-    warn "nginx -t failed after installing hardened site — check /etc/nginx/sites-available/${DOMAIN}.conf"
-    warn "Also check: sudo grep -R api_limit /etc/nginx/"
-  fi
+if [[ "$SKIP_NGINX" == "true" || "$SKIP_REVERSE_PROXY" == "true" ]]; then
+  warn "Skipping host reverse-proxy site install"
 else
-  warn "Skipping Nginx site install"
+  case "$(printf '%s' "$REVERSE_PROXY" | tr '[:upper:]' '[:lower:]')" in
+    apache)
+      install_apache_reverse_proxy
+      ;;
+    nginx|*)
+      REVERSE_PROXY=nginx
+      install_nginx_reverse_proxy
+      ;;
+  esac
 fi
 
 # ---------------------------------------------------------------------------
-# 6. Certbot SSL
+# 6. Certbot SSL (+ auto-renewal)
 # ---------------------------------------------------------------------------
-if [[ "$SKIP_SSL" != "true" ]]; then
-  log "Issuing/installing SSL certificate with Certbot for ${DOMAIN}"
-
-  # Ensure rate-limit zones exist even if --skip-nginx was used earlier on a broken host
-  if [[ -f "$ROOT/deploy/configs/nginx-http-rate-limit.conf" ]]; then
-    run_root mkdir -p /etc/nginx/conf.d
-    run_root cp "$ROOT/deploy/configs/nginx-http-rate-limit.conf" \
-      /etc/nginx/conf.d/email-server-rate-limit.conf
-    run_root nginx -t && run_root systemctl reload nginx || warn "nginx -t still failing before certbot"
-  fi
-
-  if ! run_root certbot --nginx \
-    -d "$DOMAIN" \
-    --agree-tos \
-    --redirect \
-    -m "$CERTBOT_EMAIL" \
-    --non-interactive \
-    --keep-until-expiring; then
-    warn "Certbot --nginx failed — trying webroot HTTP-01 instead"
-    run_root mkdir -p /var/www/html
-    run_root certbot certonly --webroot \
-      -w /var/www/html \
-      -d "$DOMAIN" \
-      --agree-tos \
-      -m "$CERTBOT_EMAIL" \
-      --non-interactive \
-      --keep-until-expiring \
-      || warn "Certbot webroot also failed — fix nginx (api_limit zone) then re-run certbot"
-  fi
-
-  log "Verifying HTTPS"
-  curl -fsSI "https://${DOMAIN}/api/v1/health" | head -n 1 || warn "HTTPS health check failed — DNS/firewall may need attention"
-
-  # Browser login uses Origin: https://DOMAIN — must NOT be CSRF 419 / Server Error
-  login_probe="$(curl -sS -o /tmp/email_server_login_probe.json -w '%{http_code}' \
-    -X POST "https://${DOMAIN}/api/v1/admin/auth/login" \
-    -H 'Content-Type: application/json' \
-    -H 'Accept: application/json' \
-    -H "Origin: https://${DOMAIN}" \
-    -H "Referer: https://${DOMAIN}/login" \
-    -d '{"email":"probe@example.com","password":"invalid-password-probe"}' 2>/dev/null || true)"
-  if [[ "$login_probe" == "422" ]] || [[ "$login_probe" == "401" ]]; then
-    log "HTTPS login endpoint OK (HTTP ${login_probe} with browser Origin)"
+if [[ "$SKIP_NGINX" == "true" || "$SKIP_REVERSE_PROXY" == "true" ]]; then
+  if [[ "$SKIP_SSL" != "true" ]]; then
+    warn "Reverse proxy skipped — SSL install may still require a working :80 vhost"
+    install_host_ssl
   else
-    warn "HTTPS login probe returned HTTP ${login_probe} (expected 422). Body:"
-    cat /tmp/email_server_login_probe.json 2>/dev/null | head -c 400 || true
-    echo
-    warn "If you see CSRF / Server Error, ensure backend/bootstrap/app.php has no statefulApi() and restart app."
+    warn "Skipping SSL (--skip-ssl)"
   fi
-
-  run_root certbot renew --dry-run || warn "Certbot renew dry-run reported issues"
 else
-  warn "Skipping SSL (--skip-ssl)"
+  install_host_ssl
+fi
+
+# Persist reverse-proxy choice for next runs (docker/.env)
+if [[ -f "$ROOT/docker/.env" ]]; then
+  if grep -qE '^REVERSE_PROXY=' "$ROOT/docker/.env"; then
+    awk -v v="$REVERSE_PROXY" 'BEGIN{done=0} /^REVERSE_PROXY=/{print "REVERSE_PROXY=" v; done=1; next} {print} END{if(!done) print "REVERSE_PROXY=" v}' \
+      "$ROOT/docker/.env" > "$ROOT/docker/.env.tmp"
+    mv "$ROOT/docker/.env.tmp" "$ROOT/docker/.env"
+  else
+    printf '\nREVERSE_PROXY=%s\n' "$REVERSE_PROXY" >> "$ROOT/docker/.env"
+  fi
+  chmod 600 "$ROOT/docker/.env" || true
 fi
 
 # ---------------------------------------------------------------------------
@@ -1213,6 +1604,7 @@ cat <<EOF
   Admin UI : https://${DOMAIN}
   API      : https://${DOMAIN}/api
   Health   : https://${DOMAIN}/api/v1/health
+  Proxy    : ${REVERSE_PROXY}
 
   Admin email : ${ADMIN_EMAIL}
   Admin pass  : (value from docker/.env ADMIN_PASSWORD — not printed)
