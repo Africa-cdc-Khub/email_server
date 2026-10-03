@@ -1710,8 +1710,12 @@ log "Starting Docker stack"
 ensure_redis_ready
 (
   cd "$ROOT/docker"
+  # Build the shared app image once (queue reuses email-server-app:local — no parallel build race)
+  log "Building email-server-app:local"
+  "${COMPOSE[@]}" build app \
+    || die "Docker build failed for app (email-server-app:local)"
   # --remove-orphans drops leftover containers from old compose project names / scale changes
-  RUN_SEEDER=false "${COMPOSE[@]}" up -d --build --remove-orphans --scale "queue=${QUEUE_SCALE}"
+  RUN_SEEDER=false "${COMPOSE[@]}" up -d --remove-orphans --scale "queue=${QUEUE_SCALE}"
 )
 
 # Align Postgres volume with docker/.env BEFORE health/seed
