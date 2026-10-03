@@ -1,7 +1,7 @@
 # Integration mailbox binding + shared-weight soft downshift
 
 **Date:** 2026-10-03  
-**Status:** Approved (pending implementation)  
+**Status:** Implemented  
 **Depends on:** [Mailbox send weights](./2026-09-23-mailbox-weights-design.md), [Provider mailbox quotas](./2026-09-23-provider-mailbox-quotas-design.md)  
 **Surface:** `ExternalIntegration`, admin Integration edit UI, `MailboxSelector`, `EmailDispatchService`, config/env
 
