@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import DefaultProviderCard from '@/components/dashboard/DefaultProviderCard.vue'
 import EmailActivityOverview from '@/components/dashboard/EmailActivityOverview.vue'
 import StatCard from '@/components/dashboard/StatCard.vue'
@@ -9,6 +9,9 @@ import { api } from '@/lib/api'
 import { formatDateTime12h } from '@/lib/formatDate'
 import { useAuthStore } from '@/stores/auth'
 import { useBrandingStore } from '@/stores/branding'
+
+/** Quiet poll while the dashboard is open; pause when the tab is hidden. */
+const REFRESH_INTERVAL_MS = 15_000
 
 type ActivityDay = {
   date: string
@@ -56,8 +59,18 @@ type DashboardData = {
 
 const data = ref<DashboardData | null>(null)
 const loading = ref(true)
+const refreshing = ref(false)
+const lastUpdatedAt = ref<Date | null>(null)
 const auth = useAuthStore()
 const branding = useBrandingStore()
+
+let refreshTimer: ReturnType<typeof setInterval> | null = null
+let inFlight = false
+
+const lastUpdatedLabel = computed(() => {
+  if (!lastUpdatedAt.value) return null
+  return `Updated ${formatDateTime12h(lastUpdatedAt.value.toISOString())}`
+})
 
 const statCards = computed(() => {
   const stats = data.value?.stats ?? {}
@@ -105,13 +118,64 @@ function statusColor(status: string) {
   return 'warning'
 }
 
-onMounted(async () => {
+async function loadDashboard(opts: { silent?: boolean } = {}) {
+  if (inFlight) return
+  inFlight = true
+  const silent = opts.silent === true
+  if (silent) refreshing.value = true
+  else loading.value = true
+
   try {
     const res = await api.get('/admin/dashboard')
     data.value = res.data
+    lastUpdatedAt.value = new Date()
+  } catch {
+    // Keep showing the last good snapshot on background refresh failures.
+    if (!silent) throw new Error('dashboard_load_failed')
   } finally {
     loading.value = false
+    refreshing.value = false
+    inFlight = false
   }
+}
+
+function stopAutoRefresh() {
+  if (refreshTimer !== null) {
+    clearInterval(refreshTimer)
+    refreshTimer = null
+  }
+}
+
+function startAutoRefresh() {
+  stopAutoRefresh()
+  refreshTimer = setInterval(() => {
+    if (document.visibilityState === 'hidden') return
+    void loadDashboard({ silent: true })
+  }, REFRESH_INTERVAL_MS)
+}
+
+function onVisibilityChange() {
+  if (document.visibilityState === 'visible') {
+    void loadDashboard({ silent: true })
+    startAutoRefresh()
+  } else {
+    stopAutoRefresh()
+  }
+}
+
+onMounted(async () => {
+  try {
+    await loadDashboard()
+  } catch {
+    loading.value = false
+  }
+  startAutoRefresh()
+  document.addEventListener('visibilitychange', onVisibilityChange)
+})
+
+onUnmounted(() => {
+  stopAutoRefresh()
+  document.removeEventListener('visibilitychange', onVisibilityChange)
 })
 </script>
 
@@ -120,7 +184,14 @@ onMounted(async () => {
     <PageHeader
       :title="`Welcome back, ${auth.user?.name ?? 'Admin'}`"
       :subtitle="`Overview of ${branding.branding.app_name} mail activity and configuration`"
-    />
+    >
+      <template v-if="lastUpdatedLabel || refreshing" #actions>
+        <div class="d-flex align-center ga-2 text-caption text-medium-emphasis">
+          <v-progress-circular v-if="refreshing" indeterminate size="14" width="2" color="primary" />
+          <span v-if="lastUpdatedLabel">{{ lastUpdatedLabel }}</span>
+        </div>
+      </template>
+    </PageHeader>
 
     <v-row v-if="loading">
       <v-col v-for="n in 4" :key="n" cols="12" sm="6" lg="3">
