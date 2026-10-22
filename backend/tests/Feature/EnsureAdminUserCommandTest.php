@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Enums\UserApprovalStatus;
+use App\Models\BlockedEmail;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Hash;
@@ -54,5 +55,37 @@ class EnsureAdminUserCommandTest extends TestCase
         $this->assertTrue(Hash::check('NewPassword2!', $user->password));
         $this->assertSame(UserApprovalStatus::Approved, $user->approval_status);
         $this->assertTrue($user->is_active);
+    }
+
+    public function test_ensure_admin_unblocks_bootstrap_admin_email(): void
+    {
+        $user = User::factory()->create([
+            'email' => 'ops@example.com',
+            'password' => Hash::make('EnvSecret99!'),
+            'is_admin' => true,
+            'is_active' => false,
+            'approval_status' => UserApprovalStatus::Approved,
+        ]);
+
+        BlockedEmail::query()->create([
+            'email' => 'ops@example.com',
+            'reason' => 'Accidental lockout',
+            'is_active' => true,
+        ]);
+
+        putenv('ADMIN_EMAIL=ops@example.com');
+        putenv('ADMIN_PASSWORD=EnvSecret99!');
+        $_ENV['ADMIN_EMAIL'] = 'ops@example.com';
+        $_ENV['ADMIN_PASSWORD'] = 'EnvSecret99!';
+
+        $this->artisan('app:ensure-admin')
+            ->assertSuccessful();
+
+        $user->refresh();
+        $this->assertTrue($user->is_active);
+        $this->assertDatabaseHas('blocked_emails', [
+            'email' => 'ops@example.com',
+            'is_active' => 0,
+        ]);
     }
 }

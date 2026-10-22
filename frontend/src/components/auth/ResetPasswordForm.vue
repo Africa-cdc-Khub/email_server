@@ -2,14 +2,15 @@
 import { computed, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import FormField from '@/components/forms/FormField.vue'
+import { apiErrorMessage } from '@/lib/apiError'
 import { useAuthStore } from '@/stores/auth'
 
 const auth = useAuthStore()
 const route = useRoute()
 const router = useRouter()
 
-const email = ref((route.query.email as string) ?? '')
-const token = ref((route.query.token as string) ?? '')
+const email = ref(typeof route.query.email === 'string' ? route.query.email : '')
+const token = ref(typeof route.query.token === 'string' ? route.query.token : '')
 const password = ref('')
 const passwordConfirmation = ref('')
 const loading = ref(false)
@@ -24,14 +25,17 @@ async function submit() {
   error.value = ''
   try {
     message.value = await auth.resetPassword({
-      email: email.value,
+      email: email.value.trim().toLowerCase(),
       token: token.value,
       password: password.value,
       password_confirmation: passwordConfirmation.value,
     })
     await router.push({ name: 'login' })
-  } catch {
-    error.value = 'This reset link is invalid or expired. Request a new one.'
+  } catch (err) {
+    error.value = apiErrorMessage(
+      err,
+      'This reset link is invalid or expired. Request a new one.',
+    )
   } finally {
     loading.value = false
   }

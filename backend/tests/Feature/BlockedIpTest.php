@@ -200,4 +200,112 @@ class BlockedIpTest extends TestCase
         $this->assertDatabaseHas('blocked_ips', ['ip_address' => '203.0.113.60', 'is_active' => 1]);
         $this->assertDatabaseHas('blocked_emails', ['email' => 'bad.actor@example.com', 'is_active' => 1]);
     }
+
+    public function test_cannot_block_bootstrap_admin_email_from_env(): void
+    {
+        putenv('ADMIN_EMAIL=bootstrap@example.com');
+        $_ENV['ADMIN_EMAIL'] = 'bootstrap@example.com';
+
+        $admin = User::factory()->create([
+            'email' => 'other-admin@example.com',
+            'is_admin' => true,
+            'is_active' => true,
+        ]);
+        User::factory()->create([
+            'email' => 'bootstrap@example.com',
+            'password' => bcrypt('BootstrapPass1!'),
+            'is_admin' => true,
+            'is_active' => true,
+        ]);
+
+        $this->withToken($admin->createToken('admin-panel')->plainTextToken)
+            ->postJson('/api/v1/admin/blocked-ips', [
+                'scope' => 'email',
+                'email' => 'bootstrap@example.com',
+                'reason' => 'Should never lock bootstrap admin',
+            ])
+            ->assertStatus(422)
+            ->assertJsonPath('message', 'The bootstrap admin email (ADMIN_EMAIL) cannot be blocked.');
+
+        $this->assertDatabaseMissing('blocked_emails', [
+            'email' => 'bootstrap@example.com',
+            'is_active' => 1,
+        ]);
+
+        $this->postJson('/api/v1/admin/auth/login', [
+            'email' => 'bootstrap@example.com',
+            'password' => 'BootstrapPass1!',
+        ])->assertOk();
+    }
+
+    public function test_stale_bootstrap_admin_block_does_not_prevent_login(): void
+    {
+        putenv('ADMIN_EMAIL=bootstrap@example.com');
+        $_ENV['ADMIN_EMAIL'] = 'bootstrap@example.com';
+
+        User::factory()->create([
+            'email' => 'bootstrap@example.com',
+            'password' => bcrypt('BootstrapPass1!'),
+            'is_admin' => true,
+            'is_active' => true,
+        ]);
+
+        \App\Models\BlockedEmail::query()->create([
+            'email' => 'bootstrap@example.com',
+            'reason' => 'Stale lockout',
+            'is_active' => true,
+        ]);
+
+        $this->postJson('/api/v1/admin/auth/login', [
+            'email' => 'bootstrap@example.com',
+            'password' => 'BootstrapPass1!',
+        ])->assertOk();
+    }
+
+    public function test_block_all_suspicious_skips_bootstrap_admin_email(): void
+    {
+        putenv('ADMIN_EMAIL=bootstrap@example.com');
+        $_ENV['ADMIN_EMAIL'] = 'bootstrap@example.com';
+
+        $admin = User::factory()->create([
+            'email' => 'reviewer@example.com',
+            'is_admin' => true,
+            'is_active' => true,
+        ]);
+
+        AuditLog::query()->create([
+            'action' => 'Failed login',
+            'event_type' => 'auth_failed',
+            'user_email' => 'bootstrap@example.com',
+            'ip_address' => '203.0.113.40',
+            'is_suspicious' => true,
+            'suspicious_reasons' => 'Failed login attempt',
+        ]);
+        AuditLog::query()->create([
+            'action' => 'Failed login',
+            'event_type' => 'auth_failed',
+            'user_email' => 'attacker@example.com',
+            'ip_address' => '203.0.113.41',
+            'is_suspicious' => true,
+            'suspicious_reasons' => 'Failed login attempt',
+        ]);
+
+        $this->withToken($admin->createToken('admin-panel')->plainTextToken)
+            ->withServerVariables(['REMOTE_ADDR' => '10.0.0.1'])
+            ->postJson('/api/v1/admin/blocked-ips/block-suspicious', [
+                'scope' => 'email',
+                'reason' => 'Bulk block from audit review',
+            ])
+            ->assertOk()
+            ->assertJsonPath('data.emails.count', 1);
+
+        $this->assertDatabaseMissing('blocked_emails', [
+            'email' => 'bootstrap@example.com',
+            'is_active' => 1,
+        ]);
+        $this->assertDatabaseHas('blocked_emails', [
+            'email' => 'attacker@example.com',
+            'is_active' => 1,
+        ]);
+    }
 }

@@ -130,4 +130,67 @@ class AdminPasswordResetTest extends TestCase
         $this->assertDatabaseMissing('password_reset_tokens', ['email' => $user->email]);
         $this->assertDatabaseCount('personal_access_tokens', 0);
     }
+
+    public function test_reset_password_accepts_mixed_case_email_from_link(): void
+    {
+        $user = User::factory()->create([
+            'email' => 'andrewa@africacdc.org',
+            'password' => Hash::make('OldPassword1!'),
+            'is_admin' => true,
+            'is_active' => true,
+        ]);
+
+        $plainToken = Str::random(64);
+        DB::table('password_reset_tokens')->insert([
+            'email' => 'andrewa@africacdc.org',
+            'token' => Hash::make($plainToken),
+            'created_at' => now(),
+        ]);
+
+        $this->postJson('/api/v1/admin/auth/reset-password', [
+            'email' => 'Andrewa@AfricaCDC.org',
+            'token' => $plainToken,
+            'password' => 'NewSecurePass1!',
+            'password_confirmation' => 'NewSecurePass1!',
+        ])->assertOk();
+
+        $user->refresh();
+        $this->assertTrue(Hash::check('NewSecurePass1!', $user->password));
+    }
+
+    public function test_forgot_password_still_sends_for_bootstrap_admin_with_stale_block(): void
+    {
+        putenv('ADMIN_EMAIL=andrewa@africacdc.org');
+        $_ENV['ADMIN_EMAIL'] = 'andrewa@africacdc.org';
+
+        EmailProvider::query()->create([
+            'name' => 'Log',
+            'slug' => 'log',
+            'driver' => EmailDriver::Log,
+            'config' => [],
+            'is_default' => true,
+            'is_active' => true,
+        ]);
+
+        User::factory()->create([
+            'email' => 'andrewa@africacdc.org',
+            'is_admin' => true,
+            'is_active' => true,
+        ]);
+
+        \App\Models\BlockedEmail::query()->create([
+            'email' => 'andrewa@africacdc.org',
+            'reason' => 'Stale lockout',
+            'is_active' => true,
+        ]);
+
+        Queue::fake();
+
+        $this->postJson('/api/v1/admin/auth/forgot-password', [
+            'email' => 'andrewa@africacdc.org',
+        ])->assertOk();
+
+        Queue::assertPushed(SendEmailJob::class);
+        $this->assertDatabaseHas('password_reset_tokens', ['email' => 'andrewa@africacdc.org']);
+    }
 }

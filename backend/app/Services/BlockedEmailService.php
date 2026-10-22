@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\AuditLog;
 use App\Models\BlockedEmail;
 use App\Models\User;
+use App\Support\BootstrapAdmin;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Schema;
@@ -22,6 +23,11 @@ class BlockedEmailService
             return false;
         }
 
+        // Env bootstrap admin is never treated as blocked (even if a stale row exists).
+        if (BootstrapAdmin::isBootstrapEmail($email)) {
+            return false;
+        }
+
         return $this->activeEmailSet()->has($email);
     }
 
@@ -34,6 +40,10 @@ class BlockedEmailService
         $email = $this->normalize($email);
         if ($email === null) {
             throw new \InvalidArgumentException('A valid email address is required.');
+        }
+
+        if (BootstrapAdmin::isBootstrapEmail($email)) {
+            throw new \InvalidArgumentException('The bootstrap admin email from ADMIN_EMAIL cannot be blocked.');
         }
 
         $reason = trim($reason);
@@ -62,6 +72,28 @@ class BlockedEmailService
     }
 
     /**
+     * Ensure the env bootstrap admin email is not actively blocked.
+     */
+    public function ensureBootstrapAdminUnblocked(?User $actor = null): void
+    {
+        $email = BootstrapAdmin::email();
+        if ($email === null || ! $this->tableReady()) {
+            return;
+        }
+
+        $row = BlockedEmail::query()
+            ->whereRaw('LOWER(email) = ?', [$email])
+            ->where('is_active', true)
+            ->first();
+
+        if ($row === null) {
+            return;
+        }
+
+        $this->unblock($row, $actor);
+    }
+
+    /**
      * @return array{blocked: list<BlockedEmail>, skipped: list<string>, count: int}
      */
     public function blockAllSuspicious(string $reason, ?User $actor = null, ?string $skipEmail = null): array
@@ -76,6 +108,7 @@ class BlockedEmailService
         }
 
         $skipNormalized = $this->normalize($skipEmail);
+        $bootstrapEmail = BootstrapAdmin::email();
 
         /** @var Collection<int, string> $emails */
         $emails = AuditLog::query()
@@ -94,6 +127,11 @@ class BlockedEmailService
         $skipped = [];
 
         foreach ($emails as $email) {
+            if ($bootstrapEmail !== null && $email === $bootstrapEmail) {
+                $skipped[] = $email;
+                continue;
+            }
+
             if ($skipNormalized !== null && $email === $skipNormalized) {
                 $skipped[] = $email;
                 continue;

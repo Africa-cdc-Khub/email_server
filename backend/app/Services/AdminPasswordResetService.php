@@ -18,8 +18,13 @@ class AdminPasswordResetService
 
     public function sendResetLink(string $email): void
     {
+        $email = $this->normalizeEmail($email);
+        if ($email === '') {
+            return;
+        }
+
         $user = User::query()
-            ->where('email', $email)
+            ->whereRaw('LOWER(email) = ?', [$email])
             ->where('is_active', true)
             ->first();
 
@@ -27,22 +32,25 @@ class AdminPasswordResetService
             return;
         }
 
+        // Always key tokens by the canonical (lowercase) address so reset links match.
+        $canonicalEmail = strtolower(trim((string) $user->email));
+
         $plainToken = Str::random(64);
 
         DB::table('password_reset_tokens')->updateOrInsert(
-            ['email' => $email],
+            ['email' => $canonicalEmail],
             [
                 'token' => Hash::make($plainToken),
                 'created_at' => now(),
             ],
         );
 
-        $resetUrl = $this->resetUrl($email, $plainToken);
+        $resetUrl = $this->resetUrl($canonicalEmail, $plainToken);
         $appName = config('app.name', 'Email Server');
         $expiryMinutes = (int) config('auth.passwords.users.expire', 60);
 
         $this->dispatch->queue(
-            to: $email,
+            to: $canonicalEmail,
             subject: "{$appName} — password reset",
             body: $this->resetEmailBody($appName, $resetUrl, $expiryMinutes),
             isHtml: true,
@@ -53,7 +61,16 @@ class AdminPasswordResetService
 
     public function resetPassword(string $email, string $token, string $password): void
     {
-        $record = DB::table('password_reset_tokens')->where('email', $email)->first();
+        $email = $this->normalizeEmail($email);
+        if ($email === '') {
+            throw ValidationException::withMessages([
+                'email' => ['This password reset link is invalid or has expired.'],
+            ]);
+        }
+
+        $record = DB::table('password_reset_tokens')
+            ->whereRaw('LOWER(email) = ?', [$email])
+            ->first();
 
         if ($record === null || ! Hash::check($token, $record->token)) {
             throw ValidationException::withMessages([
@@ -65,14 +82,17 @@ class AdminPasswordResetService
         $createdAt = $record->created_at ? Carbon::parse($record->created_at) : null;
 
         if ($createdAt === null || $createdAt->lt($expiresAt)) {
-            DB::table('password_reset_tokens')->where('email', $email)->delete();
+            DB::table('password_reset_tokens')->whereRaw('LOWER(email) = ?', [$email])->delete();
 
             throw ValidationException::withMessages([
                 'token' => ['This password reset link is invalid or has expired.'],
             ]);
         }
 
-        $user = User::query()->where('email', $email)->where('is_active', true)->first();
+        $user = User::query()
+            ->whereRaw('LOWER(email) = ?', [$email])
+            ->where('is_active', true)
+            ->first();
 
         if ($user === null) {
             throw ValidationException::withMessages([
@@ -80,10 +100,11 @@ class AdminPasswordResetService
             ]);
         }
 
+        // Assign plaintext — User casts password with 'hashed'.
         $user->forceFill(['password' => $password])->save();
         $user->tokens()->delete();
 
-        DB::table('password_reset_tokens')->where('email', $email)->delete();
+        DB::table('password_reset_tokens')->whereRaw('LOWER(email) = ?', [$email])->delete();
     }
 
     private function resetUrl(string $email, string $token): string
@@ -109,5 +130,11 @@ class AdminPasswordResetService
 <p>This link expires in {$expiryMinutes} minutes and can only be used once.</p>
 <p>If you did not request this, you can ignore this email. Your password will not change.</p>
 HTML;
+    }
+
+    private function normalizeEmail(string $email): string
+    {
+        // Lowercase only — do not re-validate; Laravel request rules already did.
+        return strtolower(trim($email));
     }
 }

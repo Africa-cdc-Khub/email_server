@@ -10,6 +10,7 @@ use App\Models\BlockedIp;
 use App\Services\AuditLogService;
 use App\Services\BlockedEmailService;
 use App\Services\BlockedIpService;
+use App\Support\BootstrapAdmin;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -98,6 +99,12 @@ class BlockedIpController extends Controller
         if ($wantEmail && $actorEmail !== null && $blockedEmails->normalize($email) === $actorEmail) {
             return response()->json([
                 'message' => 'You cannot block your own email address.',
+            ], 422);
+        }
+
+        if ($wantEmail && BootstrapAdmin::isBootstrapEmail($email)) {
+            return response()->json([
+                'message' => 'The bootstrap admin email (ADMIN_EMAIL) cannot be blocked.',
             ], 422);
         }
 
