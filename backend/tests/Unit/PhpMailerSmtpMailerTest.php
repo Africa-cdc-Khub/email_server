@@ -123,23 +123,23 @@ class PhpMailerSmtpMailerTest extends TestCase
             'slug' => 'smtp-host-user',
             'driver' => EmailDriver::Smtp,
             'config' => [
-                'host' => 'mail.africacdc.net',
+                'host' => 'mail.example.com',
                 'port' => 465,
                 'encryption' => 'ssl',
-                'username' => 'mail.africacdc.net',
+                'username' => 'mail.example.com',
                 'password' => 'secret',
             ],
-            'from_address' => 'notifications@africacdc.net',
+            'from_address' => 'noreply@example.com',
             'is_default' => true,
             'is_active' => true,
         ]);
 
         $settings = app(PhpMailerSmtpMailer::class)->resolveSettings(
             $provider,
-            'notifications@africacdc.net'
+            'noreply@example.com'
         );
 
-        $this->assertSame('notifications@africacdc.net', $settings['username']);
+        $this->assertSame('noreply@example.com', $settings['username']);
         $this->assertSame('ssl', $settings['encryption']);
         $this->assertSame(465, $settings['port']);
     }

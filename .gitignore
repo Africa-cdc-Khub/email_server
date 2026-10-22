@@ -3,6 +3,7 @@
 /node_modules
 .npm-cache/
 frontend/.npm-cache/
+**/.npm-cache/
 
 # Local env & secrets — NEVER commit these
 .env
@@ -12,6 +13,17 @@ frontend/.npm-cache/
 
 docker/.env
 backend/.env
+
+# Exchange OAuth tokens (legacy plaintext file + any dumps)
+**/exchange-oauth-tokens.json
+**/exchange*token*.json
+backend/storage/app/private/**
+!backend/storage/app/private/.gitignore
+
+# Reports / personal artifacts must not live in tests
+backend/tests/**/*.docx
+backend/tests/**/*.pdf
+backend/tests/**/*Report*
 
 # Production deploy secrets (copy outside the repo)
 *.secrets.env

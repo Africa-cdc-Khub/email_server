@@ -16,13 +16,13 @@ class PhishingHardeningTest extends TestCase
     public function test_trusted_frontend_url_rejects_foreign_hosts(): void
     {
         config([
-            'app.url' => 'https://notifications.africacdc.org',
+            'app.url' => 'https://mail.example.com',
             'app.frontend_url' => 'https://evil.example/phish',
         ]);
 
-        $this->assertSame('https://notifications.africacdc.org', TrustedFrontendUrl::base());
+        $this->assertSame('https://mail.example.com', TrustedFrontendUrl::base());
         $this->assertFalse(TrustedFrontendUrl::isTrustedFrontend('https://evil.example'));
-        $this->assertTrue(TrustedFrontendUrl::isTrustedFrontend('https://notifications.africacdc.org'));
+        $this->assertTrue(TrustedFrontendUrl::isTrustedFrontend('https://mail.example.com'));
     }
 
     public function test_trusted_frontend_url_allows_same_host_different_port(): void

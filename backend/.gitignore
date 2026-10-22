@@ -20,6 +20,8 @@
 /public/storage
 /storage/*.key
 /storage/pail
+/storage/app/exchange-oauth-tokens.json
+/storage/app/**/exchange-oauth-tokens.json
 /vendor
 _ide_helper.php
 Homestead.json

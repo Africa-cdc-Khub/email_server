@@ -1,11 +1,14 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import PageHeader from '@/components/shared/PageHeader.vue'
 import ParentCard from '@/components/shared/ParentCard.vue'
 import { api } from '@/lib/api'
 import { apiErrorMessage } from '@/lib/apiError'
 import { formatDateTime12h } from '@/lib/formatDate'
 import { useAuthStore } from '@/stores/auth'
+
+/** Quiet poll while the logs page is open; pause when the tab is hidden. */
+const REFRESH_INTERVAL_MS = 15_000
 
 type EmailLog = {
   id: number
@@ -33,6 +36,8 @@ type ClientOption = { id: number; name: string }
 
 const items = ref<EmailLog[]>([])
 const loading = ref(true)
+const refreshing = ref(false)
+const lastUpdatedAt = ref<Date | null>(null)
 const page = ref(1)
 const total = ref(0)
 const error = ref('')
@@ -48,6 +53,14 @@ const clientFilter = ref<string | null>(null)
 const search = ref('')
 const auth = useAuthStore()
 const canResend = computed(() => auth.isAdmin)
+
+let refreshTimer: ReturnType<typeof setInterval> | null = null
+let inFlight = false
+
+const lastUpdatedLabel = computed(() => {
+  if (!lastUpdatedAt.value) return null
+  return `Updated ${formatDateTime12h(lastUpdatedAt.value.toISOString())}`
+})
 
 const statuses = ref<FilterOption[]>([
   { value: 'pending', label: 'Pending' },
@@ -83,9 +96,16 @@ async function loadFilters() {
   }
 }
 
-async function load() {
-  loading.value = true
-  error.value = ''
+async function load(opts: { silent?: boolean } = {}) {
+  if (inFlight) return
+  inFlight = true
+  const silent = opts.silent === true
+  if (silent) refreshing.value = true
+  else {
+    loading.value = true
+    error.value = ''
+  }
+
   try {
     const res = await api.get('/admin/email-logs', {
       params: {
@@ -98,18 +118,53 @@ async function load() {
     })
     items.value = res.data.data
     total.value = res.data.total
+    lastUpdatedAt.value = new Date()
+
+    // Keep the details drawer in sync when the selected row changes status.
+    if (selectedLog.value) {
+      const updated = items.value.find((row) => row.id === selectedLog.value?.id)
+      if (updated) selectedLog.value = updated
+    }
   } catch (err) {
-    items.value = []
-    total.value = 0
-    error.value = apiErrorMessage(err, 'Could not load email logs.')
+    if (!silent) {
+      items.value = []
+      total.value = 0
+      error.value = apiErrorMessage(err, 'Could not load email logs.')
+    }
   } finally {
     loading.value = false
+    refreshing.value = false
+    inFlight = false
+  }
+}
+
+function stopAutoRefresh() {
+  if (refreshTimer !== null) {
+    clearInterval(refreshTimer)
+    refreshTimer = null
+  }
+}
+
+function startAutoRefresh() {
+  stopAutoRefresh()
+  refreshTimer = setInterval(() => {
+    if (document.visibilityState === 'hidden') return
+    void load({ silent: true })
+  }, REFRESH_INTERVAL_MS)
+}
+
+function onVisibilityChange() {
+  if (document.visibilityState === 'visible') {
+    void load({ silent: true })
+    startAutoRefresh()
+  } else {
+    stopAutoRefresh()
   }
 }
 
 function applyFilters() {
   page.value = 1
-  load()
+  void load()
 }
 
 function clearFilters() {
@@ -118,7 +173,7 @@ function clearFilters() {
   clientFilter.value = null
   search.value = ''
   page.value = 1
-  load()
+  void load()
 }
 
 function openDetails(item: EmailLog) {
@@ -197,12 +252,19 @@ async function retryAllPending() {
 
 watch([statusFilter, driverFilter, clientFilter], () => {
   page.value = 1
-  load()
+  void load()
 })
 
 onMounted(async () => {
   await loadFilters()
   await load()
+  startAutoRefresh()
+  document.addEventListener('visibilitychange', onVisibilityChange)
+})
+
+onUnmounted(() => {
+  stopAutoRefresh()
+  document.removeEventListener('visibilitychange', onVisibilityChange)
 })
 </script>
 
@@ -213,6 +275,13 @@ onMounted(async () => {
       subtitle="Delivery history — filter by client, status, or sending driver. Logs older than 7 days are pruned automatically."
     >
       <template #actions>
+        <div
+          v-if="lastUpdatedLabel || refreshing"
+          class="d-flex align-center ga-2 text-caption text-medium-emphasis mr-2"
+        >
+          <v-progress-circular v-if="refreshing" indeterminate size="14" width="2" color="primary" />
+          <span v-if="lastUpdatedLabel">{{ lastUpdatedLabel }}</span>
+        </div>
         <v-btn
           v-if="canResend"
           color="warning"

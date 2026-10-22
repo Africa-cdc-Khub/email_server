@@ -35,7 +35,7 @@ class AdminPasswordResetTest extends TestCase
         ]);
 
         User::factory()->create([
-            'email' => 'andrewa@africacdcorg',
+            'email' => 'admin@example.com',
             'is_admin' => true,
             'is_active' => true,
         ]);
@@ -43,12 +43,12 @@ class AdminPasswordResetTest extends TestCase
         Queue::fake();
 
         $this->postJson('/api/v1/admin/auth/forgot-password', [
-            'email' => 'andrewa@africacdcorg',
+            'email' => 'admin@example.com',
         ])->assertOk()
             ->assertJsonPath('message', 'If an account exists for that email, a password reset link has been sent.');
 
         Queue::assertPushed(SendEmailJob::class);
-        $this->assertDatabaseHas('password_reset_tokens', ['email' => 'andrewa@africacdcorg']);
+        $this->assertDatabaseHas('password_reset_tokens', ['email' => 'admin@example.com']);
     }
 
     public function test_forgot_password_does_not_reveal_missing_accounts(): void
@@ -66,7 +66,7 @@ class AdminPasswordResetTest extends TestCase
     public function test_forgot_password_reset_link_uses_trusted_frontend_host(): void
     {
         config([
-            'app.url' => 'https://notifications.africacdc.org',
+            'app.url' => 'https://mail.example.com',
             'app.frontend_url' => 'https://attacker.example',
         ]);
 
@@ -80,7 +80,7 @@ class AdminPasswordResetTest extends TestCase
         ]);
 
         User::factory()->create([
-            'email' => 'andrewa@africacdcorg',
+            'email' => 'admin@example.com',
             'is_admin' => true,
             'is_active' => true,
         ]);
@@ -88,14 +88,14 @@ class AdminPasswordResetTest extends TestCase
         Queue::fake();
 
         $this->postJson('/api/v1/admin/auth/forgot-password', [
-            'email' => 'andrewa@africacdcorg',
+            'email' => 'admin@example.com',
         ])->assertOk();
 
         Queue::assertPushed(SendEmailJob::class, function (SendEmailJob $job): bool {
             $log = \App\Models\EmailLog::query()->find($job->emailLogId);
             $body = (string) ($log?->meta['body'] ?? '');
 
-            return str_contains($body, 'https://notifications.africacdc.org/reset-password')
+            return str_contains($body, 'https://mail.example.com/reset-password')
                 && ! str_contains($body, 'attacker.example');
         });
     }
@@ -103,7 +103,7 @@ class AdminPasswordResetTest extends TestCase
     public function test_reset_password_updates_password_and_revokes_tokens(): void
     {
         $user = User::factory()->create([
-            'email' => 'andrewa@africacdcorg',
+            'email' => 'admin@example.com',
             'password' => Hash::make('OldPassword1!'),
             'is_admin' => true,
             'is_active' => true,
@@ -134,7 +134,7 @@ class AdminPasswordResetTest extends TestCase
     public function test_reset_password_accepts_mixed_case_email_from_link(): void
     {
         $user = User::factory()->create([
-            'email' => 'andrewa@africacdc.org',
+            'email' => 'admin@example.com',
             'password' => Hash::make('OldPassword1!'),
             'is_admin' => true,
             'is_active' => true,
@@ -142,13 +142,13 @@ class AdminPasswordResetTest extends TestCase
 
         $plainToken = Str::random(64);
         DB::table('password_reset_tokens')->insert([
-            'email' => 'andrewa@africacdc.org',
+            'email' => 'admin@example.com',
             'token' => Hash::make($plainToken),
             'created_at' => now(),
         ]);
 
         $this->postJson('/api/v1/admin/auth/reset-password', [
-            'email' => 'Andrewa@AfricaCDC.org',
+            'email' => 'Admin@Example.com',
             'token' => $plainToken,
             'password' => 'NewSecurePass1!',
             'password_confirmation' => 'NewSecurePass1!',
@@ -160,8 +160,8 @@ class AdminPasswordResetTest extends TestCase
 
     public function test_forgot_password_still_sends_for_bootstrap_admin_with_stale_block(): void
     {
-        putenv('ADMIN_EMAIL=andrewa@africacdc.org');
-        $_ENV['ADMIN_EMAIL'] = 'andrewa@africacdc.org';
+        putenv('ADMIN_EMAIL=admin@example.com');
+        $_ENV['ADMIN_EMAIL'] = 'admin@example.com';
 
         EmailProvider::query()->create([
             'name' => 'Log',
@@ -173,13 +173,13 @@ class AdminPasswordResetTest extends TestCase
         ]);
 
         User::factory()->create([
-            'email' => 'andrewa@africacdc.org',
+            'email' => 'admin@example.com',
             'is_admin' => true,
             'is_active' => true,
         ]);
 
         \App\Models\BlockedEmail::query()->create([
-            'email' => 'andrewa@africacdc.org',
+            'email' => 'admin@example.com',
             'reason' => 'Stale lockout',
             'is_active' => true,
         ]);
@@ -187,10 +187,10 @@ class AdminPasswordResetTest extends TestCase
         Queue::fake();
 
         $this->postJson('/api/v1/admin/auth/forgot-password', [
-            'email' => 'andrewa@africacdc.org',
+            'email' => 'admin@example.com',
         ])->assertOk();
 
         Queue::assertPushed(SendEmailJob::class);
-        $this->assertDatabaseHas('password_reset_tokens', ['email' => 'andrewa@africacdc.org']);
+        $this->assertDatabaseHas('password_reset_tokens', ['email' => 'admin@example.com']);
     }
 }
