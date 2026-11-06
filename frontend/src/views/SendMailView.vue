@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import FormField from '@/components/forms/FormField.vue'
+import HtmlEditor from '@/components/forms/HtmlEditor.vue'
 import CaptchaWidget from '@/components/forms/CaptchaWidget.vue'
 import PageHeader from '@/components/shared/PageHeader.vue'
 import ParentCard from '@/components/shared/ParentCard.vue'
@@ -28,7 +29,7 @@ const captchaResetKey = ref(0)
 const attachmentFiles = ref<File[]>([])
 const attachmentInputKey = ref(0)
 const attachmentInput = ref<HTMLInputElement | null>(null)
-const showHtmlPreview = ref(false)
+const editorResetKey = ref(0)
 
 const form = ref({
   to: '',
@@ -39,6 +40,15 @@ const form = ref({
   cc: '',
   bcc: '',
 })
+
+function bodyIsEmpty(value: string): boolean {
+  const plain = value
+    .replace(/<br\s*\/?>/gi, '')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/<[^>]+>/g, '')
+    .trim()
+  return plain.length === 0
+}
 
 const parsedTo = computed(() => extractEmails(form.value.to))
 const parsedCc = computed(() => extractEmails(form.value.cc))
@@ -145,6 +155,11 @@ async function sendMail() {
     sending.value = false
     return
   }
+  if (bodyIsEmpty(form.value.body)) {
+    error.value = 'Message body is required.'
+    sending.value = false
+    return
+  }
 
   try {
     const attachments =
@@ -177,6 +192,7 @@ async function sendMail() {
     form.value.body = ''
     form.value.cc = ''
     form.value.bcc = ''
+    editorResetKey.value += 1
     attachmentFiles.value = []
     attachmentInputKey.value += 1
     captchaResetKey.value += 1
@@ -304,37 +320,26 @@ onMounted(async () => {
                 {{ parsedBcc.length }} BCC address{{ parsedBcc.length === 1 ? '' : 'es' }}
               </div>
             </FormField>
-            <FormField :label="form.is_html ? 'HTML body' : 'Body'" required>
+            <FormField :label="form.is_html ? 'Message body' : 'Body'" required>
+              <HtmlEditor
+                v-if="form.is_html"
+                :key="editorResetKey"
+                v-model="form.body"
+                :disabled="loading"
+                placeholder="Write your HTML email…"
+              />
               <v-textarea
+                v-else
                 v-model="form.body"
                 rows="10"
                 variant="outlined"
                 hide-details
                 :disabled="loading"
-                :placeholder="
-                  form.is_html
-                    ? 'Paste or write HTML, e.g. <p>Hello <strong>team</strong></p>'
-                    : 'Plain text message'
-                "
+                placeholder="Plain text message"
               />
-              <div v-if="form.is_html" class="d-flex align-center ga-2 mt-2">
-                <v-btn
-                  size="small"
-                  variant="tonal"
-                  :disabled="!form.body.trim()"
-                  @click="showHtmlPreview = !showHtmlPreview"
-                >
-                  {{ showHtmlPreview ? 'Hide preview' : 'Preview HTML' }}
-                </v-btn>
-                <span class="text-caption text-medium-emphasis">
-                  HTML tags are sent as markup when “Send as HTML” is on.
-                </span>
+              <div v-if="form.is_html" class="text-caption text-medium-emphasis mt-1">
+                Use the toolbar to format text. The message is sent as HTML.
               </div>
-              <div
-                v-if="form.is_html && showHtmlPreview"
-                class="html-preview mt-3"
-                v-html="form.body"
-              />
             </FormField>
             <FormField label="Attachments">
               <div class="attachment-picker">
@@ -406,14 +411,5 @@ onMounted(async () => {
   display: flex;
   flex-wrap: wrap;
   gap: 0.4rem;
-}
-
-.html-preview {
-  border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
-  border-radius: 8px;
-  padding: 1rem;
-  background: rgb(var(--v-theme-surface));
-  max-height: 280px;
-  overflow: auto;
 }
 </style>
