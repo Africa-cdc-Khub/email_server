@@ -12,6 +12,8 @@ type AttachmentPayload = { filename: string; content: string; content_type: stri
 
 const MAX_ATTACHMENTS = 10
 const MAX_BYTES_PER_FILE = 5 * 1024 * 1024
+const MAX_RECIPIENTS = 200
+const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g
 
 const providers = ref<ProviderOption[]>([])
 const loading = ref(false)
@@ -19,12 +21,14 @@ const sending = ref(false)
 const message = ref('')
 const error = ref('')
 const lastLogId = ref<number | null>(null)
+const queuedCount = ref<number | null>(null)
 const captchaKey = ref<string | null>(null)
 const captchaAnswer = ref('')
 const captchaResetKey = ref(0)
 const attachmentFiles = ref<File[]>([])
 const attachmentInputKey = ref(0)
 const attachmentInput = ref<HTMLInputElement | null>(null)
+const showHtmlPreview = ref(false)
 
 const form = ref({
   to: '',
@@ -36,6 +40,10 @@ const form = ref({
   bcc: '',
 })
 
+const parsedTo = computed(() => extractEmails(form.value.to))
+const parsedCc = computed(() => extractEmails(form.value.cc))
+const parsedBcc = computed(() => extractEmails(form.value.bcc))
+
 const attachmentLabels = computed(() =>
   attachmentFiles.value.map((file) => `${file.name} (${formatBytes(file.size)})`),
 )
@@ -46,11 +54,17 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
-function parseAddresses(value: string): string[] {
-  return value
-    .split(/[,\n]/)
-    .map((entry) => entry.trim())
-    .filter(Boolean)
+function extractEmails(value: string): string[] {
+  const matches = value.match(EMAIL_RE) ?? []
+  const seen = new Set<string>()
+  const emails: string[] = []
+  for (const raw of matches) {
+    const email = raw.trim().toLowerCase()
+    if (!email || seen.has(email)) continue
+    seen.add(email)
+    emails.push(email)
+  }
+  return emails
 }
 
 function onAttachmentPick(event: Event) {
@@ -84,6 +98,11 @@ function removeAttachment(index: number) {
   attachmentFiles.value = attachmentFiles.value.filter((_, i) => i !== index)
 }
 
+function removeRecipient(email: string) {
+  const remaining = parsedTo.value.filter((entry) => entry !== email)
+  form.value.to = remaining.join('\n')
+}
+
 function readFileAsAttachment(file: File): Promise<AttachmentPayload> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
@@ -113,6 +132,19 @@ async function sendMail() {
   message.value = ''
   error.value = ''
   lastLogId.value = null
+  queuedCount.value = null
+
+  const recipients = parsedTo.value
+  if (recipients.length === 0) {
+    error.value = 'Add at least one valid email address in To.'
+    sending.value = false
+    return
+  }
+  if (recipients.length > MAX_RECIPIENTS) {
+    error.value = `You can send to at most ${MAX_RECIPIENTS} recipients at once.`
+    sending.value = false
+    return
+  }
 
   try {
     const attachments =
@@ -121,17 +153,15 @@ async function sendMail() {
         : []
 
     const payload: Record<string, unknown> = {
-      to: form.value.to,
+      to: recipients,
       subject: form.value.subject,
       body: form.value.body,
       is_html: form.value.is_html,
       provider_id: form.value.provider_id,
     }
 
-    const cc = parseAddresses(form.value.cc)
-    const bcc = parseAddresses(form.value.bcc)
-    if (cc.length) payload.cc = cc
-    if (bcc.length) payload.bcc = bcc
+    if (parsedCc.value.length) payload.cc = parsedCc.value
+    if (parsedBcc.value.length) payload.bcc = parsedBcc.value
     if (attachments.length) payload.attachments = attachments
     if (captchaKey.value) {
       payload.captcha_key = captchaKey.value
@@ -141,6 +171,8 @@ async function sendMail() {
     const res = await api.post('/admin/send-mail', payload)
     message.value = res.data.message ?? 'Email queued for delivery.'
     lastLogId.value = res.data.log_id ?? null
+    queuedCount.value = res.data.queued_count ?? recipients.length
+    form.value.to = ''
     form.value.subject = ''
     form.value.body = ''
     form.value.cc = ''
@@ -173,6 +205,7 @@ onMounted(async () => {
     <v-alert v-if="message" type="success" variant="tonal" class="mb-4">
       {{ message }}
       <div v-if="lastLogId" class="text-caption mt-1">
+        <span v-if="queuedCount && queuedCount > 1">{{ queuedCount }} messages queued. </span>
         Log ID: {{ lastLogId }} —
         <router-link :to="{ name: 'logs' }">View email logs</router-link>
       </div>
@@ -185,13 +218,34 @@ onMounted(async () => {
         <v-row>
           <v-col cols="12" md="6" class="form-stack">
             <FormField label="To" required>
-              <v-text-field
+              <v-textarea
                 v-model="form.to"
-                type="email"
+                rows="4"
+                auto-grow
                 variant="outlined"
                 hide-details
                 :disabled="loading"
+                placeholder="Paste one or many addresses (comma, semicolon, newline, or CSV)"
               />
+              <div class="text-caption text-medium-emphasis mt-1">
+                Paste from a spreadsheet or CSV. Valid addresses are detected automatically.
+                <span v-if="parsedTo.length"> — {{ parsedTo.length }} recipient{{ parsedTo.length === 1 ? '' : 's' }}</span>
+              </div>
+              <div v-if="parsedTo.length" class="recipient-chips mt-2">
+                <v-chip
+                  v-for="email in parsedTo.slice(0, 40)"
+                  :key="email"
+                  size="small"
+                  variant="tonal"
+                  closable
+                  @click:close="removeRecipient(email)"
+                >
+                  {{ email }}
+                </v-chip>
+                <span v-if="parsedTo.length > 40" class="text-caption text-medium-emphasis">
+                  +{{ parsedTo.length - 40 }} more
+                </span>
+              </div>
             </FormField>
             <FormField label="Subject" required>
               <v-text-field
@@ -222,29 +276,64 @@ onMounted(async () => {
             />
           </v-col>
           <v-col cols="12" md="6" class="form-stack">
-            <FormField label="CC (comma-separated)">
-              <v-text-field
+            <FormField label="CC (paste multiple)">
+              <v-textarea
                 v-model="form.cc"
+                rows="2"
+                auto-grow
                 variant="outlined"
                 hide-details
                 :disabled="loading"
+                placeholder="Optional — comma, semicolon, newline, or CSV"
               />
+              <div v-if="parsedCc.length" class="text-caption text-medium-emphasis mt-1">
+                {{ parsedCc.length }} CC address{{ parsedCc.length === 1 ? '' : 'es' }}
+              </div>
             </FormField>
-            <FormField label="BCC (comma-separated)">
-              <v-text-field
+            <FormField label="BCC (paste multiple)">
+              <v-textarea
                 v-model="form.bcc"
+                rows="2"
+                auto-grow
                 variant="outlined"
                 hide-details
                 :disabled="loading"
+                placeholder="Optional — comma, semicolon, newline, or CSV"
               />
+              <div v-if="parsedBcc.length" class="text-caption text-medium-emphasis mt-1">
+                {{ parsedBcc.length }} BCC address{{ parsedBcc.length === 1 ? '' : 'es' }}
+              </div>
             </FormField>
-            <FormField label="Body" required>
+            <FormField :label="form.is_html ? 'HTML body' : 'Body'" required>
               <v-textarea
                 v-model="form.body"
                 rows="10"
                 variant="outlined"
                 hide-details
                 :disabled="loading"
+                :placeholder="
+                  form.is_html
+                    ? 'Paste or write HTML, e.g. <p>Hello <strong>team</strong></p>'
+                    : 'Plain text message'
+                "
+              />
+              <div v-if="form.is_html" class="d-flex align-center ga-2 mt-2">
+                <v-btn
+                  size="small"
+                  variant="tonal"
+                  :disabled="!form.body.trim()"
+                  @click="showHtmlPreview = !showHtmlPreview"
+                >
+                  {{ showHtmlPreview ? 'Hide preview' : 'Preview HTML' }}
+                </v-btn>
+                <span class="text-caption text-medium-emphasis">
+                  HTML tags are sent as markup when “Send as HTML” is on.
+                </span>
+              </div>
+              <div
+                v-if="form.is_html && showHtmlPreview"
+                class="html-preview mt-3"
+                v-html="form.body"
               />
             </FormField>
             <FormField label="Attachments">
@@ -292,7 +381,11 @@ onMounted(async () => {
           />
           <div class="d-flex ga-2">
             <v-btn color="primary" type="submit" :loading="sending" :disabled="loading">
-              Send email
+              {{
+                parsedTo.length > 1
+                  ? `Send to ${parsedTo.length} recipients`
+                  : 'Send email'
+              }}
             </v-btn>
           </div>
         </div>
@@ -308,9 +401,19 @@ onMounted(async () => {
   gap: 0.5rem;
 }
 
-.attachment-list {
+.attachment-list,
+.recipient-chips {
   display: flex;
   flex-wrap: wrap;
   gap: 0.4rem;
+}
+
+.html-preview {
+  border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+  border-radius: 8px;
+  padding: 1rem;
+  background: rgb(var(--v-theme-surface));
+  max-height: 280px;
+  overflow: auto;
 }
 </style>

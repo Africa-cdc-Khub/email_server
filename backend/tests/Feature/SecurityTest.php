@@ -47,9 +47,11 @@ class SecurityTest extends TestCase
             ])
             ->assertForbidden();
 
+        // Non-admins may list providers (needed when managing their own clients),
+        // but must not manage provider CRUD or admin mail tooling.
         $this->withToken($token)
             ->getJson('/api/v1/admin/email-providers')
-            ->assertForbidden();
+            ->assertOk();
 
         $this->withToken($token)
             ->postJson('/api/v1/admin/email-logs/retry-failed')
