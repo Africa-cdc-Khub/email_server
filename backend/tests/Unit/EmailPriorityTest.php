@@ -21,6 +21,18 @@ class EmailPriorityTest extends TestCase
             EmailPriority::QUEUE_PRIORITY,
             EmailPriority::queueForSubject('SIGN-IN CODE: ABCD'),
         );
+        $this->assertSame(
+            EmailPriority::QUEUE_PRIORITY,
+            EmailPriority::queueForSubject('Your CPHIA 2026 verification code'),
+        );
+        $this->assertSame(
+            EmailPriority::QUEUE_PRIORITY,
+            EmailPriority::queueForSubject('Your OTP is 482913'),
+        );
+        $this->assertSame(
+            EmailPriority::QUEUE_PRIORITY,
+            EmailPriority::queueForSubject('One-time passcode for login'),
+        );
     }
 
     public function test_normal_subjects_use_default_queue(): void
@@ -32,6 +44,10 @@ class EmailPriorityTest extends TestCase
         $this->assertSame(
             EmailPriority::QUEUE_DEFAULT,
             EmailPriority::queueForSubject('Meeting invite'),
+        );
+        $this->assertSame(
+            EmailPriority::QUEUE_DEFAULT,
+            EmailPriority::queueForSubject('[CPHIA 2026] Registration received'),
         );
     }
 }
