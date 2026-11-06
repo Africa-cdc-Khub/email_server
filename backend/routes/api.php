@@ -34,8 +34,6 @@ Route::prefix('v1')->group(function () {
     Route::prefix('admin')->group(function () {
         Route::post('/auth/login', [AuthController::class, 'login'])
             ->middleware('throttle:10,1');
-        Route::post('/auth/register', [AuthController::class, 'register'])
-            ->middleware('throttle:5,1');
         Route::post('/auth/verify-2fa', [TwoFactorController::class, 'verify'])
             ->middleware('throttle:10,1');
         Route::post('/auth/resend-2fa-email', [TwoFactorController::class, 'resendEmail'])

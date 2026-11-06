@@ -10,6 +10,7 @@ use App\Models\EmailLog;
 use App\Models\EmailProvider;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Queue;
 use Tests\TestCase;
 
@@ -24,25 +25,8 @@ class AccountRegistrationTest extends TestCase
         $this->withoutMiddleware(\Illuminate\Routing\Middleware\ThrottleRequests::class);
     }
 
-    public function test_visitor_can_register_pending_account(): void
+    public function test_public_registration_endpoint_is_removed(): void
     {
-        EmailProvider::query()->create([
-            'name' => 'Log',
-            'slug' => 'log',
-            'driver' => EmailDriver::Log,
-            'config' => [],
-            'is_default' => true,
-            'is_active' => true,
-        ]);
-
-        User::factory()->create([
-            'email' => 'admin@example.com',
-            'is_admin' => true,
-            'is_active' => true,
-        ]);
-
-        Queue::fake();
-
         $this->postJson('/api/v1/admin/auth/register', [
             'name' => 'Partner User',
             'email' => 'partner@example.com',
@@ -50,26 +34,42 @@ class AccountRegistrationTest extends TestCase
             'password_confirmation' => 'SecurePass123!',
             'phone' => '+256700000000',
             'organisation' => 'Partner Org',
-        ])->assertCreated()
-            ->assertJsonMissingPath('token');
+        ])->assertNotFound();
 
-        $this->assertDatabaseHas('users', [
+        $this->assertDatabaseMissing('users', [
             'email' => 'partner@example.com',
-            'approval_status' => 'pending',
-            'registration_source' => 'public',
-            'is_admin' => 0,
-            'is_active' => 0,
-            'organisation' => 'Partner Org',
-            'phone' => '+256700000000',
+        ]);
+    }
+
+    public function test_purge_command_deletes_pending_public_registrations(): void
+    {
+        User::factory()->create([
+            'email' => 'keep-admin@example.com',
+            'is_admin' => true,
+            'is_active' => true,
+            'approval_status' => UserApprovalStatus::Approved,
+            'registration_source' => UserRegistrationSource::System,
+        ]);
+        User::factory()->create([
+            'email' => 'keep-approved-public@example.com',
+            'is_admin' => false,
+            'is_active' => true,
+            'approval_status' => UserApprovalStatus::Approved,
+            'registration_source' => UserRegistrationSource::Public,
+        ]);
+        User::factory()->create([
+            'email' => 'delete-pending@example.com',
+            'is_admin' => false,
+            'is_active' => false,
+            'approval_status' => UserApprovalStatus::Pending,
+            'registration_source' => UserRegistrationSource::Public,
         ]);
 
-        Queue::assertPushed(SendEmailJob::class);
-        $this->assertDatabaseHas('email_logs', [
-            'to' => 'admin@example.com',
-        ]);
-        $log = EmailLog::query()->where('to', 'admin@example.com')->first();
-        $this->assertSame('registration_pending', $log?->meta['source'] ?? null);
-        $this->assertStringContainsString('/users?tab=pending', (string) ($log?->meta['body'] ?? ''));
+        Artisan::call('app:purge-pending-public-registrations');
+
+        $this->assertDatabaseMissing('users', ['email' => 'delete-pending@example.com']);
+        $this->assertDatabaseHas('users', ['email' => 'keep-admin@example.com']);
+        $this->assertDatabaseHas('users', ['email' => 'keep-approved-public@example.com']);
     }
 
     public function test_admin_user_index_filters_and_meta_counts(): void

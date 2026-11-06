@@ -6,7 +6,7 @@ const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
     { path: '/login', name: 'login', component: () => import('@/views/LoginView.vue'), meta: { guest: true } },
-    { path: '/register', name: 'register', component: () => import('@/views/RegisterView.vue'), meta: { guest: true } },
+    { path: '/register', redirect: { name: 'login' } },
     { path: '/verify-2fa', name: 'verify-2fa', component: () => import('@/views/Verify2FAView.vue'), meta: { guest: true } },
     {
       path: '/setup-authenticator',
