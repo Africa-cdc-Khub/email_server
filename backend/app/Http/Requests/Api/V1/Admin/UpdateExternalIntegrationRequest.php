@@ -42,6 +42,7 @@ class UpdateExternalIntegrationRequest extends FormRequest
             'allowed_ips' => ['sometimes', 'nullable', 'array'],
             'allowed_ips.*' => ['string', 'max:45', 'ip'],
             'settings' => ['sometimes', 'nullable', 'array'],
+            'priority_tokens' => ['sometimes', 'boolean'],
             'is_active' => ['sometimes', 'boolean'],
             'description' => ['sometimes', 'nullable', 'string', 'max:2000'],
         ];

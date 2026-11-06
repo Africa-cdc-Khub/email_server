@@ -2,11 +2,26 @@
 
 namespace App\Support;
 
+use App\Models\ExternalIntegration;
+
 final class EmailPriority
 {
     public const QUEUE_DEFAULT = 'emails';
 
     public const QUEUE_PRIORITY = 'emails-priority';
+
+    /**
+     * Resolve queue for a send: token/OTP clients always use priority;
+     * otherwise OTP-like subjects are elevated.
+     */
+    public static function queueFor(string $subject, ?ExternalIntegration $integration = null): string
+    {
+        if ($integration?->prioritizesTokens()) {
+            return self::QUEUE_PRIORITY;
+        }
+
+        return self::queueForSubject($subject);
+    }
 
     /**
      * OTP / sign-in / verification subjects go to the priority Redis queue

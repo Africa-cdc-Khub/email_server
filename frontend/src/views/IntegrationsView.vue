@@ -14,6 +14,8 @@ type Integration = {
   client_id: string
   client_secret_hint: string
   email_provider: { id: number; name: string; driver: string } | null
+  provider_mailbox: { id: number; email: string } | null
+  priority_tokens: boolean
   is_active: boolean
   last_used_at: string | null
 }
@@ -127,8 +129,9 @@ onMounted(load)
         :headers="[
           { title: 'Name', key: 'name' },
           { title: 'Client ID', key: 'client_id' },
-          { title: 'Secret hint', key: 'client_secret_hint' },
           { title: 'Provider', key: 'email_provider' },
+          { title: 'Priority mailbox', key: 'provider_mailbox' },
+          { title: 'Tokens', key: 'priority_tokens' },
           { title: 'Status', key: 'is_active' },
           { title: 'Last used', key: 'last_used_at' },
           { title: 'Actions', key: 'actions', sortable: false, width: 200 },
@@ -136,6 +139,22 @@ onMounted(load)
       >
         <template #item.email_provider="{ item }">
           {{ item.email_provider?.name ?? 'Default' }}
+        </template>
+        <template #item.provider_mailbox="{ item }">
+          <span v-if="item.provider_mailbox?.email" class="text-body-2">{{ item.provider_mailbox.email }}</span>
+          <span v-else class="text-medium-emphasis">Any (weighted)</span>
+        </template>
+        <template #item.priority_tokens="{ item }">
+          <v-chip
+            v-if="item.priority_tokens"
+            size="small"
+            variant="tonal"
+            color="primary"
+            prepend-icon="mdi-flash"
+          >
+            OTP / login
+          </v-chip>
+          <span v-else class="text-medium-emphasis">—</span>
         </template>
         <template #item.is_active="{ item }">
           <v-chip size="small" variant="tonal" :color="item.is_active ? 'success' : 'warning'">

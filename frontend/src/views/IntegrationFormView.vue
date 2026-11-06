@@ -39,6 +39,7 @@ const form = ref({
   client_secret: '',
   email_provider_id: null as number | null,
   provider_mailbox_id: null as number | null,
+  priority_tokens: false,
   allowed_ips: '' as string,
   description: '',
   is_active: true,
@@ -88,6 +89,7 @@ async function loadIntegration() {
       client_secret: '',
       email_provider_id: i.email_provider_id,
       provider_mailbox_id: i.provider_mailbox_id ?? null,
+      priority_tokens: Boolean(i.priority_tokens),
       allowed_ips: (i.allowed_ips ?? []).join('\n'),
       description: i.description ?? '',
       is_active: i.is_active,
@@ -110,6 +112,7 @@ async function save() {
     client_id: form.value.client_id,
     email_provider_id: form.value.email_provider_id,
     provider_mailbox_id: form.value.provider_mailbox_id,
+    priority_tokens: form.value.priority_tokens,
     allowed_ips: form.value.allowed_ips
       .split('\n')
       .map((s) => s.trim())
@@ -335,7 +338,25 @@ onMounted(async () => {
                 clearable
               />
             </FormField>
-            <FormField label="Preferred from mailbox">
+
+            <v-alert type="info" variant="tonal" density="compact" class="mb-3">
+              <strong>Login / OTP systems</strong> (staff portal, CPHIA MoPD, etc.): enable token priority and pick a
+              dedicated from-mailbox so verification codes stay fast under bulk load.
+            </v-alert>
+
+            <FormField label="Token / login priority">
+              <v-switch
+                v-model="form.priority_tokens"
+                label="This system sends login / OTP tokens — always use priority queue"
+                color="primary"
+                hide-details
+              />
+              <div class="text-caption text-medium-emphasis mt-1">
+                When on, every email from this client jumps ahead of bulk mail (registration, reminders).
+              </div>
+            </FormField>
+
+            <FormField :label="form.priority_tokens ? 'Priority from mailbox (recommended)' : 'Preferred from mailbox'">
               <v-select
                 v-model="form.provider_mailbox_id"
                 :items="mailboxes"
@@ -348,9 +369,24 @@ onMounted(async () => {
                 :placeholder="form.email_provider_id ? 'Any mailbox (weighted)' : 'Select a provider first'"
               />
               <div class="text-caption text-medium-emphasis mt-1">
-                This client uses the selected mailbox when quota remains. Other clients can still use it at a reduced share.
+                <template v-if="form.priority_tokens">
+                  Bind a dedicated mailbox for this token client (e.g. cphianoreply@…). It is used whenever quota remains.
+                </template>
+                <template v-else>
+                  Optional. This client uses the selected mailbox when quota remains; others share it at a reduced weight.
+                </template>
               </div>
+              <v-alert
+                v-if="form.priority_tokens && !form.provider_mailbox_id && form.email_provider_id"
+                type="warning"
+                variant="tonal"
+                density="compact"
+                class="mt-2"
+              >
+                No mailbox selected — token mail will still be priority-queued, but will share from-addresses with other apps.
+              </v-alert>
             </FormField>
+
             <FormField label="Allowed IPs (one per line)">
               <v-textarea v-model="form.allowed_ips" rows="3" variant="outlined" hide-details />
             </FormField>

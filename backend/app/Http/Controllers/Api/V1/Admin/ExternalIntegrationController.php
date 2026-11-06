@@ -60,6 +60,12 @@ class ExternalIntegrationController extends Controller
             ? (bool) ($data['is_active'] ?? true)
             : false;
 
+        $settings = is_array($data['settings'] ?? null) ? $data['settings'] : [];
+        if (array_key_exists('priority_tokens', $data)) {
+            $settings['priority_tokens'] = (bool) $data['priority_tokens'];
+        }
+        unset($data['priority_tokens']);
+
         $integration = ExternalIntegration::query()->create([
             'name' => $data['name'],
             'slug' => $slug,
@@ -68,7 +74,7 @@ class ExternalIntegrationController extends Controller
             'email_provider_id' => $data['email_provider_id'] ?? null,
             'provider_mailbox_id' => $data['provider_mailbox_id'] ?? null,
             'allowed_ips' => $data['allowed_ips'] ?? [],
-            'settings' => $data['settings'] ?? [],
+            'settings' => $settings,
             'is_active' => $isActive,
             'description' => $data['description'] ?? null,
         ]);
@@ -120,6 +126,15 @@ class ExternalIntegrationController extends Controller
         }
 
         unset($data['client_secret'], $data['generate_secret']);
+
+        if (array_key_exists('priority_tokens', $data)) {
+            $settings = is_array($data['settings'] ?? null)
+                ? $data['settings']
+                : ($externalIntegration->settings ?? []);
+            $settings['priority_tokens'] = (bool) $data['priority_tokens'];
+            $data['settings'] = $settings;
+            unset($data['priority_tokens']);
+        }
 
         if (array_key_exists('email_provider_id', $data) && $data['email_provider_id'] === null) {
             $data['provider_mailbox_id'] = null;
@@ -215,6 +230,7 @@ class ExternalIntegrationController extends Controller
                 'id' => $integration->providerMailbox->id,
                 'email' => $integration->providerMailbox->email,
             ] : null,
+            'priority_tokens' => $integration->prioritizesTokens(),
             'allowed_ips' => $integration->allowed_ips ?? [],
             'settings' => $integration->settings ?? [],
             'is_active' => $integration->is_active,

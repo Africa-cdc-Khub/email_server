@@ -37,6 +37,7 @@ class StoreExternalIntegrationRequest extends FormRequest
             'allowed_ips' => ['nullable', 'array'],
             'allowed_ips.*' => ['string', 'max:45', 'ip'],
             'settings' => ['nullable', 'array'],
+            'priority_tokens' => ['sometimes', 'boolean'],
             'is_active' => ['sometimes', 'boolean'],
             'description' => ['nullable', 'string', 'max:2000'],
         ];

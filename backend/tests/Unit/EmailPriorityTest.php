@@ -2,11 +2,39 @@
 
 namespace Tests\Unit;
 
+use App\Models\ExternalIntegration;
 use App\Support\EmailPriority;
 use PHPUnit\Framework\TestCase;
 
 class EmailPriorityTest extends TestCase
 {
+    public function test_token_priority_client_always_uses_priority_queue(): void
+    {
+        $integration = new ExternalIntegration([
+            'settings' => ['priority_tokens' => true],
+        ]);
+
+        $this->assertSame(
+            EmailPriority::QUEUE_PRIORITY,
+            EmailPriority::queueFor('Weekly newsletter', $integration),
+        );
+    }
+
+    public function test_non_token_client_uses_subject_rules(): void
+    {
+        $integration = new ExternalIntegration([
+            'settings' => ['priority_tokens' => false],
+        ]);
+
+        $this->assertSame(
+            EmailPriority::QUEUE_DEFAULT,
+            EmailPriority::queueFor('Weekly newsletter', $integration),
+        );
+        $this->assertSame(
+            EmailPriority::QUEUE_PRIORITY,
+            EmailPriority::queueFor('Your OTP is 123', $integration),
+        );
+    }
     public function test_sign_in_code_subjects_use_priority_queue(): void
     {
         $this->assertSame(

@@ -337,7 +337,11 @@ class EmailDispatchService
 
     private function dispatchSendJob(EmailLog $log): void
     {
-        $queue = EmailPriority::queueForSubject((string) $log->subject);
+        $log->loadMissing('externalIntegration');
+        $queue = EmailPriority::queueFor(
+            (string) $log->subject,
+            $log->externalIntegration,
+        );
 
         SendEmailJob::dispatch($log->id, $queue);
     }

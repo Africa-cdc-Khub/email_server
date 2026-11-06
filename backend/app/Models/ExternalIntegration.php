@@ -47,6 +47,23 @@ class ExternalIntegration extends Model
         return $this->belongsTo(ProviderMailbox::class, 'provider_mailbox_id');
     }
 
+    /**
+     * When true, all mail from this client uses the priority queue (login/OTP systems).
+     */
+    public function prioritizesTokens(): bool
+    {
+        $settings = $this->settings ?? [];
+
+        return (bool) ($settings['priority_tokens'] ?? false);
+    }
+
+    public function setPriorityTokens(bool $enabled): void
+    {
+        $settings = $this->settings ?? [];
+        $settings['priority_tokens'] = $enabled;
+        $this->settings = $settings;
+    }
+
     public function emailLogs(): HasMany
     {
         return $this->hasMany(EmailLog::class);
