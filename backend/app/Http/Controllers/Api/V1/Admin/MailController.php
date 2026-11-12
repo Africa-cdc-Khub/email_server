@@ -8,6 +8,10 @@ use App\Models\EmailLog;
 use App\Services\EmailAttachmentService;
 use App\Services\EmailDispatchService;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
+use Illuminate\Support\Carbon;
+use Illuminate\Validation\ValidationException;
+use RuntimeException;
 use Throwable;
 
 class MailController extends Controller
@@ -85,6 +89,113 @@ class MailController extends Controller
             'send_at' => $sendAt?->toIso8601String(),
             'status' => $first->status,
             'attachment_count' => (int) (($first->meta['attachment_count'] ?? 0)),
+        ]);
+    }
+
+    /**
+     * List pending admin-send subjects with counts (Queue control tab).
+     */
+    public function pendingSubjects(EmailDispatchService $dispatch): JsonResponse
+    {
+        return response()->json([
+            'data' => $dispatch->pendingSubjects(50),
+        ]);
+    }
+
+    /**
+     * Preview pending + paused counts for an exact subject.
+     */
+    public function queueBySubject(Request $request, EmailDispatchService $dispatch): JsonResponse
+    {
+        $data = $request->validate([
+            'subject' => ['required', 'string', 'max:500'],
+        ]);
+
+        $subject = trim($data['subject']);
+
+        return response()->json([
+            'subject' => $subject,
+            'pending_count' => $dispatch->countPendingBySubject($subject),
+            'paused_count' => $dispatch->countPausedBySubject($subject),
+        ]);
+    }
+
+    /**
+     * Fail all pending emails with this exact subject (keep body for later retry).
+     */
+    public function pauseBySubject(Request $request, EmailDispatchService $dispatch): JsonResponse
+    {
+        $data = $request->validate([
+            'subject' => ['required', 'string', 'max:500'],
+            'reason' => ['sometimes', 'nullable', 'string', 'max:500'],
+        ]);
+
+        try {
+            $result = $dispatch->pausePendingBySubject(
+                $data['subject'],
+                (string) ($data['reason'] ?? 'Paused by admin (busy hours)'),
+            );
+        } catch (RuntimeException $e) {
+            throw ValidationException::withMessages(['subject' => [$e->getMessage()]]);
+        }
+
+        $paused = $result['paused'];
+
+        return response()->json([
+            'message' => $paused === 0
+                ? 'No pending emails found for that subject.'
+                : "Paused {$paused} pending email(s). They can be sent later from Queue control.",
+            'paused' => $paused,
+            'subject' => trim($data['subject']),
+        ]);
+    }
+
+    /**
+     * Re-queue admin-paused emails for a subject, optionally at send_at.
+     */
+    public function scheduleRetryBySubject(Request $request, EmailDispatchService $dispatch): JsonResponse
+    {
+        $data = $request->validate([
+            'subject' => ['required', 'string', 'max:500'],
+            'send_at' => ['sometimes', 'nullable', 'date', 'after:now', 'before:'.now()->addDays(30)->toDateTimeString()],
+        ]);
+
+        $sendAtRaw = $data['send_at'] ?? null;
+        $sendAt = is_string($sendAtRaw) && $sendAtRaw !== ''
+            ? Carbon::parse($sendAtRaw)
+            : null;
+
+        try {
+            $result = $dispatch->scheduleRetryPausedBySubject($data['subject'], $sendAt);
+        } catch (RuntimeException $e) {
+            throw ValidationException::withMessages(['subject' => [$e->getMessage()]]);
+        }
+
+        $queued = $result['queued'];
+        $skipped = $result['skipped'];
+        $scheduled = $sendAt !== null;
+
+        if ($queued === 0) {
+            return response()->json([
+                'message' => 'No paused emails found for that subject to retry.',
+                'queued' => 0,
+                'skipped' => $skipped,
+                'scheduled' => $scheduled,
+                'send_at' => $sendAt?->toIso8601String(),
+            ]);
+        }
+
+        return response()->json([
+            'message' => $scheduled
+                ? "Scheduled {$queued} paused email(s) for later delivery."
+                    .($skipped > 0 ? " Skipped {$skipped} without a stored body." : '')
+                : "Queued {$queued} paused email(s) for send now."
+                    .($skipped > 0 ? " Skipped {$skipped} without a stored body." : ''),
+            'queued' => $queued,
+            'skipped' => $skipped,
+            'scheduled' => $scheduled,
+            'send_at' => $sendAt?->toIso8601String(),
+            'subject' => trim($data['subject']),
         ]);
     }
 }

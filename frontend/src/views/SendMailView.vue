@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import FormField from '@/components/forms/FormField.vue'
 import HtmlEditor from '@/components/forms/HtmlEditor.vue'
 import CaptchaWidget from '@/components/forms/CaptchaWidget.vue'
@@ -10,12 +10,14 @@ import { apiErrorMessage } from '@/lib/apiError'
 
 type ProviderOption = { id: number; name: string; driver: string; is_default?: boolean }
 type AttachmentPayload = { filename: string; content: string; content_type: string }
+type PendingSubjectRow = { subject: string; pending_count: number }
 
 const MAX_ATTACHMENTS = 10
 const MAX_BYTES_PER_FILE = 5 * 1024 * 1024
 const MAX_RECIPIENTS = 6000
 const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g
 
+const tab = ref<'compose' | 'queue'>('compose')
 const providers = ref<ProviderOption[]>([])
 const loading = ref(false)
 const sending = ref(false)
@@ -45,6 +47,18 @@ const form = ref({
   schedule_enabled: false,
   send_at: '',
 })
+
+const queueSubject = ref('')
+const queuePendingCount = ref<number | null>(null)
+const queuePausedCount = ref<number | null>(null)
+const queueLoading = ref(false)
+const queueActing = ref(false)
+const queueMessage = ref('')
+const queueError = ref('')
+const pendingSubjects = ref<PendingSubjectRow[]>([])
+const queueScheduleEnabled = ref(false)
+const queueSendAt = ref('')
+const pauseReason = ref('Paused by admin (busy hours)')
 
 function bodyIsEmpty(value: string): boolean {
   const plain = value
@@ -189,6 +203,107 @@ async function loadProviders() {
   form.value.provider_id = defaultProvider?.id ?? providers.value[0]?.id ?? null
 }
 
+async function loadPendingSubjects() {
+  try {
+    const res = await api.get('/admin/send-mail/pending-subjects')
+    pendingSubjects.value = res.data.data ?? []
+  } catch {
+    pendingSubjects.value = []
+  }
+}
+
+async function previewQueue() {
+  const subject = queueSubject.value.trim()
+  if (!subject) {
+    queueError.value = 'Enter the exact subject line to match.'
+    return
+  }
+
+  queueLoading.value = true
+  queueError.value = ''
+  queueMessage.value = ''
+  try {
+    const res = await api.get('/admin/send-mail/queue-by-subject', { params: { subject } })
+    queuePendingCount.value = res.data.pending_count ?? 0
+    queuePausedCount.value = res.data.paused_count ?? 0
+    queueSubject.value = res.data.subject ?? subject
+  } catch (err) {
+    queueError.value = apiErrorMessage(err, 'Could not load queue counts for that subject.')
+    queuePendingCount.value = null
+    queuePausedCount.value = null
+  } finally {
+    queueLoading.value = false
+  }
+}
+
+function selectPendingSubject(row: PendingSubjectRow) {
+  queueSubject.value = row.subject
+  void previewQueue()
+}
+
+async function pauseQueue() {
+  const subject = queueSubject.value.trim()
+  if (!subject) {
+    queueError.value = 'Enter the exact subject line to match.'
+    return
+  }
+
+  queueActing.value = true
+  queueError.value = ''
+  queueMessage.value = ''
+  try {
+    const res = await api.post('/admin/send-mail/pause-by-subject', {
+      subject,
+      reason: pauseReason.value.trim() || undefined,
+    })
+    queueMessage.value = res.data.message ?? 'Paused.'
+    await previewQueue()
+    await loadPendingSubjects()
+  } catch (err) {
+    queueError.value = apiErrorMessage(err, 'Could not pause pending emails.')
+  } finally {
+    queueActing.value = false
+  }
+}
+
+async function scheduleRetryQueue() {
+  const subject = queueSubject.value.trim()
+  if (!subject) {
+    queueError.value = 'Enter the exact subject line to match.'
+    return
+  }
+
+  let sendAtIso: string | null = null
+  if (queueScheduleEnabled.value) {
+    if (!queueSendAt.value) {
+      queueError.value = 'Choose a date and time for the scheduled retry.'
+      return
+    }
+    const when = new Date(queueSendAt.value)
+    if (Number.isNaN(when.getTime()) || when.getTime() <= Date.now()) {
+      queueError.value = 'Scheduled time must be in the future.'
+      return
+    }
+    sendAtIso = when.toISOString()
+  }
+
+  queueActing.value = true
+  queueError.value = ''
+  queueMessage.value = ''
+  try {
+    const payload: Record<string, unknown> = { subject }
+    if (sendAtIso) payload.send_at = sendAtIso
+    const res = await api.post('/admin/send-mail/schedule-retry-by-subject', payload)
+    queueMessage.value = res.data.message ?? 'Queued for retry.'
+    await previewQueue()
+    await loadPendingSubjects()
+  } catch (err) {
+    queueError.value = apiErrorMessage(err, 'Could not schedule retry for paused emails.')
+  } finally {
+    queueActing.value = false
+  }
+}
+
 async function sendMail() {
   sending.value = true
   message.value = ''
@@ -277,6 +392,12 @@ async function sendMail() {
   }
 }
 
+watch(tab, (value) => {
+  if (value === 'queue') {
+    void loadPendingSubjects()
+  }
+})
+
 onMounted(async () => {
   loading.value = true
   await loadProviders()
@@ -288,242 +409,367 @@ onMounted(async () => {
   <div>
     <PageHeader
       title="Send email"
-      subtitle="Compose and queue up to 6,000 recipients in one send — optional schedule for later delivery"
+      subtitle="Compose and queue up to 6,000 recipients — or pause a busy-hour send by exact subject"
     />
 
-    <v-alert v-if="message" type="success" variant="tonal" class="mb-4">
-      {{ message }}
-      <div v-if="lastLogId" class="text-caption mt-1">
-        <span v-if="queuedCount && queuedCount > 1">{{ queuedCount.toLocaleString() }} messages queued. </span>
-        <span v-if="scheduledSendAt">Scheduled for {{ new Date(scheduledSendAt).toLocaleString() }}. </span>
-        Log ID: {{ lastLogId }} —
-        <router-link :to="{ name: 'logs' }">View email logs</router-link>
-      </div>
-    </v-alert>
+    <v-tabs v-model="tab" color="primary" class="mb-4">
+      <v-tab value="compose">Compose</v-tab>
+      <v-tab value="queue">Queue control</v-tab>
+    </v-tabs>
 
-    <v-alert v-if="error" type="error" variant="tonal" class="mb-4">{{ error }}</v-alert>
-
-    <ParentCard title="Compose email">
-      <v-form @submit.prevent="sendMail">
-        <v-row>
-          <v-col cols="12" md="6" class="form-stack">
-            <FormField label="To" required>
-              <div class="d-flex flex-wrap ga-2 mb-2">
-                <v-btn
-                  size="small"
-                  variant="tonal"
-                  prepend-icon="mdi-file-delimited-outline"
-                  :disabled="loading"
-                  @click="csvInput?.click()"
-                >
-                  Import CSV / TXT
-                </v-btn>
-                <input
-                  :key="csvInputKey"
-                  ref="csvInput"
-                  type="file"
-                  class="d-none"
-                  accept=".csv,.txt,text/csv,text/plain"
-                  @change="onCsvPick"
-                />
-              </div>
-              <v-textarea
-                v-model="form.to"
-                rows="4"
-                auto-grow
-                variant="outlined"
-                hide-details
-                :disabled="loading"
-                placeholder="Paste one or many addresses (comma, semicolon, newline, or CSV)"
-              />
-              <div class="text-caption text-medium-emphasis mt-1">
-                Paste from a spreadsheet or import a CSV/TXT file. Valid addresses are detected automatically.
-              </div>
-              <div class="mt-2">
-                <div class="d-flex justify-space-between text-caption mb-1">
-                  <span>{{ recipientCapacityLabel }}</span>
-                  <span class="text-medium-emphasis">max {{ MAX_RECIPIENTS.toLocaleString() }} per schedule</span>
-                </div>
-                <v-progress-linear
-                  :model-value="recipientProgress"
-                  height="6"
-                  rounded
-                  :color="parsedTo.length > MAX_RECIPIENTS ? 'error' : parsedTo.length > MAX_RECIPIENTS * 0.85 ? 'warning' : 'primary'"
-                />
-              </div>
-              <div v-if="parsedTo.length" class="recipient-chips mt-2">
-                <v-chip
-                  v-for="email in parsedTo.slice(0, 40)"
-                  :key="email"
-                  size="small"
-                  variant="tonal"
-                  closable
-                  @click:close="removeRecipient(email)"
-                >
-                  {{ email }}
-                </v-chip>
-                <span v-if="parsedTo.length > 40" class="text-caption text-medium-emphasis">
-                  +{{ (parsedTo.length - 40).toLocaleString() }} more
-                </span>
-              </div>
-            </FormField>
-            <FormField label="Subject" required>
-              <v-text-field
-                v-model="form.subject"
-                variant="outlined"
-                hide-details
-                :disabled="loading"
-              />
-            </FormField>
-            <FormField label="Email provider">
-              <v-select
-                v-model="form.provider_id"
-                :items="providers"
-                item-title="name"
-                item-value="id"
-                variant="outlined"
-                hide-details
-                :loading="loading"
-                clearable
-              />
-            </FormField>
-            <v-switch
-              v-model="form.is_html"
-              label="Send as HTML"
-              color="primary"
-              hide-details
-              :disabled="loading"
-            />
-            <v-switch
-              v-model="form.schedule_enabled"
-              label="Schedule for later"
-              color="primary"
-              hide-details
-              :disabled="loading"
-            />
-            <FormField v-if="form.schedule_enabled" label="Send at" required>
-              <v-text-field
-                v-model="form.send_at"
-                type="datetime-local"
-                :min="minScheduleLocal"
-                variant="outlined"
-                hide-details
-                :disabled="loading"
-              />
-              <div class="text-caption text-medium-emphasis mt-1">
-                Messages stay pending until this time (up to 30 days ahead). Uses your browser’s local timezone.
-              </div>
-            </FormField>
-          </v-col>
-          <v-col cols="12" md="6" class="form-stack">
-            <FormField label="CC (paste multiple)">
-              <v-textarea
-                v-model="form.cc"
-                rows="2"
-                auto-grow
-                variant="outlined"
-                hide-details
-                :disabled="loading"
-                placeholder="Optional — up to 50 addresses"
-              />
-              <div v-if="parsedCc.length" class="text-caption text-medium-emphasis mt-1">
-                {{ parsedCc.length }} CC address{{ parsedCc.length === 1 ? '' : 'es' }}
-              </div>
-            </FormField>
-            <FormField label="BCC (paste multiple)">
-              <v-textarea
-                v-model="form.bcc"
-                rows="2"
-                auto-grow
-                variant="outlined"
-                hide-details
-                :disabled="loading"
-                placeholder="Optional — up to 50 addresses"
-              />
-              <div v-if="parsedBcc.length" class="text-caption text-medium-emphasis mt-1">
-                {{ parsedBcc.length }} BCC address{{ parsedBcc.length === 1 ? '' : 'es' }}
-              </div>
-            </FormField>
-            <FormField :label="form.is_html ? 'Message body' : 'Body'" required>
-              <HtmlEditor
-                v-if="form.is_html"
-                :key="editorResetKey"
-                v-model="form.body"
-                :disabled="loading"
-                placeholder="Write your HTML email…"
-              />
-              <v-textarea
-                v-else
-                v-model="form.body"
-                rows="10"
-                variant="outlined"
-                hide-details
-                :disabled="loading"
-                placeholder="Plain text message"
-              />
-              <div v-if="form.is_html" class="text-caption text-medium-emphasis mt-1">
-                Use the toolbar to format text. The message is sent as HTML.
-              </div>
-            </FormField>
-            <FormField label="Attachments">
-              <div class="attachment-picker">
-                <v-btn
-                  variant="tonal"
-                  prepend-icon="mdi-paperclip"
-                  :disabled="loading || attachmentFiles.length >= MAX_ATTACHMENTS"
-                  @click="attachmentInput?.click()"
-                >
-                  Add files
-                </v-btn>
-                <input
-                  :key="attachmentInputKey"
-                  ref="attachmentInput"
-                  type="file"
-                  class="d-none"
-                  multiple
-                  @change="onAttachmentPick"
-                />
-                <div class="text-caption text-medium-emphasis">
-                  Optional. Up to {{ MAX_ATTACHMENTS }} files, 5 MB each.
-                </div>
-                <div v-if="attachmentLabels.length" class="attachment-list">
-                  <v-chip
-                    v-for="(label, index) in attachmentLabels"
-                    :key="`${label}-${index}`"
-                    size="small"
-                    variant="tonal"
-                    closable
-                    @click:close="removeAttachment(index)"
-                  >
-                    {{ label }}
-                  </v-chip>
-                </div>
-              </div>
-            </FormField>
-          </v-col>
-        </v-row>
-        <div class="d-flex flex-column ga-4 mt-6">
-          <CaptchaWidget
-            :reset-key="captchaResetKey"
-            @update:key="captchaKey = $event"
-            @update:answer="captchaAnswer = $event"
-          />
-          <div class="d-flex ga-2">
-            <v-btn color="primary" type="submit" :loading="sending" :disabled="loading">
-              {{
-                form.schedule_enabled
-                  ? parsedTo.length > 1
-                    ? `Schedule ${parsedTo.length.toLocaleString()} emails`
-                    : 'Schedule email'
-                  : parsedTo.length > 1
-                    ? `Send to ${parsedTo.length.toLocaleString()} recipients`
-                    : 'Send email'
-              }}
-            </v-btn>
+    <v-window v-model="tab">
+      <v-window-item value="compose">
+        <v-alert v-if="message" type="success" variant="tonal" class="mb-4">
+          {{ message }}
+          <div v-if="lastLogId" class="text-caption mt-1">
+            <span v-if="queuedCount && queuedCount > 1">{{ queuedCount.toLocaleString() }} messages queued. </span>
+            <span v-if="scheduledSendAt">Scheduled for {{ new Date(scheduledSendAt).toLocaleString() }}. </span>
+            Log ID: {{ lastLogId }} —
+            <router-link :to="{ name: 'logs' }">View email logs</router-link>
           </div>
-        </div>
-      </v-form>
-    </ParentCard>
+        </v-alert>
+
+        <v-alert v-if="error" type="error" variant="tonal" class="mb-4">{{ error }}</v-alert>
+
+        <ParentCard title="Compose email">
+          <v-form @submit.prevent="sendMail">
+            <v-row>
+              <v-col cols="12" md="6" class="form-stack">
+                <FormField label="To" required>
+                  <div class="d-flex flex-wrap ga-2 mb-2">
+                    <v-btn
+                      size="small"
+                      variant="tonal"
+                      prepend-icon="mdi-file-delimited-outline"
+                      :disabled="loading"
+                      @click="csvInput?.click()"
+                    >
+                      Import CSV / TXT
+                    </v-btn>
+                    <input
+                      :key="csvInputKey"
+                      ref="csvInput"
+                      type="file"
+                      class="d-none"
+                      accept=".csv,.txt,text/csv,text/plain"
+                      @change="onCsvPick"
+                    />
+                  </div>
+                  <v-textarea
+                    v-model="form.to"
+                    rows="4"
+                    auto-grow
+                    variant="outlined"
+                    hide-details
+                    :disabled="loading"
+                    placeholder="Paste one or many addresses (comma, semicolon, newline, or CSV)"
+                  />
+                  <div class="text-caption text-medium-emphasis mt-1">
+                    Paste from a spreadsheet or import a CSV/TXT file. Valid addresses are detected automatically.
+                  </div>
+                  <div class="mt-2">
+                    <div class="d-flex justify-space-between text-caption mb-1">
+                      <span>{{ recipientCapacityLabel }}</span>
+                      <span class="text-medium-emphasis">max {{ MAX_RECIPIENTS.toLocaleString() }} per schedule</span>
+                    </div>
+                    <v-progress-linear
+                      :model-value="recipientProgress"
+                      height="6"
+                      rounded
+                      :color="parsedTo.length > MAX_RECIPIENTS ? 'error' : parsedTo.length > MAX_RECIPIENTS * 0.85 ? 'warning' : 'primary'"
+                    />
+                  </div>
+                  <div v-if="parsedTo.length" class="recipient-chips mt-2">
+                    <v-chip
+                      v-for="email in parsedTo.slice(0, 40)"
+                      :key="email"
+                      size="small"
+                      variant="tonal"
+                      closable
+                      @click:close="removeRecipient(email)"
+                    >
+                      {{ email }}
+                    </v-chip>
+                    <span v-if="parsedTo.length > 40" class="text-caption text-medium-emphasis">
+                      +{{ (parsedTo.length - 40).toLocaleString() }} more
+                    </span>
+                  </div>
+                </FormField>
+                <FormField label="Subject" required>
+                  <v-text-field
+                    v-model="form.subject"
+                    variant="outlined"
+                    hide-details
+                    :disabled="loading"
+                  />
+                </FormField>
+                <FormField label="Email provider">
+                  <v-select
+                    v-model="form.provider_id"
+                    :items="providers"
+                    item-title="name"
+                    item-value="id"
+                    variant="outlined"
+                    hide-details
+                    :loading="loading"
+                    clearable
+                  />
+                </FormField>
+                <v-switch
+                  v-model="form.is_html"
+                  label="Send as HTML"
+                  color="primary"
+                  hide-details
+                  :disabled="loading"
+                />
+                <v-switch
+                  v-model="form.schedule_enabled"
+                  label="Schedule for later"
+                  color="primary"
+                  hide-details
+                  :disabled="loading"
+                />
+                <FormField v-if="form.schedule_enabled" label="Send at" required>
+                  <v-text-field
+                    v-model="form.send_at"
+                    type="datetime-local"
+                    :min="minScheduleLocal"
+                    variant="outlined"
+                    hide-details
+                    :disabled="loading"
+                  />
+                  <div class="text-caption text-medium-emphasis mt-1">
+                    Messages stay pending until this time (up to 30 days ahead). Uses your browser’s local timezone.
+                  </div>
+                </FormField>
+              </v-col>
+              <v-col cols="12" md="6" class="form-stack">
+                <FormField label="CC (paste multiple)">
+                  <v-textarea
+                    v-model="form.cc"
+                    rows="2"
+                    auto-grow
+                    variant="outlined"
+                    hide-details
+                    :disabled="loading"
+                    placeholder="Optional — up to 50 addresses"
+                  />
+                  <div v-if="parsedCc.length" class="text-caption text-medium-emphasis mt-1">
+                    {{ parsedCc.length }} CC address{{ parsedCc.length === 1 ? '' : 'es' }}
+                  </div>
+                </FormField>
+                <FormField label="BCC (paste multiple)">
+                  <v-textarea
+                    v-model="form.bcc"
+                    rows="2"
+                    auto-grow
+                    variant="outlined"
+                    hide-details
+                    :disabled="loading"
+                    placeholder="Optional — up to 50 addresses"
+                  />
+                  <div v-if="parsedBcc.length" class="text-caption text-medium-emphasis mt-1">
+                    {{ parsedBcc.length }} BCC address{{ parsedBcc.length === 1 ? '' : 'es' }}
+                  </div>
+                </FormField>
+                <FormField :label="form.is_html ? 'Message body' : 'Body'" required>
+                  <HtmlEditor
+                    v-if="form.is_html"
+                    :key="editorResetKey"
+                    v-model="form.body"
+                    :disabled="loading"
+                    placeholder="Write your HTML email…"
+                  />
+                  <v-textarea
+                    v-else
+                    v-model="form.body"
+                    rows="10"
+                    variant="outlined"
+                    hide-details
+                    :disabled="loading"
+                    placeholder="Plain text message"
+                  />
+                  <div v-if="form.is_html" class="text-caption text-medium-emphasis mt-1">
+                    Use the toolbar to format text. The message is sent as HTML.
+                  </div>
+                </FormField>
+                <FormField label="Attachments">
+                  <div class="attachment-picker">
+                    <v-btn
+                      variant="tonal"
+                      prepend-icon="mdi-paperclip"
+                      :disabled="loading || attachmentFiles.length >= MAX_ATTACHMENTS"
+                      @click="attachmentInput?.click()"
+                    >
+                      Add files
+                    </v-btn>
+                    <input
+                      :key="attachmentInputKey"
+                      ref="attachmentInput"
+                      type="file"
+                      class="d-none"
+                      multiple
+                      @change="onAttachmentPick"
+                    />
+                    <div class="text-caption text-medium-emphasis">
+                      Optional. Up to {{ MAX_ATTACHMENTS }} files, 5 MB each.
+                    </div>
+                    <div v-if="attachmentLabels.length" class="attachment-list">
+                      <v-chip
+                        v-for="(label, index) in attachmentLabels"
+                        :key="`${label}-${index}`"
+                        size="small"
+                        variant="tonal"
+                        closable
+                        @click:close="removeAttachment(index)"
+                      >
+                        {{ label }}
+                      </v-chip>
+                    </div>
+                  </div>
+                </FormField>
+              </v-col>
+            </v-row>
+            <div class="d-flex flex-column ga-4 mt-6">
+              <CaptchaWidget
+                :reset-key="captchaResetKey"
+                @update:key="captchaKey = $event"
+                @update:answer="captchaAnswer = $event"
+              />
+              <div class="d-flex ga-2">
+                <v-btn color="primary" type="submit" :loading="sending" :disabled="loading">
+                  {{
+                    form.schedule_enabled
+                      ? parsedTo.length > 1
+                        ? `Schedule ${parsedTo.length.toLocaleString()} emails`
+                        : 'Schedule email'
+                      : parsedTo.length > 1
+                        ? `Send to ${parsedTo.length.toLocaleString()} recipients`
+                        : 'Send email'
+                  }}
+                </v-btn>
+              </div>
+            </div>
+          </v-form>
+        </ParentCard>
+      </v-window-item>
+
+      <v-window-item value="queue">
+        <v-alert v-if="queueMessage" type="success" variant="tonal" class="mb-4">{{ queueMessage }}</v-alert>
+        <v-alert v-if="queueError" type="error" variant="tonal" class="mb-4">{{ queueError }}</v-alert>
+
+        <ParentCard title="Queue control">
+          <p class="text-body-2 text-medium-emphasis mb-4">
+            Match by exact subject to pause pending admin sends (they fail as retryable, workers skip them),
+            then send now or schedule for later.
+          </p>
+
+          <v-row>
+            <v-col cols="12" md="7" class="form-stack">
+              <FormField label="Exact subject" required>
+                <v-text-field
+                  v-model="queueSubject"
+                  variant="outlined"
+                  hide-details
+                  :disabled="queueLoading || queueActing"
+                  placeholder="Paste the subject line exactly as queued"
+                />
+              </FormField>
+              <FormField label="Pause reason">
+                <v-text-field
+                  v-model="pauseReason"
+                  variant="outlined"
+                  hide-details
+                  :disabled="queueActing"
+                />
+              </FormField>
+              <div class="d-flex flex-wrap ga-2">
+                <v-btn
+                  variant="tonal"
+                  :loading="queueLoading"
+                  :disabled="queueActing"
+                  @click="previewQueue"
+                >
+                  Preview counts
+                </v-btn>
+                <v-btn
+                  color="warning"
+                  :loading="queueActing"
+                  :disabled="queueLoading"
+                  @click="pauseQueue"
+                >
+                  Pause pending
+                </v-btn>
+              </div>
+
+              <div v-if="queuePendingCount !== null || queuePausedCount !== null" class="mt-4">
+                <div class="text-body-2">
+                  Pending: <strong>{{ (queuePendingCount ?? 0).toLocaleString() }}</strong>
+                  · Paused (retryable): <strong>{{ (queuePausedCount ?? 0).toLocaleString() }}</strong>
+                </div>
+              </div>
+
+              <v-divider class="my-4" />
+
+              <v-switch
+                v-model="queueScheduleEnabled"
+                label="Schedule retry for later"
+                color="primary"
+                hide-details
+                :disabled="queueActing"
+              />
+              <FormField v-if="queueScheduleEnabled" label="Send at" required>
+                <v-text-field
+                  v-model="queueSendAt"
+                  type="datetime-local"
+                  :min="minScheduleLocal"
+                  variant="outlined"
+                  hide-details
+                  :disabled="queueActing"
+                />
+              </FormField>
+              <v-btn
+                color="primary"
+                class="mt-2"
+                :loading="queueActing"
+                :disabled="queueLoading"
+                @click="scheduleRetryQueue"
+              >
+                {{ queueScheduleEnabled ? 'Schedule paused for later' : 'Send paused now' }}
+              </v-btn>
+            </v-col>
+
+            <v-col cols="12" md="5">
+              <div class="text-subtitle-2 mb-2">Pending subjects</div>
+              <div class="text-caption text-medium-emphasis mb-2">
+                Click a row to fill the subject field.
+              </div>
+              <v-list v-if="pendingSubjects.length" density="compact" class="pending-subjects-list">
+                <v-list-item
+                  v-for="row in pendingSubjects"
+                  :key="row.subject"
+                  :title="row.subject"
+                  :subtitle="`${row.pending_count.toLocaleString()} pending`"
+                  @click="selectPendingSubject(row)"
+                />
+              </v-list>
+              <div v-else class="text-caption text-medium-emphasis">
+                No pending admin subjects right now.
+              </div>
+              <v-btn
+                class="mt-3"
+                size="small"
+                variant="text"
+                prepend-icon="mdi-refresh"
+                @click="loadPendingSubjects"
+              >
+                Refresh list
+              </v-btn>
+            </v-col>
+          </v-row>
+        </ParentCard>
+      </v-window-item>
+    </v-window>
   </div>
 </template>
 
@@ -539,5 +785,12 @@ onMounted(async () => {
   display: flex;
   flex-wrap: wrap;
   gap: 0.4rem;
+}
+
+.pending-subjects-list {
+  max-height: 320px;
+  overflow-y: auto;
+  border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+  border-radius: 8px;
 }
 </style>

@@ -97,6 +97,14 @@ Route::prefix('v1')->group(function () {
                 Route::delete('/blocked-emails/{blocked_email}', [BlockedIpController::class, 'destroyEmail'])
                     ->middleware('throttle:30,1');
 
+                Route::get('/send-mail/pending-subjects', [MailController::class, 'pendingSubjects'])
+                    ->middleware('throttle:30,1');
+                Route::get('/send-mail/queue-by-subject', [MailController::class, 'queueBySubject'])
+                    ->middleware('throttle:30,1');
+                Route::post('/send-mail/pause-by-subject', [MailController::class, 'pauseBySubject'])
+                    ->middleware('throttle:10,1');
+                Route::post('/send-mail/schedule-retry-by-subject', [MailController::class, 'scheduleRetryBySubject'])
+                    ->middleware('throttle:10,1');
                 Route::post('/send-mail', [MailController::class, 'send'])
                     ->middleware('throttle:30,1');
 

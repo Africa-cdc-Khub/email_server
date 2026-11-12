@@ -209,4 +209,77 @@ class AdminSendMailTest extends TestCase
         ])->assertStatus(422)
             ->assertJsonValidationErrors(['to']);
     }
+
+    public function test_admin_can_pause_and_schedule_retry_by_subject(): void
+    {
+        $provider = EmailProvider::query()->create([
+            'name' => 'Log',
+            'slug' => 'log-queue-control',
+            'driver' => EmailDriver::Log,
+            'config' => [],
+            'is_default' => true,
+            'is_active' => true,
+        ]);
+
+        $admin = User::factory()->create(['is_admin' => true, 'is_active' => true]);
+        $token = $admin->createToken('admin-panel')->plainTextToken;
+
+        Queue::fake();
+
+        $this->withToken($token)->postJson('/api/v1/admin/send-mail', [
+            'to' => ['one@example.com', 'two@example.com'],
+            'subject' => 'Busy hour blast',
+            'body' => '<p>Hold please</p>',
+            'provider_id' => $provider->id,
+        ])->assertOk()
+            ->assertJsonPath('queued_count', 2);
+
+        $this->withToken($token)
+            ->getJson('/api/v1/admin/send-mail/pending-subjects')
+            ->assertOk()
+            ->assertJsonFragment(['subject' => 'Busy hour blast', 'pending_count' => 2]);
+
+        $this->withToken($token)
+            ->getJson('/api/v1/admin/send-mail/queue-by-subject?subject='.urlencode('Busy hour blast'))
+            ->assertOk()
+            ->assertJsonPath('pending_count', 2)
+            ->assertJsonPath('paused_count', 0);
+
+        $this->withToken($token)->postJson('/api/v1/admin/send-mail/pause-by-subject', [
+            'subject' => 'Busy hour blast',
+            'reason' => 'Busy hours',
+        ])->assertOk()
+            ->assertJsonPath('paused', 2);
+
+        $this->assertDatabaseHas('email_logs', [
+            'subject' => 'Busy hour blast',
+            'to' => 'one@example.com',
+            'status' => 'failed',
+        ]);
+
+        $this->withToken($token)
+            ->getJson('/api/v1/admin/send-mail/queue-by-subject?subject='.urlencode('Busy hour blast'))
+            ->assertOk()
+            ->assertJsonPath('pending_count', 0)
+            ->assertJsonPath('paused_count', 2);
+
+        Queue::fake();
+
+        $sendAt = now()->addHours(3)->toIso8601String();
+
+        $this->withToken($token)->postJson('/api/v1/admin/send-mail/schedule-retry-by-subject', [
+            'subject' => 'Busy hour blast',
+            'send_at' => $sendAt,
+        ])->assertOk()
+            ->assertJsonPath('queued', 2)
+            ->assertJsonPath('scheduled', true);
+
+        $this->assertDatabaseHas('email_logs', [
+            'subject' => 'Busy hour blast',
+            'to' => 'one@example.com',
+            'status' => 'pending',
+        ]);
+
+        Queue::assertPushed(SendEmailJob::class, 2);
+    }
 }

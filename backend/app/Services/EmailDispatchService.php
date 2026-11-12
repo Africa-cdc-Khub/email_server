@@ -110,6 +110,12 @@ class EmailDispatchService
             }
 
             $meta = $log->meta ?? [];
+
+            // Admin paused this bulk send — skip delivery even if a job was already queued.
+            if ($log->status === 'failed' && ! empty($meta['paused_by_admin'])) {
+                return $log;
+            }
+
             $body = (string) ($meta['body'] ?? '');
             $isHtml = (bool) ($meta['is_html'] ?? true);
             $cc = $meta['cc'] ?? [];
@@ -263,14 +269,168 @@ class EmailDispatchService
             );
         }
 
+        $meta['paused_by_admin'] = false;
+        unset($meta['paused_at'], $meta['pause_reason']);
+
         $log->update([
             'status' => 'pending',
             'error_message' => null,
+            'meta' => $meta,
         ]);
 
         $this->dispatchSendJob($log->fresh() ?? $log);
 
         return $log->fresh() ?? $log;
+    }
+
+    /**
+     * Count pending (not yet sent) logs for an exact subject.
+     */
+    public function countPendingBySubject(string $subject): int
+    {
+        return $this->pendingBySubjectQuery($subject)->count();
+    }
+
+    /**
+     * Count admin-paused failed logs for an exact subject (retryable).
+     */
+    public function countPausedBySubject(string $subject): int
+    {
+        return $this->pausedBySubjectQuery($subject)->count();
+    }
+
+    /**
+     * Mark pending emails with this exact subject as failed so workers skip them.
+     * Bodies stay stored so they can be retried / scheduled later.
+     *
+     * @return array{paused: int}
+     */
+    public function pausePendingBySubject(string $subject, string $reason = 'Paused by admin (busy hours)'): array
+    {
+        $subject = trim($subject);
+        if ($subject === '') {
+            throw new RuntimeException('A subject is required.');
+        }
+
+        $paused = 0;
+        $reason = trim($reason) !== '' ? trim($reason) : 'Paused by admin (busy hours)';
+
+        $this->pendingBySubjectQuery($subject)->orderBy('id')->chunkById(100, function ($logs) use (&$paused, $reason) {
+            foreach ($logs as $log) {
+                $meta = $log->meta ?? [];
+                $meta['paused_by_admin'] = true;
+                $meta['paused_at'] = now()->toIso8601String();
+                $meta['pause_reason'] = $reason;
+
+                $log->update([
+                    'status' => 'failed',
+                    'error_message' => $reason.' — retry later from Queue control.',
+                    'meta' => $meta,
+                ]);
+                $paused++;
+            }
+        });
+
+        return ['paused' => $paused];
+    }
+
+    /**
+     * Re-queue admin-paused emails for this subject, optionally delayed until $sendAt.
+     *
+     * @return array{queued: int, skipped: int}
+     */
+    public function scheduleRetryPausedBySubject(string $subject, ?\DateTimeInterface $sendAt = null): array
+    {
+        $subject = trim($subject);
+        if ($subject === '') {
+            throw new RuntimeException('A subject is required.');
+        }
+
+        $queued = 0;
+        $skipped = 0;
+
+        $this->pausedBySubjectQuery($subject)->orderBy('id')->chunkById(100, function ($logs) use (&$queued, &$skipped, $sendAt) {
+            foreach ($logs as $log) {
+                try {
+                    $meta = $log->meta ?? [];
+                    $body = (string) ($meta['body'] ?? '');
+                    if ($body === '') {
+                        $skipped++;
+                        continue;
+                    }
+
+                    $meta['paused_by_admin'] = false;
+                    unset($meta['paused_at'], $meta['pause_reason']);
+                    if ($sendAt !== null) {
+                        $meta['send_at'] = $sendAt->format(\DateTimeInterface::ATOM);
+                    } else {
+                        unset($meta['send_at']);
+                    }
+
+                    $log->update([
+                        'status' => 'pending',
+                        'error_message' => null,
+                        'meta' => $meta,
+                    ]);
+
+                    $this->dispatchSendJob($log->fresh() ?? $log, $sendAt);
+                    $queued++;
+                } catch (RuntimeException) {
+                    $skipped++;
+                }
+            }
+        });
+
+        return ['queued' => $queued, 'skipped' => $skipped];
+    }
+
+    /**
+     * Distinct pending subjects (admin sends) with counts — for Queue control UI.
+     *
+     * @return list<array{subject: string, pending_count: int}>
+     */
+    public function pendingSubjects(int $limit = 50): array
+    {
+        $limit = max(1, min(100, $limit));
+
+        return EmailLog::query()
+            ->selectRaw('subject, COUNT(*) as pending_count')
+            ->where('status', 'pending')
+            ->where(function ($q) {
+                $q->where('meta->source', 'admin')
+                    ->orWhereNull('external_integration_id');
+            })
+            ->whereNotNull('subject')
+            ->where('subject', '!=', '')
+            ->groupBy('subject')
+            ->orderByDesc('pending_count')
+            ->limit($limit)
+            ->get()
+            ->map(fn ($row) => [
+                'subject' => (string) $row->subject,
+                'pending_count' => (int) $row->pending_count,
+            ])
+            ->values()
+            ->all();
+    }
+
+    private function pendingBySubjectQuery(string $subject)
+    {
+        return EmailLog::query()
+            ->where('status', 'pending')
+            ->where('subject', trim($subject))
+            ->where(function ($q) {
+                $q->where('meta->source', 'admin')
+                    ->orWhereNull('external_integration_id');
+            });
+    }
+
+    private function pausedBySubjectQuery(string $subject)
+    {
+        return EmailLog::query()
+            ->where('status', 'failed')
+            ->where('subject', trim($subject))
+            ->where('meta->paused_by_admin', true);
     }
 
     /**
