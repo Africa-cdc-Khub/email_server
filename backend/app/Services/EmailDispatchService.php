@@ -46,6 +46,7 @@ class EmailDispatchService
         ?string $source = null,
         ?string $senderIp = null,
         array $attachmentPayload = [],
+        ?\DateTimeInterface $sendAt = null,
     ): EmailLog {
         $provider = $this->mailConfig->resolveProvider($providerId);
 
@@ -62,6 +63,10 @@ class EmailDispatchService
 
         if ($senderIp !== null && $senderIp !== '') {
             $meta['sender_ip'] = $senderIp;
+        }
+
+        if ($sendAt !== null) {
+            $meta['send_at'] = $sendAt->format(\DateTimeInterface::ATOM);
         }
 
         $log = EmailLog::query()->create([
@@ -81,7 +86,7 @@ class EmailDispatchService
             $log->update(['meta' => $meta]);
         }
 
-        $this->dispatchSendJob($log);
+        $this->dispatchSendJob($log, $sendAt);
 
         return $log->fresh() ?? $log;
     }
@@ -335,7 +340,7 @@ class EmailDispatchService
         return ['queued' => $queued, 'skipped' => $skipped];
     }
 
-    private function dispatchSendJob(EmailLog $log): void
+    private function dispatchSendJob(EmailLog $log, ?\DateTimeInterface $sendAt = null): void
     {
         $log->loadMissing('externalIntegration');
         $queue = EmailPriority::queueFor(
@@ -343,7 +348,11 @@ class EmailDispatchService
             $log->externalIntegration,
         );
 
-        SendEmailJob::dispatch($log->id, $queue);
+        $pending = SendEmailJob::dispatch($log->id, $queue);
+
+        if ($sendAt !== null) {
+            $pending->delay($sendAt);
+        }
     }
 
     public function testProvider(

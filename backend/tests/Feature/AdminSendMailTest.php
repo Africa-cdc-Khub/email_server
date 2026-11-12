@@ -147,4 +147,66 @@ class AdminSendMailTest extends TestCase
             'body' => 'Hello',
         ])->assertUnauthorized();
     }
+
+    public function test_admin_can_schedule_email_for_later(): void
+    {
+        $provider = EmailProvider::query()->create([
+            'name' => 'Log',
+            'slug' => 'log-schedule',
+            'driver' => EmailDriver::Log,
+            'config' => [],
+            'is_default' => true,
+            'is_active' => true,
+        ]);
+
+        $admin = User::factory()->create(['is_admin' => true, 'is_active' => true]);
+        $token = $admin->createToken('admin-panel')->plainTextToken;
+
+        Queue::fake();
+
+        $sendAt = now()->addHours(2)->toIso8601String();
+
+        $this->withToken($token)->postJson('/api/v1/admin/send-mail', [
+            'to' => ['later@example.com'],
+            'subject' => 'Scheduled',
+            'body' => '<p>Later</p>',
+            'provider_id' => $provider->id,
+            'send_at' => $sendAt,
+        ])->assertOk()
+            ->assertJsonPath('scheduled', true)
+            ->assertJsonPath('queued_count', 1);
+
+        Queue::assertPushed(SendEmailJob::class, 1);
+        $this->assertDatabaseHas('email_logs', [
+            'to' => 'later@example.com',
+            'status' => 'pending',
+        ]);
+    }
+
+    public function test_send_mail_rejects_more_than_6000_recipients(): void
+    {
+        EmailProvider::query()->create([
+            'name' => 'Log',
+            'slug' => 'log-limit',
+            'driver' => EmailDriver::Log,
+            'config' => [],
+            'is_default' => true,
+            'is_active' => true,
+        ]);
+
+        $admin = User::factory()->create(['is_admin' => true, 'is_active' => true]);
+        $token = $admin->createToken('admin-panel')->plainTextToken;
+
+        $emails = [];
+        for ($i = 1; $i <= 6001; $i++) {
+            $emails[] = "user{$i}@example.com";
+        }
+
+        $this->withToken($token)->postJson('/api/v1/admin/send-mail', [
+            'to' => $emails,
+            'subject' => 'Too many',
+            'body' => '<p>Nope</p>',
+        ])->assertStatus(422)
+            ->assertJsonValidationErrors(['to']);
+    }
 }

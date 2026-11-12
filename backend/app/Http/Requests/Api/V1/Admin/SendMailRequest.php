@@ -11,7 +11,8 @@ use Illuminate\Validation\Rule;
 
 class SendMailRequest extends FormRequest
 {
-    public const MAX_RECIPIENTS = 200;
+    /** Max recipients for one admin send / scheduled batch. */
+    public const MAX_RECIPIENTS = 6000;
 
     public function authorize(): bool
     {
@@ -32,10 +33,12 @@ class SendMailRequest extends FormRequest
             'body' => ['required', 'string'],
             'is_html' => ['sometimes', 'boolean'],
             'provider_id' => ['sometimes', 'nullable', 'integer', 'exists:email_providers,id'],
-            'cc' => ['sometimes', 'array'],
+            'cc' => ['sometimes', 'array', 'max:50'],
             'cc.*' => ['email'],
-            'bcc' => ['sometimes', 'array'],
+            'bcc' => ['sometimes', 'array', 'max:50'],
             'bcc.*' => ['email'],
+            // Optional future send time (UTC/app timezone). Omit or null = send immediately.
+            'send_at' => ['sometimes', 'nullable', 'date', 'after:now', 'before:'.now()->addDays(30)->toDateTimeString()],
             'captcha_key' => [
                 Rule::requiredIf(fn () => $captcha->enabled()),
                 'nullable',
