@@ -10,14 +10,16 @@ use Symfony\Component\Mime\Part\DataPart;
 
 class ExchangeGraphTransport extends AbstractTransport
 {
-    public function __construct(
-        private readonly ExchangeGraphMailClient $client,
-    ) {
+    public function __construct()
+    {
         parent::__construct();
     }
 
     protected function doSend(SentMessage $message): void
     {
+        // Resolve from the container on every send so credential rotations
+        // (after purgeExchangeClient / forgetMailers) are picked up immediately.
+        $client = app(ExchangeGraphMailClient::class);
         $email = MessageConverter::toEmail($message->getOriginalMessage());
 
         $to = [];
@@ -72,7 +74,7 @@ class ExchangeGraphTransport extends AbstractTransport
             ];
         }
 
-        $this->client->send(
+        $client->send(
             count($to) === 1 ? $to[0] : $to,
             $email->getSubject() ?? '(no subject)',
             (string) $html,

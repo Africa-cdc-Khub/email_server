@@ -9,6 +9,8 @@ class ExchangeGraphMailClient
 {
     private ?ExchangeOAuth $oauth = null;
 
+    private ?string $oauthFingerprint = null;
+
     public function __construct(
         private readonly ExchangeConfigurationResolver $exchangeResolver,
     ) {}
@@ -76,12 +78,21 @@ class ExchangeGraphMailClient
 
     private function oauth(): ExchangeOAuth
     {
-        if ($this->oauth !== null) {
+        $config = config('exchange-email', []);
+        $fingerprint = implode('|', [
+            (string) ($config['tenant_id'] ?? ''),
+            (string) ($config['client_id'] ?? ''),
+            (string) ($config['client_secret'] ?? ''),
+            (string) ($config['auth_method'] ?? ''),
+            (string) ($config['redirect_uri'] ?? ''),
+            (string) ($config['scope'] ?? ''),
+        ]);
+
+        if ($this->oauth !== null && $this->oauthFingerprint === $fingerprint) {
             return $this->oauth;
         }
 
-        $config = config('exchange-email', []);
-
+        $this->oauthFingerprint = $fingerprint;
         $this->oauth = new ExchangeOAuth(
             $config['tenant_id'] ?? null,
             $config['client_id'] ?? null,

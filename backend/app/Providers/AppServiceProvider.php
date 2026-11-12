@@ -21,9 +21,9 @@ class AppServiceProvider extends ServiceProvider
     public function boot(): void
     {
         Mail::extend('exchange', function () {
-            return new ExchangeGraphTransport(
-                $this->app->make(ExchangeGraphMailClient::class),
-            );
+            // Client is resolved inside the transport on each send so queue
+            // workers pick up rotated provider credentials without a restart.
+            return new ExchangeGraphTransport;
         });
 
         Password::defaults(function () {

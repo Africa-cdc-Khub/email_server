@@ -9,7 +9,9 @@ use App\Http\Requests\Api\V1\Admin\TestEmailProviderRequest;
 use App\Http\Requests\Api\V1\Admin\UpdateEmailProviderRequest;
 use App\Models\EmailProvider;
 use App\Models\ProviderMailbox;
+use App\Services\DynamicMailConfigService;
 use App\Services\EmailDispatchService;
+use App\Services\ExchangeOauthTokenStore;
 use App\Services\MailboxSelector;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -158,6 +160,9 @@ class EmailProviderController extends Controller
             unset($data['config']);
         }
 
+        $previousConfig = $emailProvider->safeConfig();
+        $previousDriver = $emailProvider->driver;
+
         try {
             if ($configIncoming !== null) {
                 $emailProvider->setConfigSafely(array_merge($emailProvider->safeConfig(), $configIncoming));
@@ -196,7 +201,64 @@ class EmailProviderController extends Controller
             }
         }
 
-        return response()->json(['data' => $this->transform($emailProvider->fresh())]);
+        $fresh = $emailProvider->fresh() ?? $emailProvider;
+        $this->invalidateCachedCredentialsAfterUpdate(
+            $previousDriver,
+            $previousConfig,
+            $fresh,
+            $configIncoming ?? [],
+        );
+
+        return response()->json(['data' => $this->transform($fresh)]);
+    }
+
+    /**
+     * Drop process-local mailer caches and stale Graph OAuth tokens when
+     * Exchange credentials rotate so queued/integration sends use the new values.
+     *
+     * @param  array<string, mixed>  $previousConfig
+     * @param  array<string, mixed>  $configIncoming
+     */
+    private function invalidateCachedCredentialsAfterUpdate(
+        EmailDriver|string|null $previousDriver,
+        array $previousConfig,
+        EmailProvider $provider,
+        array $configIncoming,
+    ): void {
+        $driver = $provider->driver instanceof EmailDriver
+            ? $provider->driver
+            : (is_string($previousDriver) ? EmailDriver::tryFrom($previousDriver) : $previousDriver);
+
+        // Always clear in-process mailers so SMTP host/password and Exchange
+        // secrets edited in this request are not held by a cached MailManager.
+        app(DynamicMailConfigService::class)->purgeExchangeClient();
+
+        if ($driver !== EmailDriver::Exchange) {
+            return;
+        }
+
+        $newConfig = $provider->safeConfig();
+        $oldClientId = trim((string) ($previousConfig['client_id'] ?? ''));
+        $newClientId = trim((string) ($newConfig['client_id'] ?? ''));
+
+        $credentialsChanged = array_key_exists('client_secret', $configIncoming)
+            || array_key_exists('client_id', $configIncoming)
+            || array_key_exists('tenant_id', $configIncoming)
+            || array_key_exists('auth_method', $configIncoming)
+            || $oldClientId !== $newClientId
+            || (string) ($previousConfig['tenant_id'] ?? '') !== (string) ($newConfig['tenant_id'] ?? '');
+
+        if (! $credentialsChanged) {
+            return;
+        }
+
+        $store = app(ExchangeOauthTokenStore::class);
+        if ($oldClientId !== '') {
+            $store->forget($oldClientId);
+        }
+        if ($newClientId !== '' && $newClientId !== $oldClientId) {
+            $store->forget($newClientId);
+        }
     }
 
     public function test(TestEmailProviderRequest $request, EmailProvider $emailProvider, EmailDispatchService $dispatch): JsonResponse

@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Enums\EmailDriver;
 use App\Models\EmailProvider;
 use Illuminate\Support\Facades\Config;
+use Illuminate\Support\Facades\Mail;
 use RuntimeException;
 
 class DynamicMailConfigService
@@ -123,8 +124,16 @@ class DynamicMailConfigService
         Config::set('mail.mailers', $mailers);
     }
 
+    /**
+     * Drop process-local Exchange/mailer caches so the next send rebuilds from
+     * the current provider config (critical for long-lived queue:work workers).
+     */
     public function purgeExchangeClient(): void
     {
         app()->forgetInstance(ExchangeGraphMailClient::class);
+
+        // MailManager caches mailer instances; forgetting only the Graph client
+        // leaves ExchangeGraphTransport holding the previous client/secret.
+        Mail::forgetMailers();
     }
 }
