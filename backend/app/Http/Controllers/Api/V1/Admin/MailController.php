@@ -99,6 +99,32 @@ class MailController extends Controller
     {
         return response()->json([
             'data' => $dispatch->pendingSubjects(50),
+            'total_pending' => $dispatch->countAllPending(),
+        ]);
+    }
+
+    /**
+     * Fail and clear every pending email so the queue stops sending.
+     */
+    public function failAndClearAllPending(Request $request, EmailDispatchService $dispatch): JsonResponse
+    {
+        $data = $request->validate([
+            'reason' => ['sometimes', 'nullable', 'string', 'max:500'],
+            'confirm' => ['required', 'accepted'],
+        ]);
+
+        $result = $dispatch->failAndClearAllPending(
+            (string) ($data['reason'] ?? 'Cleared by admin'),
+        );
+
+        $cleared = $result['cleared'];
+
+        return response()->json([
+            'message' => $cleared === 0
+                ? 'No pending emails to clear.'
+                : "Failed and cleared {$cleared} pending email(s). Workers will skip them.",
+            'cleared' => $cleared,
+            'total_pending' => $dispatch->countAllPending(),
         ]);
     }
 

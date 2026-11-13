@@ -282,4 +282,53 @@ class AdminSendMailTest extends TestCase
 
         Queue::assertPushed(SendEmailJob::class, 2);
     }
+
+    public function test_admin_can_fail_and_clear_all_pending_emails(): void
+    {
+        $provider = EmailProvider::query()->create([
+            'name' => 'Log',
+            'slug' => 'log-clear-all',
+            'driver' => EmailDriver::Log,
+            'config' => [],
+            'is_default' => true,
+            'is_active' => true,
+        ]);
+
+        $admin = User::factory()->create(['is_admin' => true, 'is_active' => true]);
+        $token = $admin->createToken('admin-panel')->plainTextToken;
+
+        Queue::fake();
+
+        $this->withToken($token)->postJson('/api/v1/admin/send-mail', [
+            'to' => ['a@example.com', 'b@example.com', 'c@example.com'],
+            'subject' => 'Clear me',
+            'body' => '<p>Stop</p>',
+            'provider_id' => $provider->id,
+        ])->assertOk()
+            ->assertJsonPath('queued_count', 3);
+
+        $this->withToken($token)
+            ->getJson('/api/v1/admin/send-mail/pending-subjects')
+            ->assertOk()
+            ->assertJsonPath('total_pending', 3);
+
+        $this->withToken($token)->postJson('/api/v1/admin/send-mail/fail-and-clear-all-pending', [
+            'confirm' => true,
+            'reason' => 'Emergency stop',
+        ])->assertOk()
+            ->assertJsonPath('cleared', 3)
+            ->assertJsonPath('total_pending', 0);
+
+        $this->assertDatabaseMissing('email_logs', [
+            'status' => 'pending',
+        ]);
+        $this->assertDatabaseHas('email_logs', [
+            'to' => 'a@example.com',
+            'status' => 'failed',
+        ]);
+
+        $this->withToken($token)->postJson('/api/v1/admin/send-mail/fail-and-clear-all-pending', [
+            'confirm' => false,
+        ])->assertStatus(422);
+    }
 }

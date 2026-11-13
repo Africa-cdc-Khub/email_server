@@ -105,16 +105,13 @@ class EmailDispatchService
         try {
             $log = EmailLog::query()->findOrFail($emailLogId);
 
-            if ($log->status === 'sent') {
+            // Only pending logs are sent. Failed/cleared/paused rows must not send
+            // even if a SendEmailJob was already sitting on the queue.
+            if ($log->status !== 'pending') {
                 return $log;
             }
 
             $meta = $log->meta ?? [];
-
-            // Admin paused this bulk send — skip delivery even if a job was already queued.
-            if ($log->status === 'failed' && ! empty($meta['paused_by_admin'])) {
-                return $log;
-            }
 
             $body = (string) ($meta['body'] ?? '');
             $isHtml = (bool) ($meta['is_html'] ?? true);
@@ -281,6 +278,49 @@ class EmailDispatchService
         $this->dispatchSendJob($log->fresh() ?? $log);
 
         return $log->fresh() ?? $log;
+    }
+
+    /**
+     * Count every pending email (admin + integrations) still waiting to send.
+     */
+    public function countAllPending(): int
+    {
+        return EmailLog::query()->where('status', 'pending')->count();
+    }
+
+    /**
+     * Fail and clear every pending email so workers stop sending immediately.
+     * Bodies stay stored for audit; these are not auto-retried by subject retry.
+     *
+     * @return array{cleared: int}
+     */
+    public function failAndClearAllPending(string $reason = 'Cleared by admin'): array
+    {
+        $cleared = 0;
+        $reason = trim($reason) !== '' ? trim($reason) : 'Cleared by admin';
+
+        EmailLog::query()
+            ->where('status', 'pending')
+            ->orderBy('id')
+            ->chunkById(100, function ($logs) use (&$cleared, $reason) {
+                foreach ($logs as $log) {
+                    $meta = $log->meta ?? [];
+                    $meta['cleared_by_admin'] = true;
+                    $meta['paused_by_admin'] = true;
+                    $meta['cleared_at'] = now()->toIso8601String();
+                    $meta['pause_reason'] = $reason;
+                    unset($meta['send_at']);
+
+                    $log->update([
+                        'status' => 'failed',
+                        'error_message' => $reason.' — queue cleared by admin.',
+                        'meta' => $meta,
+                    ]);
+                    $cleared++;
+                }
+            });
+
+        return ['cleared' => $cleared];
     }
 
     /**

@@ -56,9 +56,11 @@ const queueActing = ref(false)
 const queueMessage = ref('')
 const queueError = ref('')
 const pendingSubjects = ref<PendingSubjectRow[]>([])
+const totalPending = ref(0)
 const queueScheduleEnabled = ref(false)
 const queueSendAt = ref('')
 const pauseReason = ref('Paused by admin (busy hours)')
+const clearAllDialog = ref(false)
 
 function bodyIsEmpty(value: string): boolean {
   const plain = value
@@ -207,8 +209,32 @@ async function loadPendingSubjects() {
   try {
     const res = await api.get('/admin/send-mail/pending-subjects')
     pendingSubjects.value = res.data.data ?? []
+    totalPending.value = Number(res.data.total_pending ?? 0)
   } catch {
     pendingSubjects.value = []
+    totalPending.value = 0
+  }
+}
+
+async function failAndClearAllPending() {
+  queueActing.value = true
+  queueError.value = ''
+  queueMessage.value = ''
+  try {
+    const res = await api.post('/admin/send-mail/fail-and-clear-all-pending', {
+      confirm: true,
+      reason: pauseReason.value.trim() || 'Cleared by admin',
+    })
+    queueMessage.value = res.data.message ?? 'Queue cleared.'
+    totalPending.value = Number(res.data.total_pending ?? 0)
+    clearAllDialog.value = false
+    queuePendingCount.value = null
+    queuePausedCount.value = null
+    await loadPendingSubjects()
+  } catch (err) {
+    queueError.value = apiErrorMessage(err, 'Could not fail and clear pending emails.')
+  } finally {
+    queueActing.value = false
   }
 }
 
@@ -661,8 +687,49 @@ onMounted(async () => {
         <ParentCard title="Queue control">
           <p class="text-body-2 text-medium-emphasis mb-4">
             Match by exact subject to pause pending admin sends (they fail as retryable, workers skip them),
-            then send now or schedule for later.
+            then send now or schedule for later — or fail and clear everything still queued.
           </p>
+
+          <v-alert type="warning" variant="tonal" class="mb-4">
+            <div class="d-flex flex-wrap align-center justify-space-between ga-3">
+              <div>
+                <div class="text-subtitle-2">All pending in queue</div>
+                <div class="text-body-2">
+                  {{ totalPending.toLocaleString() }} email{{ totalPending === 1 ? '' : 's' }} waiting to send
+                  (admin + integrations).
+                </div>
+              </div>
+              <v-btn
+                color="error"
+                variant="flat"
+                prepend-icon="mdi-playlist-remove"
+                :loading="queueActing"
+                :disabled="queueLoading || totalPending === 0"
+                @click="clearAllDialog = true"
+              >
+                Fail &amp; clear all pending
+              </v-btn>
+            </div>
+          </v-alert>
+
+          <v-dialog v-model="clearAllDialog" max-width="480">
+            <v-card>
+              <v-card-title>Fail and clear all pending?</v-card-title>
+              <v-card-text>
+                This marks
+                <strong>{{ totalPending.toLocaleString() }}</strong>
+                pending email{{ totalPending === 1 ? '' : 's' }} as failed so workers stop sending them.
+                This cannot be undone from the queue (use Email logs retry only if you still need a message).
+              </v-card-text>
+              <v-card-actions>
+                <v-spacer />
+                <v-btn variant="text" :disabled="queueActing" @click="clearAllDialog = false">Cancel</v-btn>
+                <v-btn color="error" :loading="queueActing" @click="failAndClearAllPending">
+                  Fail &amp; clear all
+                </v-btn>
+              </v-card-actions>
+            </v-card>
+          </v-dialog>
 
           <v-row>
             <v-col cols="12" md="7" class="form-stack">

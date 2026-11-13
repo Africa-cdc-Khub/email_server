@@ -105,6 +105,8 @@ Route::prefix('v1')->group(function () {
                     ->middleware('throttle:10,1');
                 Route::post('/send-mail/schedule-retry-by-subject', [MailController::class, 'scheduleRetryBySubject'])
                     ->middleware('throttle:10,1');
+                Route::post('/send-mail/fail-and-clear-all-pending', [MailController::class, 'failAndClearAllPending'])
+                    ->middleware('throttle:5,1');
                 Route::post('/send-mail', [MailController::class, 'send'])
                     ->middleware('throttle:30,1');
 
