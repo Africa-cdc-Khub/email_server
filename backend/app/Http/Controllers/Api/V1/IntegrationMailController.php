@@ -20,9 +20,14 @@ class IntegrationMailController extends Controller
         $integration = $request->attributes->get('integration');
 
         $requestedProviderId = $request->validated('provider_id');
-        $providerId = $integration->email_provider_id;
+        // Null (or inactive pin) follows the current system default provider.
+        $providerId = $integration->resolvedEmailProviderId();
 
-        if ($requestedProviderId !== null && (int) $requestedProviderId !== (int) $providerId) {
+        if (
+            $requestedProviderId !== null
+            && $providerId !== null
+            && (int) $requestedProviderId !== (int) $providerId
+        ) {
             return response()->json([
                 'message' => 'provider_id is not allowed for this integration.',
             ], 403);

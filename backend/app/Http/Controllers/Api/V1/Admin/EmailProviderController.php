@@ -149,7 +149,11 @@ class EmailProviderController extends Controller
             ], 422);
         }
 
-        if (! empty($data['is_default'])) {
+        $becomingDefault = ! empty($data['is_default']);
+        $wasActive = (bool) $emailProvider->is_active;
+        $becomingInactive = array_key_exists('is_active', $data) && $data['is_active'] === false;
+
+        if ($becomingDefault) {
             EmailProvider::query()->where('id', '!=', $emailProvider->id)->update(['is_default' => false]);
         }
 
@@ -209,7 +213,20 @@ class EmailProviderController extends Controller
             $configIncoming ?? [],
         );
 
-        return response()->json(['data' => $this->transform($fresh)]);
+        $fleet = app(DynamicMailConfigService::class);
+        $rebind = null;
+        if ($becomingDefault) {
+            $rebind = $fleet->rebindFleetToProvider($fresh);
+        } elseif ($wasActive && $becomingInactive) {
+            $rebind = $fleet->rebindAwayFromProvider($fresh);
+        }
+
+        $payload = ['data' => $this->transform($fresh)];
+        if ($rebind !== null) {
+            $payload['fleet'] = $rebind;
+        }
+
+        return response()->json($payload);
     }
 
     /**
@@ -298,12 +315,15 @@ class EmailProviderController extends Controller
         ]);
     }
 
-    public function setDefault(EmailProvider $emailProvider): JsonResponse
+    public function setDefault(EmailProvider $emailProvider, DynamicMailConfigService $mailConfig): JsonResponse
     {
-        EmailProvider::query()->update(['is_default' => false]);
-        $emailProvider->update(['is_default' => true, 'is_active' => true]);
+        $fleet = $mailConfig->adoptAsFleetDefault($emailProvider);
 
-        return response()->json(['data' => $this->transform($emailProvider->fresh())]);
+        return response()->json([
+            'data' => $this->transform($emailProvider->fresh() ?? $emailProvider),
+            'fleet' => $fleet,
+            'message' => 'Default provider updated. All integrations and pending emails now use this provider.',
+        ]);
     }
 
     /** @var list<string> */

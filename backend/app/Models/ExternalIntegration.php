@@ -42,6 +42,24 @@ class ExternalIntegration extends Model
         return $this->belongsTo(EmailProvider::class);
     }
 
+    /**
+     * Provider id used for sending. Inactive sticky pins are ignored so the
+     * fleet default (e.g. after switching Exchange → SMTP) is used instead.
+     */
+    public function resolvedEmailProviderId(): ?int
+    {
+        if ($this->email_provider_id === null) {
+            return null;
+        }
+
+        $active = EmailProvider::query()
+            ->whereKey($this->email_provider_id)
+            ->where('is_active', true)
+            ->exists();
+
+        return $active ? (int) $this->email_provider_id : null;
+    }
+
     public function providerMailbox(): BelongsTo
     {
         return $this->belongsTo(ProviderMailbox::class, 'provider_mailbox_id');

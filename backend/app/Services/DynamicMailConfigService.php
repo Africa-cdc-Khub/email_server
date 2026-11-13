@@ -3,7 +3,9 @@
 namespace App\Services;
 
 use App\Enums\EmailDriver;
+use App\Models\EmailLog;
 use App\Models\EmailProvider;
+use App\Models\ExternalIntegration;
 use Illuminate\Support\Facades\Config;
 use Illuminate\Support\Facades\Mail;
 use RuntimeException;
@@ -53,11 +55,18 @@ class DynamicMailConfigService
                 ->where('is_active', true)
                 ->find($providerId);
 
-            if ($provider === null) {
-                throw new RuntimeException('Email provider not found or inactive.');
+            if ($provider !== null) {
+                return $provider;
             }
 
-            return $provider;
+            // Sticky integration/log pins must not keep using a disabled provider
+            // after the fleet default was switched (e.g. Exchange → SMTP).
+            $fallback = $this->defaultProvider();
+            if ($fallback !== null) {
+                return $fallback;
+            }
+
+            throw new RuntimeException('Email provider not found or inactive.');
         }
 
         $provider = $this->defaultProvider();
@@ -67,6 +76,118 @@ class DynamicMailConfigService
         }
 
         return $provider;
+    }
+
+    /**
+     * Promote a provider to fleet default and make all integrations + pending
+     * mail follow it (clears sticky per-integration provider pins).
+     *
+     * @return array{integrations_updated: int, pending_logs_updated: int}
+     */
+    public function adoptAsFleetDefault(EmailProvider $provider): array
+    {
+        EmailProvider::query()->where('id', '!=', $provider->id)->update(['is_default' => false]);
+        $provider->update(['is_default' => true, 'is_active' => true]);
+
+        return $this->rebindFleetToProvider($provider->fresh() ?? $provider);
+    }
+
+    /**
+     * When a provider is disabled, move sticky integrations and pending logs
+     * off it onto the current default.
+     *
+     * @return array{integrations_updated: int, pending_logs_updated: int}
+     */
+    public function rebindAwayFromProvider(EmailProvider $retired): array
+    {
+        $default = $this->defaultProvider();
+        if ($default === null || $default->id === $retired->id) {
+            // Clear pins even if no other default exists yet — sends will error clearly.
+            $integrationsUpdated = ExternalIntegration::query()
+                ->where('email_provider_id', $retired->id)
+                ->update([
+                    'email_provider_id' => null,
+                    'provider_mailbox_id' => null,
+                ]);
+
+            return [
+                'integrations_updated' => $integrationsUpdated,
+                'pending_logs_updated' => 0,
+            ];
+        }
+
+        $integrationsUpdated = ExternalIntegration::query()
+            ->where('email_provider_id', $retired->id)
+            ->update([
+                'email_provider_id' => null,
+                'provider_mailbox_id' => null,
+            ]);
+
+        $pendingLogsUpdated = $this->rebindPendingLogsToProvider($default, $retired->id);
+
+        return [
+            'integrations_updated' => $integrationsUpdated,
+            'pending_logs_updated' => $pendingLogsUpdated,
+        ];
+    }
+
+    /**
+     * @return array{integrations_updated: int, pending_logs_updated: int}
+     */
+    public function rebindFleetToProvider(EmailProvider $provider): array
+    {
+        // Null pin = follow system default on every future default switch.
+        $integrationsUpdated = ExternalIntegration::query()->update([
+            'email_provider_id' => null,
+            'provider_mailbox_id' => null,
+        ]);
+
+        $pendingLogsUpdated = $this->rebindPendingLogsToProvider($provider);
+
+        $this->purgeExchangeClient();
+
+        return [
+            'integrations_updated' => $integrationsUpdated,
+            'pending_logs_updated' => $pendingLogsUpdated,
+        ];
+    }
+
+    /**
+     * @return int Number of pending logs updated
+     */
+    private function rebindPendingLogsToProvider(EmailProvider $provider, ?int $onlyFromProviderId = null): int
+    {
+        $query = EmailLog::query()->where('status', 'pending');
+
+        if ($onlyFromProviderId !== null) {
+            $query->where('email_provider_id', $onlyFromProviderId);
+        } else {
+            $query->where(function ($q) use ($provider) {
+                $q->whereNull('email_provider_id')
+                    ->orWhere('email_provider_id', '!=', $provider->id);
+            });
+        }
+
+        $updated = 0;
+        $query->orderBy('id')->chunkById(100, function ($logs) use ($provider, &$updated) {
+            foreach ($logs as $log) {
+                $meta = $log->meta ?? [];
+                unset($meta['from_mailbox_id'], $meta['send_via_provider_id']);
+                $meta['rebinding_from_provider_id'] = $log->email_provider_id;
+                $meta['rebound_to_provider_id'] = $provider->id;
+                $meta['rebound_at'] = now()->toIso8601String();
+
+                $log->update([
+                    'email_provider_id' => $provider->id,
+                    'driver' => $provider->driver->value,
+                    'from_address' => null,
+                    'meta' => $meta,
+                ]);
+                $updated++;
+            }
+        });
+
+        return $updated;
     }
 
     /**
