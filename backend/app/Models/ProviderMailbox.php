@@ -13,10 +13,16 @@ class ProviderMailbox extends Model
     protected $fillable = [
         'email_provider_id',
         'email',
+        'smtp_username',
+        'smtp_password',
         'is_active',
         'daily_quota',
         'hourly_quota',
         'weight',
+    ];
+
+    protected $hidden = [
+        'smtp_password',
     ];
 
     protected function casts(): array
@@ -26,7 +32,15 @@ class ProviderMailbox extends Model
             'daily_quota' => 'integer',
             'hourly_quota' => 'integer',
             'weight' => 'integer',
+            'smtp_password' => 'encrypted',
         ];
+    }
+
+    public function hasSmtpPassword(): bool
+    {
+        $raw = $this->attributes['smtp_password'] ?? null;
+
+        return is_string($raw) && $raw !== '';
     }
 
     public function provider(): BelongsTo

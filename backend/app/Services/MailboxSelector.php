@@ -197,6 +197,8 @@ class MailboxSelector
                 return [
                     'id' => $mailbox->id,
                     'email' => $mailbox->email,
+                    'smtp_username' => $mailbox->smtp_username,
+                    'has_smtp_password' => $mailbox->hasSmtpPassword(),
                     'is_active' => (bool) $mailbox->is_active,
                     'daily_quota' => (int) $mailbox->daily_quota,
                     'hourly_quota' => $hourlyQuota,

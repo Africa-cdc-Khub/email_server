@@ -16,6 +16,7 @@ use App\Services\MailboxSelector;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
+use Illuminate\Validation\ValidationException;
 
 class EmailProviderController extends Controller
 {
@@ -111,6 +112,7 @@ class EmailProviderController extends Controller
         }
 
         if (is_array($mailboxes) && $mailboxes !== []) {
+            $this->assertSmtpMailboxesHaveCredentials($provider, $mailboxes);
             $provider->syncMailboxes($mailboxes);
         } elseif (! empty($provider->from_address) && ! $provider->mailboxes()->exists()) {
             $provider->syncMailboxes([[
@@ -197,6 +199,7 @@ class EmailProviderController extends Controller
         }
 
         if (is_array($mailboxes)) {
+            $this->assertSmtpMailboxesHaveCredentials($emailProvider, $mailboxes);
             $emailProvider->syncMailboxes($mailboxes);
             if ($emailProvider->is_active && ! $emailProvider->mailboxes()->where('is_active', true)->exists()) {
                 return response()->json([
@@ -386,6 +389,69 @@ class EmailProviderController extends Controller
             'created_at' => $provider->created_at,
             'updated_at' => $provider->updated_at,
         ];
+    }
+
+    /**
+     * SMTP from-mailboxes need their own login (username + password).
+     *
+     * @param  list<array<string, mixed>>  $mailboxes
+     */
+    private function assertSmtpMailboxesHaveCredentials(EmailProvider $provider, array $mailboxes): void
+    {
+        $driver = $provider->driver instanceof EmailDriver
+            ? $provider->driver
+            : EmailDriver::tryFrom((string) $provider->getRawOriginal('driver'));
+
+        if ($driver !== EmailDriver::Smtp) {
+            return;
+        }
+
+        $errors = [];
+        $placeholders = ['********', '****', '••••••••', '[redacted]', 'redacted'];
+
+        foreach (array_values($mailboxes) as $index => $row) {
+            if (! is_array($row)) {
+                continue;
+            }
+
+            $email = trim((string) ($row['email'] ?? ''));
+            if ($email === '') {
+                continue;
+            }
+
+            $isActive = ! array_key_exists('is_active', $row) || (bool) $row['is_active'];
+            if (! $isActive) {
+                continue;
+            }
+
+            $username = trim((string) ($row['smtp_username'] ?? ''));
+            if ($username === '') {
+                $errors["mailboxes.{$index}.smtp_username"] = [
+                    'Each SMTP from mailbox needs a username (usually the mailbox email).',
+                ];
+            }
+
+            $password = trim((string) ($row['smtp_password'] ?? ''));
+            $passwordProvided = $password !== ''
+                && ! in_array(strtolower($password), $placeholders, true);
+
+            $existingId = isset($row['id']) ? (int) $row['id'] : 0;
+            $hasStoredPassword = false;
+            if ($existingId > 0) {
+                $existing = $provider->mailboxes()->whereKey($existingId)->first();
+                $hasStoredPassword = $existing?->hasSmtpPassword() ?? false;
+            }
+
+            if (! $passwordProvided && ! $hasStoredPassword) {
+                $errors["mailboxes.{$index}.smtp_password"] = [
+                    'Each SMTP from mailbox needs a password.',
+                ];
+            }
+        }
+
+        if ($errors !== []) {
+            throw ValidationException::withMessages($errors);
+        }
     }
 
     /**

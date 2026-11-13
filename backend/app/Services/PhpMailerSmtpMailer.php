@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Enums\EmailDriver;
 use App\Models\EmailProvider;
+use App\Models\ProviderMailbox;
 use PHPMailer\PHPMailer\Exception as PhpMailerException;
 use PHPMailer\PHPMailer\PHPMailer;
 use RuntimeException;
@@ -30,12 +31,13 @@ class PhpMailerSmtpMailer
         array $cc = [],
         array $bcc = [],
         array $attachments = [],
+        ?ProviderMailbox $mailbox = null,
     ): void {
         if ($provider->driver !== EmailDriver::Smtp) {
             throw new RuntimeException('PHPMailer SMTP transport requires an SMTP provider.');
         }
 
-        $settings = $this->resolveSettings($provider, $fromAddress);
+        $settings = $this->resolveSettings($provider, $fromAddress, $mailbox);
 
         $mail = new PHPMailer(true);
 
@@ -145,8 +147,11 @@ class PhpMailerSmtpMailer
     /**
      * @return array{host: string, port: int, encryption: string, username: string, password: string}
      */
-    public function resolveSettings(EmailProvider $provider, string $fromAddress = ''): array
-    {
+    public function resolveSettings(
+        EmailProvider $provider,
+        string $fromAddress = '',
+        ?ProviderMailbox $mailbox = null,
+    ): array {
         $host = (string) ($provider->configValue('host') ?? '');
 
         if ($host === '') {
@@ -174,8 +179,14 @@ class PhpMailerSmtpMailer
             };
         }
 
-        $username = (string) ($provider->configValue('username') ?? '');
-        $password = (string) ($provider->configValue('password') ?? '');
+        $mailboxUsername = trim((string) ($mailbox?->smtp_username ?? ''));
+        $mailboxPassword = (string) ($mailbox?->smtp_password ?? '');
+        $username = $mailboxUsername !== ''
+            ? $mailboxUsername
+            : (string) ($provider->configValue('username') ?? '');
+        $password = $mailboxPassword !== ''
+            ? $mailboxPassword
+            : (string) ($provider->configValue('password') ?? '');
 
         // Admins sometimes paste the hostname into Username. cPanel/Office365
         // need the mailbox address (usually the From address).
@@ -193,7 +204,7 @@ class PhpMailerSmtpMailer
 
         if ($username !== '' && $password === '') {
             throw new RuntimeException(
-                'SMTP password is missing. Edit the provider, enter the mailbox password, and save.'
+                'SMTP password is missing for this from mailbox. Edit the mailbox, enter its username/password, and save.'
             );
         }
 

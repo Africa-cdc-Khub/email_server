@@ -22,6 +22,9 @@ type Driver = { value: string; label: string; fields: DriverField[]; default_mai
 type MailboxRow = {
   id?: number | null
   email: string
+  smtp_username?: string
+  smtp_password?: string
+  has_smtp_password?: boolean
   is_active: boolean
   daily_quota: number
   hourly_quota: number | null
@@ -106,11 +109,21 @@ function addMailbox() {
   form.value.mailboxes.push({
     id: null,
     email: '',
+    smtp_username: '',
+    smtp_password: '',
+    has_smtp_password: false,
     is_active: true,
     daily_quota: defaultMailboxQuota(),
     hourly_quota: defaultMailboxHourlyQuota(),
     weight: 1,
   })
+}
+
+function onMailboxEmailBlur(box: MailboxRow) {
+  if (form.value.driver !== 'smtp') return
+  if (!box.smtp_username?.trim() && box.email.trim()) {
+    box.smtp_username = box.email.trim()
+  }
 }
 
 function removeMailbox(index: number) {
@@ -151,6 +164,9 @@ async function loadProvider() {
     const mailboxes: MailboxRow[] = (p.mailboxes ?? []).map((m: MailboxRow) => ({
       id: m.id,
       email: m.email,
+      smtp_username: m.smtp_username ?? '',
+      smtp_password: '',
+      has_smtp_password: Boolean(m.has_smtp_password),
       is_active: m.is_active !== false,
       daily_quota: m.daily_quota ?? 10000,
       hourly_quota: m.hourly_quota ?? (p.driver === 'smtp' ? 400 : null),
@@ -175,6 +191,9 @@ async function loadProvider() {
         : [{
             id: null,
             email: p.from_address ?? '',
+            smtp_username: p.from_address ?? '',
+            smtp_password: '',
+            has_smtp_password: false,
             is_active: true,
             daily_quota: p.default_mailbox_quota ?? defaultMailboxQuota(),
             hourly_quota: p.default_mailbox_hourly_quota ?? defaultMailboxHourlyQuota(),
@@ -211,23 +230,47 @@ async function save() {
   try {
     const mailboxes = form.value.mailboxes
       .filter((m) => m.email.trim() !== '')
-      .map((m) => ({
-        id: m.id ?? undefined,
-        email: m.email.trim(),
-        is_active: m.is_active,
-        daily_quota: Number(m.daily_quota) || defaultMailboxQuota(),
-        hourly_quota: (() => {
-          if (m.hourly_quota == null || Number.isNaN(Number(m.hourly_quota))) {
-            return form.value.driver === 'smtp' ? defaultMailboxHourlyQuota() : null
+      .map((m) => {
+        const row: Record<string, unknown> = {
+          id: m.id ?? undefined,
+          email: m.email.trim(),
+          is_active: m.is_active,
+          daily_quota: Number(m.daily_quota) || defaultMailboxQuota(),
+          hourly_quota: (() => {
+            if (m.hourly_quota == null || Number.isNaN(Number(m.hourly_quota))) {
+              return form.value.driver === 'smtp' ? defaultMailboxHourlyQuota() : null
+            }
+            return Math.max(1, Number(m.hourly_quota))
+          })(),
+          weight: Math.max(1, Number(m.weight) || 1),
+        }
+
+        if (form.value.driver === 'smtp') {
+          row.smtp_username = (m.smtp_username?.trim() || m.email.trim())
+          if (m.smtp_password?.trim()) {
+            row.smtp_password = m.smtp_password.trim()
           }
-          return Math.max(1, Number(m.hourly_quota))
-        })(),
-        weight: Math.max(1, Number(m.weight) || 1),
-      }))
+        }
+
+        return row
+      })
 
     if (mailboxes.length === 0) {
       error.value = 'Add at least one from mailbox address.'
       return
+    }
+
+    if (form.value.driver === 'smtp') {
+      for (const m of form.value.mailboxes.filter((box) => box.email.trim() && box.is_active)) {
+        if (!(m.smtp_username?.trim() || m.email.trim())) {
+          error.value = 'Each SMTP from mailbox needs a username.'
+          return
+        }
+        if (!m.smtp_password?.trim() && !m.has_smtp_password) {
+          error.value = `Enter the SMTP password for ${m.email.trim()}.`
+          return
+        }
+      }
     }
 
     const payload = {
@@ -255,6 +298,9 @@ async function save() {
       form.value.mailboxes = updated.map((m) => ({
         id: m.id,
         email: m.email,
+        smtp_username: m.smtp_username ?? '',
+        smtp_password: '',
+        has_smtp_password: Boolean(m.has_smtp_password),
         is_active: m.is_active !== false,
         daily_quota: m.daily_quota ?? 10000,
         hourly_quota: m.hourly_quota ?? null,
@@ -409,6 +455,7 @@ onMounted(async () => {
             Sends are shared by weight (higher weight ≈ larger share). Quotas are hard stops per mailbox.
             Equal weights (default <strong>1</strong>) split traffic evenly.
             <template v-if="form.driver === 'smtp'">
+              Each mailbox needs its own <strong>SMTP username and password</strong>.
               Hostinger SMTP allows about <strong>500/hour</strong> and <strong>12,000/day</strong>;
               defaults are <strong>400/hour</strong> and <strong>10,000/day</strong> to stay under those caps.
             </template>
@@ -422,7 +469,7 @@ onMounted(async () => {
 
       <div v-for="(box, index) in form.mailboxes" :key="box.id ?? `new-${index}`" class="mailbox-row mb-4">
         <v-row dense align="center">
-          <v-col cols="12" md="3">
+          <v-col cols="12" :md="form.driver === 'smtp' ? 4 : 3">
             <v-text-field
               v-model="box.email"
               label="From email"
@@ -430,8 +477,33 @@ onMounted(async () => {
               variant="outlined"
               density="comfortable"
               hide-details
+              @blur="onMailboxEmailBlur(box)"
             />
           </v-col>
+          <template v-if="form.driver === 'smtp'">
+            <v-col cols="12" md="4">
+              <v-text-field
+                v-model="box.smtp_username"
+                label="SMTP username"
+                variant="outlined"
+                density="comfortable"
+                hide-details
+                placeholder="Usually the mailbox email"
+              />
+            </v-col>
+            <v-col cols="12" md="4">
+              <v-text-field
+                v-model="box.smtp_password"
+                label="SMTP password"
+                type="password"
+                variant="outlined"
+                density="comfortable"
+                :hint="box.has_smtp_password ? 'Stored securely — leave blank to keep' : 'Required for this mailbox'"
+                persistent-hint
+                autocomplete="new-password"
+              />
+            </v-col>
+          </template>
           <v-col cols="6" md="2">
             <v-text-field
               v-model.number="box.daily_quota"

@@ -210,14 +210,26 @@ class MigrationImportService
             $hourly = $box['hourly_quota'] ?? null;
             $hourlyQuota = $hourly === null || $hourly === '' ? null : max(1, (int) $hourly);
 
+            $payload = [
+                'is_active' => (bool) ($box['is_active'] ?? true),
+                'daily_quota' => max(1, (int) ($box['daily_quota'] ?? $provider->defaultMailboxQuota())),
+                'hourly_quota' => $hourlyQuota,
+                'weight' => max(1, (int) ($box['weight'] ?? 1)),
+            ];
+
+            $smtpUsername = trim((string) ($box['smtp_username'] ?? ''));
+            if ($smtpUsername !== '') {
+                $payload['smtp_username'] = $smtpUsername;
+            }
+
+            $smtpPassword = trim((string) ($box['smtp_password'] ?? ''));
+            if ($smtpPassword !== '') {
+                $payload['smtp_password'] = $smtpPassword;
+            }
+
             $provider->mailboxes()->updateOrCreate(
                 ['email' => $email],
-                [
-                    'is_active' => (bool) ($box['is_active'] ?? true),
-                    'daily_quota' => max(1, (int) ($box['daily_quota'] ?? $provider->defaultMailboxQuota())),
-                    'hourly_quota' => $hourlyQuota,
-                    'weight' => max(1, (int) ($box['weight'] ?? 1)),
-                ],
+                $payload,
             );
 
             $seen[] = $email;

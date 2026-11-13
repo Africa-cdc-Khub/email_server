@@ -754,6 +754,7 @@ class EmailDispatchService
                 cc: $cc,
                 bcc: $bcc,
                 attachmentPayload: $attachmentPayload,
+                mailbox: $mailbox,
             );
 
             $meta = $log->meta ?? [];
@@ -820,6 +821,7 @@ class EmailDispatchService
         array $cc,
         array $bcc,
         array $attachmentPayload,
+        ?\App\Models\ProviderMailbox $mailbox = null,
     ): void {
         if ($provider->driver === EmailDriver::Smtp) {
             $this->phpMailerSmtp->send(
@@ -833,6 +835,7 @@ class EmailDispatchService
                 cc: $cc,
                 bcc: $bcc,
                 attachments: $attachmentPayload,
+                mailbox: $mailbox,
             );
 
             return;

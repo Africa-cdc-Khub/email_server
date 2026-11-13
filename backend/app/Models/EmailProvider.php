@@ -101,11 +101,12 @@ class EmailProvider extends Model
     }
 
     /**
-     * @param  list<array{id?: int|null, email: string, is_active?: bool, daily_quota?: int, hourly_quota?: int|null, weight?: int}>  $rows
+     * @param  list<array{id?: int|null, email: string, smtp_username?: string|null, smtp_password?: string|null, is_active?: bool, daily_quota?: int, hourly_quota?: int|null, weight?: int}>  $rows
      */
     public function syncMailboxes(array $rows): void
     {
         $keepIds = [];
+        $placeholders = ['********', '****', '••••••••', '[redacted]', 'redacted'];
 
         foreach ($rows as $row) {
             $email = strtolower(trim((string) ($row['email'] ?? '')));
@@ -121,14 +122,33 @@ class EmailProvider extends Model
                 'weight' => max(1, (int) ($row['weight'] ?? 1)),
             ];
 
+            if (array_key_exists('smtp_username', $row)) {
+                $username = trim((string) ($row['smtp_username'] ?? ''));
+                $payload['smtp_username'] = $username !== '' ? $username : null;
+            }
+
+            $incomingPassword = array_key_exists('smtp_password', $row)
+                ? trim((string) ($row['smtp_password'] ?? ''))
+                : null;
+            $passwordProvided = is_string($incomingPassword)
+                && $incomingPassword !== ''
+                && ! in_array(strtolower($incomingPassword), $placeholders, true);
+
             $id = isset($row['id']) ? (int) $row['id'] : 0;
             if ($id > 0) {
                 $mailbox = $this->mailboxes()->whereKey($id)->first();
                 if ($mailbox) {
+                    if ($passwordProvided) {
+                        $payload['smtp_password'] = $incomingPassword;
+                    }
                     $mailbox->update($payload);
                     $keepIds[] = $mailbox->id;
                     continue;
                 }
+            }
+
+            if ($passwordProvided) {
+                $payload['smtp_password'] = $incomingPassword;
             }
 
             $mailbox = $this->mailboxes()->updateOrCreate(

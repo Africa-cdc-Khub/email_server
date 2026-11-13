@@ -123,6 +123,8 @@ class MigrationExportService
                     'mailboxes' => $provider->mailboxes
                         ->map(fn ($box) => [
                             'email' => (string) $box->email,
+                            'smtp_username' => $box->smtp_username,
+                            'smtp_password' => $box->smtp_password,
                             'is_active' => (bool) $box->is_active,
                             'daily_quota' => (int) $box->daily_quota,
                             'hourly_quota' => $box->hourly_quota !== null ? (int) $box->hourly_quota : null,
